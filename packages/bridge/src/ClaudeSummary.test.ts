@@ -10,7 +10,7 @@ import {
   normalizeContext,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Option, Ref } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Ref } from "effect";
 import { TestClock } from "effect/testing";
 
 import { Claude } from "./Claude.ts";
@@ -31,7 +31,7 @@ import { blocksText } from "./ClaudePrompt.ts";
 import { initEvent, SCRIPT_SESSION, textTurn } from "./ClaudeScriptKit.ts";
 import type { FakeScript } from "./ClaudeSdk.ts";
 import { ClaudeSdk, ClaudeSdkScripts } from "./ClaudeSdk.ts";
-import { ClaudeSlots } from "./ClaudeSlots.ts";
+import { ClaudeSlots, ONE_SHOT_SLOTS } from "./ClaudeSlots.ts";
 import { ClaudeSummary, ONE_SHOT_EMPTY_TEXT } from "./ClaudeSummary.ts";
 import { emptyUsage } from "./ClaudeTokens.ts";
 
@@ -53,7 +53,10 @@ const user = (text: string): Message => ({
   timestamp: 2,
 });
 
-const bridge = (scripts: ReadonlyArray<FakeScript>) =>
+const bridge = (
+  scripts: ReadonlyArray<FakeScript>,
+  wedged: ReadonlySet<number> = new Set()
+) =>
   Claude.layerNoDeps.pipe(
     Layer.provideMerge(ClaudeSummary.layerNoDeps),
     Layer.provideMerge(
@@ -64,7 +67,7 @@ const bridge = (scripts: ReadonlyArray<FakeScript>) =>
       )
     ),
     Layer.provideMerge(
-      Layer.effect(ClaudeSdkScripts, ClaudeSdkScripts.make(scripts))
+      Layer.effect(ClaudeSdkScripts, ClaudeSdkScripts.make(scripts, [], wedged))
     )
   );
 
@@ -342,6 +345,27 @@ describe("aborts", () => {
 });
 
 describe("a silent one-shot", () => {
+  it.effect(
+    "fails at the stall limit when its child never takes the prompt",
+    () =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(call([summarizer, user("text")]));
+
+        yield* until(Effect.map(runs, (all) => all.length === 1));
+        yield* TestClock.adjust("89 seconds");
+        expect(fiber.pollUnsafe()).toBeUndefined();
+
+        yield* TestClock.adjust("3 seconds");
+
+        const reply = yield* Fiber.join(fiber);
+
+        expect([reply.stopReason, reply.errorMessage]).toStrictEqual([
+          "error",
+          STREAM_STALLED_TEXT,
+        ]);
+      }).pipe(Effect.provide(bridge([hangs], new Set([0]))))
+  );
+
   it.effect("fails once it says nothing for the stall limit", () =>
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(call([summarizer, user("text")]));
@@ -359,6 +383,130 @@ describe("a silent one-shot", () => {
         STREAM_STALLED_TEXT,
       ]);
     }).pipe(Effect.provide(bridge([hangs])))
+  );
+});
+
+/** Takes its prompt, then answers once `gate` opens. */
+const gated =
+  (gate: Deferred.Deferred<true>): FakeScript =>
+  (io) =>
+    Effect.gen(function* () {
+      yield* io.nextPrompt;
+      yield* Deferred.await(gate);
+      yield* io.emit(
+        initEvent(SCRIPT_SESSION),
+        ...textTurn("m1", "u1", "late")
+      );
+    });
+
+describe("one-shot permits", () => {
+  it.effect(
+    `run at most ${ONE_SHOT_SLOTS} one-shot children at once, beside the conversations' generation permits`,
+    () => {
+      const gate = Deferred.makeUnsafe<true>();
+
+      return Effect.gen(function* () {
+        const oneShots = yield* Effect.forEach([1, 2, 3], () =>
+          Effect.forkChild(call([summarizer, user("text")]))
+        );
+
+        yield* until(Effect.map(runs, (all) => all.length === ONE_SHOT_SLOTS));
+
+        // A conversation's turn is not held up by the one-shots holding their permits.
+        const turn = yield* call([user("hi")], { sessionId: "conv-1" });
+
+        yield* Effect.repeat(Effect.yieldNow, { times: 100 });
+
+        const whileHeld = (yield* runs).length;
+
+        yield* Deferred.succeed(gate, true);
+
+        const replies = yield* Effect.forEach(oneShots, Fiber.join);
+
+        expect([
+          whileHeld,
+          turn.content,
+          replies.map((reply) => reply.stopReason),
+        ]).toStrictEqual([
+          ONE_SHOT_SLOTS + 1,
+          [{ type: "text", text: "hi there" }],
+          ["stop", "stop", "stop"],
+        ]);
+      }).pipe(
+        Effect.provide(
+          bridge([
+            gated(gate),
+            gated(gate),
+            answers("hi there"),
+            answers("third"),
+          ])
+        )
+      );
+    }
+  );
+
+  it.effect(
+    "follow the generation permits when they shrink below the one-shot cap",
+    () => {
+      const gate = Deferred.makeUnsafe<true>();
+
+      return Effect.gen(function* () {
+        const slots = yield* ClaudeSlots;
+
+        yield* slots.resize(1);
+
+        const first = yield* Effect.forkChild(call([summarizer, user("one")]));
+        const second = yield* Effect.forkChild(call([summarizer, user("two")]));
+
+        yield* until(Effect.map(runs, (all) => all.length === 1));
+        yield* Effect.repeat(Effect.yieldNow, { times: 100 });
+
+        const whileHeld = (yield* runs).length;
+
+        yield* Deferred.succeed(gate, true);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+
+        expect([whileHeld, (yield* runs).length]).toStrictEqual([1, 2]);
+      }).pipe(Effect.provide(bridge([gated(gate), answers("two")])));
+    }
+  );
+
+  it.effect(
+    "end a one-shot stopped while it waits for a permit, starting no child",
+    () => {
+      const stop = new AbortController();
+
+      return Effect.gen(function* () {
+        const slots = yield* ClaudeSlots;
+
+        yield* slots.resize(1);
+
+        const first = yield* Effect.forkChild(call([summarizer, user("one")]));
+
+        yield* until(Effect.map(runs, (all) => all.length === 1));
+
+        const waiting = yield* Effect.forkChild(
+          call([summarizer, user("two")], {
+            cacheRetention: "none",
+            sessionId: "conv-2",
+            signal: stop.signal,
+          })
+        );
+
+        yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+        stop.abort();
+
+        const reply = yield* Fiber.join(waiting);
+
+        expect([reply.stopReason, (yield* runs).length]).toStrictEqual([
+          "aborted",
+          1,
+        ]);
+
+        yield* Fiber.interrupt(first);
+      }).pipe(Effect.provide(bridge([hangs])));
+    }
   );
 });
 

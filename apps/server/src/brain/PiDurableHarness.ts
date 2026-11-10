@@ -58,6 +58,8 @@ import {
   LiveDoc,
 } from "@earendil-works/pi-durable";
 import {
+  Cause,
+  Context,
   Duration,
   Effect,
   Fiber,
@@ -69,6 +71,7 @@ import {
   Ref,
   Result,
   Schema,
+  Semaphore,
   Stream,
 } from "effect";
 
@@ -99,7 +102,7 @@ import {
   writeMode,
 } from "./CairnDocs.ts";
 import type { AnsweredHook, ApprovalRecord } from "./CairnDocs.ts";
-import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
+import { CommitFeed, documentValue, RUN_TASK } from "./CommitFeed.ts";
 import { documentCall, durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { HarnessError, HarnessSeam } from "./HarnessSeam.ts";
@@ -116,6 +119,7 @@ import type {
   ThreadFrame,
 } from "./HarnessSeam.ts";
 import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
+import { PendingApprovals } from "./PendingApprovals.ts";
 import { parentCeiling } from "./Permissions.ts";
 import { piConversationId, piEntryId, piSubmissionId } from "./PiIds.ts";
 import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
@@ -134,6 +138,32 @@ import {
 import type { ThreadWireError } from "./ThreadWire.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
+
+/** What `PendingApprovals` keeps between calls. */
+interface PendingIndex {
+  /** The conversations holding a pending record, once the scan ran. */
+  known: Option.Option<Set<PiConversationId>>;
+  /** The Session the scan read. */
+  session: Option.Option<BrainSession>;
+  /** Changes committed while no scan is known, which win over what the scan read. */
+  readonly during: Map<PiConversationId, boolean>;
+}
+
+/** Whether a `cairn.approvals` value, as a commit published it, holds a pending record. */
+const holdsPending = (value: JsonObject | null): boolean => {
+  const items = value?.items;
+
+  return (
+    Predicate.isObject(items) &&
+    !Array.isArray(items) &&
+    Object.values(items).some(
+      (item) =>
+        Predicate.isObject(item) &&
+        !Array.isArray(item) &&
+        item.status === "pending"
+    )
+  );
+};
 
 type Writable<A> = { -readonly [K in keyof A]: A[K] };
 
@@ -305,8 +335,7 @@ const agentChange = (change: ThreadAgentChange) => {
   return agent;
 };
 
-const layerNoDeps = Layer.effect(
-  HarnessSeam,
+const layerNoDeps = Layer.effectContext(
   Effect.gen(function* () {
     const brain = yield* Brain;
     const feed = yield* CommitFeed;
@@ -802,7 +831,22 @@ const layerNoDeps = Layer.effect(
           Predicate.isTagged(event, "RunTerminal") &&
           event.status !== "completed"
       ),
-      Stream.runForEach((event) => placeAfterRun(event.threadId)),
+      // A defect placing one thread's notes is logged and the loop goes on.
+      Stream.runForEach((event) =>
+        placeAfterRun(event.threadId).pipe(
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logError("queued notes not placed").pipe(
+                Effect.annotateLogs({
+                  event: "place_writes_defect",
+                  threadId: event.threadId,
+                  cause: Cause.pretty(cause),
+                })
+              )
+          )
+        )
+      ),
       Effect.forkIn(layerScope)
     );
 
@@ -1379,6 +1423,127 @@ const layerNoDeps = Layer.effect(
       };
     });
 
+    // Which conversations hold a pending approval record: one scan of every conversation,
+    // the first time it is asked, then kept by every commit's `cairn.approvals` changes. A change
+    // that lands while the scan runs wins over what the scan read; a Session the supervisor
+    // reopened is scanned again, since a commit stored as the old one failed may never have been
+    // published.
+    const pendingIndex: PendingIndex = {
+      known: Option.none(),
+      session: Option.none(),
+      during: new Map(),
+    };
+
+    yield* brain.subscribeCommits((session, publication) => {
+      if (
+        Option.isSome(pendingIndex.session) &&
+        pendingIndex.session.value !== session
+      ) {
+        pendingIndex.known = Option.none();
+        pendingIndex.session = Option.none();
+      }
+
+      for (const change of publication.changes) {
+        if (
+          change.type === "document" &&
+          change.record.kind === Approvals.definition.kind &&
+          change.conversationId !== undefined
+        ) {
+          const holds = holdsPending(documentValue(change));
+
+          if (Option.isSome(pendingIndex.known)) {
+            if (holds) {
+              pendingIndex.known.value.add(change.conversationId);
+            } else {
+              pendingIndex.known.value.delete(change.conversationId);
+            }
+          } else {
+            pendingIndex.during.set(change.conversationId, holds);
+          }
+        }
+      }
+    });
+
+    const scanLock = yield* Semaphore.make(1);
+
+    const pendingConversations = scanLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (Option.isSome(pendingIndex.known)) {
+          return new Set(pendingIndex.known.value);
+        }
+
+        const session = yield* open(Option.none());
+        const found = new Set<PiConversationId>();
+        let cursor: Option.Option<Cursor> = Option.none();
+        let scanned = 0;
+
+        pendingIndex.during.clear();
+
+        do {
+          const after = Option.getOrUndefined(cursor);
+
+          const page = yield* call(
+            Option.none(),
+            "conversations.scan",
+            async (context) =>
+              await session.storage.scanConversations(
+                {},
+                INSPECT_SCAN_PAGE,
+                after,
+                context
+              )
+          );
+
+          for (const conversation of page.items) {
+            const approvals = yield* call(
+              Option.none(),
+              "approvals.read",
+              async (context) =>
+                await session.harness.snapshot(
+                  Approvals,
+                  conversation.id,
+                  context
+                )
+            );
+
+            scanned += 1;
+
+            if (
+              Object.values(approvals?.items ?? {}).some(
+                (item) => item.status === "pending"
+              )
+            ) {
+              found.add(conversation.id);
+            }
+          }
+
+          cursor = Option.fromUndefinedOr(page.next);
+        } while (Option.isSome(cursor));
+
+        for (const [conversationId, holds] of pendingIndex.during) {
+          if (holds) {
+            found.add(conversationId);
+          } else {
+            found.delete(conversationId);
+          }
+        }
+
+        pendingIndex.during.clear();
+        pendingIndex.known = Option.some(found);
+        pendingIndex.session = Option.some(session);
+
+        yield* Effect.logInfo("approvals scanned").pipe(
+          Effect.annotateLogs({
+            event: "approvals_scanned",
+            conversations: scanned,
+            pending: found.size,
+          })
+        );
+
+        return new Set(found);
+      })
+    );
+
     const inspect = Effect.gen(function* () {
       const session = yield* open(Option.none());
 
@@ -1432,50 +1597,27 @@ const layerNoDeps = Layer.effect(
       }
 
       // `inspect()` reports live work only, so a thread waiting on the user with nothing running
-      // (a criteria proposal, a halted scope's raise) is found by its records: every conversation
-      // is read, as the boot repairs read them.
+      // (a criteria proposal, a halted scope's raise) is found by its records: the records of
+      // every conversation that holds a pending one (`PendingApprovals`).
       const pendingOf = new Map<PiConversationId, Array<ApprovalRecord>>();
-      let cursor: Option.Option<Cursor> = Option.none();
 
-      do {
-        const after = Option.getOrUndefined(cursor);
-
-        const page = yield* call(
+      for (const conversationId of yield* pendingConversations) {
+        const approvals = yield* call(
           Option.none(),
-          "conversations.scan",
+          "approvals.read",
           async (context) =>
-            await session.storage.scanConversations(
-              {},
-              INSPECT_SCAN_PAGE,
-              after,
-              context
-            )
+            await session.harness.snapshot(Approvals, conversationId, context)
         );
 
-        for (const conversation of page.items) {
-          const approvals = yield* call(
-            Option.none(),
-            "approvals.read",
-            async (context) =>
-              await session.harness.snapshot(
-                Approvals,
-                conversation.id,
-                context
-              )
-          );
+        const pending = Object.values(approvals?.items ?? {}).filter(
+          (item) => item.status === "pending"
+        );
 
-          const pending = Object.values(approvals?.items ?? {}).filter(
-            (item) => item.status === "pending"
-          );
-
-          if (pending.length > 0) {
-            pendingOf.set(conversation.id, pending);
-            slot(conversation.id);
-          }
+        if (pending.length > 0) {
+          pendingOf.set(conversationId, pending);
+          slot(conversationId);
         }
-
-        cursor = Option.fromUndefinedOr(page.next);
-      } while (Option.isSome(cursor));
+      }
 
       const states: Array<LiveThreadState> = [];
 
@@ -1506,7 +1648,7 @@ const layerNoDeps = Layer.effect(
       return states;
     });
 
-    return HarnessSeam.of({
+    const seam = HarnessSeam.of({
       ensureThread,
       configure: configureThread,
       submit,
@@ -1525,13 +1667,20 @@ const layerNoDeps = Layer.effect(
       inspect,
       capabilities: { durable: true, live: true },
     });
+
+    return Context.make(HarnessSeam, seam).pipe(
+      Context.add(
+        PendingApprovals,
+        PendingApprovals.of({ conversations: pendingConversations })
+      )
+    );
   })
 );
 
 /**
- * The seam over pi-durable. `layer` puts the brain under it and also exposes `Brain` (boot resumes
- * it after its repairs); it needs the models, the extension set and the brain's directory from the
- * composition root.
+ * The seam over pi-durable, and `PendingApprovals` beside it. `layer` puts the brain under it and
+ * also exposes `Brain` (boot resumes it after its repairs); it needs the models, the extension set
+ * and the brain's directory from the composition root.
  */
 export const PiDurableHarness = {
   layerNoDeps,

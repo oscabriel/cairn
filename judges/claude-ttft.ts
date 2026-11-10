@@ -181,7 +181,7 @@ const turn = (cwd: string, modelId: string, clock: Ref.Ref<SdkClock>) =>
     const reply = yield* Effect.promise(async () => await stream.result());
     const sdk = yield* Ref.get(clock);
 
-    yield* claude.abortConversation(sessionId);
+    yield* claude.abortConversation(sessionId, now.currentTimeMillisUnsafe());
 
     return {
       answered: reply.stopReason === "stop" && Option.isSome(firstTokenAt),

@@ -194,7 +194,7 @@ _Avoid_: Claude provider, proxy
 
 **Child**: A `claude` process the bridge spawns for one conversation. Children run in the thread's real folder with every Claude Code tool, hook and setting turned off; the bridge's tools reach them through an in-process MCP server.
 
-**Held query**: A child's open Claude query that the bridge keeps waiting across a tool call, so the tool result returns into the same query instead of a new turn.
+**Held query**: A child's open Claude query that the bridge keeps waiting across a tool call, so the tool result returns into the same query instead of a new turn. A held child with no provider call open dies after its held time to live (30 minutes), and its session resumes from the stamp at the next call.
 
 _Avoid_: parked query
 
@@ -204,7 +204,7 @@ _Avoid_: parked query
 
 **Usage probe**: A Claude Code child the bridge starts with no prompt, to read the login and the plan windows. It costs nothing and runs at boot, when a client starts watching usage, every five minutes while usage is watched or Claude turns run, and once after a rejection.
 
-**One-shot**: A request to the bridge that joins no conversation (compaction and other summaries, or a call without a session id). It runs in its own child, keeps no session and serves no tools.
+**One-shot**: A request to the bridge that joins no conversation (compaction and other summaries, or a call without a session id). It runs in its own child, keeps no session and serves no tools. It takes a one-shot permit, not a Claude slot: at most two run at once, and never more than there are Claude slots.
 
 _Avoid_: Claude seat, Claude lane
 
@@ -236,7 +236,7 @@ _Avoid_: plugin
 
 **Boot repair**: A step the brain runs after the Harness opens and before it accepts sockets, in the fixed order listed in `apps/server/src/BootRepairs.ts`.
 
-**Stop hook**: A step that runs after a thread is stopped, in the order given to `StopHooks`; the bridge's explicit abort will be one.
+**Stop hook**: A step that runs after a thread's run ends interrupted, whoever stopped it, in the order given to `StopHooks`; the bridge's explicit abort of a held child is one.
 
 **Turn content stage**: One step that turns a user turn into model content and its `cairn.user` entry, in the order listed in `apps/server/src/threads/TurnContentStages.ts`.
 

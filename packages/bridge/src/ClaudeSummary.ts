@@ -46,16 +46,17 @@ import { Clock, Duration, Effect, Layer, Option, Stream } from "effect";
 import type { ClaudeEvent } from "./ClaudeEvents.ts";
 import type { ChildOptions } from "./ClaudeGuards.ts";
 import {
+  ABORTED_TEXT,
   CHILD_ENDED_TEXT,
   EMPTY_PROMPT_TEXT,
   INIT_REFUSED_TEXT,
   PAID_CREDITS_TEXT,
   PROMPT_REFUSED_TEXT,
   STREAM_STALLED_TEXT,
-  abortKind,
   childEnv,
   claudeFailureText,
   planQuotaExceededText,
+  realAbortOf,
   refuseInit,
   unsendableFindings,
 } from "./ClaudeGuards.ts";
@@ -76,9 +77,6 @@ export const ONE_SHOT_EMPTY_TEXT =
 
 /** A one-shot child asked for a tool; one-shots serve none. */
 const NO_TOOLS_TEXT = "This request serves no tools.";
-
-/** The text pi shows for a request the user stopped. */
-const ABORTED_TEXT = "Operation aborted";
 
 /** How a one-shot ended. */
 type Outcome =
@@ -210,27 +208,6 @@ const readEvent = (progress: Progress, event: ClaudeEvent): void => {
   }
 };
 
-/** Succeeds once `signal` aborts for real (an `AbortError`), never when pi-durable ends the invocation. */
-const realAbort = (signal: Option.Option<AbortSignal>) =>
-  Option.match(signal, {
-    onNone: () => Effect.never,
-    onSome: (live) =>
-      Effect.callback<true>((resume) => {
-        const check = () => {
-          if (live.aborted && abortKind(live, false) !== "ended") {
-            resume(Effect.succeed(true));
-          }
-        };
-
-        check();
-        live.addEventListener("abort", check, { once: true });
-
-        return Effect.sync(() => {
-          live.removeEventListener("abort", check);
-        });
-      }),
-  });
-
 /** The fields every reply of a one-shot carries, whatever its outcome. */
 type ReplyFields = Pick<
   AssistantMessage,
@@ -352,38 +329,44 @@ const layerNoDeps = Layer.effect(
 
       const answer = Effect.scoped(
         Effect.gen(function* () {
-          const child = yield* sdk.open(options, (call) =>
-            Effect.succeed({
-              toolCallId: call.toolUseId,
-              content: [{ type: "text", text: NO_TOOLS_TEXT }],
-              isError: true,
-            })
-          );
-
-          yield* child.input.push({
-            blocks: seedPrompt(context.messages, current),
-            priority: Option.none(),
-          });
-          yield* child.input.end;
-
           // The conversation's watchdog, for one-shots (T13): a child silent for `stallAfter`
-          // fails, unless Claude Code said it is waiting out an API retry.
+          // fails, unless Claude Code said it is waiting out an API retry. It watches the whole of
+          // the start, the prompt's write and the read, so a child that never drains its stdin
+          // fails too.
           let lastEventAt = clock.currentTimeMillisUnsafe();
           let quietUntil = 0;
 
-          const read = Stream.runForEachWhile(child.events, (event) =>
-            Effect.sync(() => {
-              lastEventAt = clock.currentTimeMillisUnsafe();
+          const read = Effect.gen(function* () {
+            const child = yield* sdk.open(options, (call) =>
+              Effect.succeed({
+                toolCallId: call.toolUseId,
+                content: [{ type: "text", text: NO_TOOLS_TEXT }],
+                isError: true,
+              })
+            );
 
-              if (event.type === "system" && "retry_delay_ms" in event) {
-                quietUntil = lastEventAt + event.retry_delay_ms;
-              }
+            yield* child.input.push({
+              blocks: seedPrompt(context.messages, current),
+              priority: Option.none(),
+            });
+            yield* child.input.end;
 
-              readEvent(progress, event);
+            yield* Stream.runForEachWhile(child.events, (event) =>
+              Effect.sync(() => {
+                lastEventAt = clock.currentTimeMillisUnsafe();
 
-              return Option.isNone(progress.outcome);
-            })
-          ).pipe(Effect.as(false));
+                if (event.type === "system" && "retry_delay_ms" in event) {
+                  quietUntil = lastEventAt + event.retry_delay_ms;
+                }
+
+                readEvent(progress, event);
+
+                return Option.isNone(progress.outcome);
+              })
+            );
+
+            return false;
+          });
 
           const stalled = Effect.gen(function* () {
             while (true) {
@@ -434,7 +417,7 @@ const layerNoDeps = Layer.effect(
 
       const outcome: Outcome = yield* Effect.raceFirst(
         answer,
-        Effect.as(realAbort(request.signal), { kind: "aborted" } as const)
+        Effect.as(realAbortOf(request.signal), { kind: "aborted" } as const)
       );
 
       return yield* finish(request, sink, outcome, usage);

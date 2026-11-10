@@ -1,15 +1,18 @@
-// What else runs when a thread is stopped, after the harness stopped its run. A held Claude query
-// outlives its generation signal, so the bridge's explicit abort hooks in here (it arrives with the
-// bridge wiring); the default runs nothing. A hook's failure is logged, never the stop's failure:
-// the run is already stopped.
+// What else runs when a thread's run was stopped: `Threads` runs the hooks for each RunTerminal
+// that ends a run `interrupted`, whoever stopped it (a user, the budget stopper, a workflow's stop,
+// `subagent_stop`), with the time the run ended. A held Claude query outlives its generation
+// signal, so the bridge's explicit abort hooks in here (it arrives with the bridge wiring); the
+// default runs nothing. A hook's failure is logged, never the stop's failure: the run is already
+// stopped. Hooks run after the event, so a hook leaves alone what a later run started since then.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
+import type { DateTime } from "effect";
 import { Context, Effect, Layer } from "effect";
 
-/** One stop hook: a name for the log and the effect to run for a stopped thread. */
+/** One stop hook: a name for the log, and the effect to run for a run that ended at `stoppedAt`. */
 export interface StopHook<E, R> {
   readonly name: string;
-  run(threadId: ThreadId): Effect.Effect<void, E, R>;
+  run(threadId: ThreadId, stoppedAt: DateTime.Utc): Effect.Effect<void, E, R>;
 }
 
 /** Runs the stop hooks for a stopped thread. */
@@ -17,7 +20,7 @@ export class StopHooks extends Context.Service<
   StopHooks,
   {
     /** Runs every hook in order; failures are logged and skipped. */
-    run(threadId: ThreadId): Effect.Effect<void>;
+    run(threadId: ThreadId, stoppedAt: DateTime.Utc): Effect.Effect<void>;
   }
 >()("cairn/server/threads/StopHooks") {
   /** No hooks. */
@@ -33,9 +36,12 @@ export class StopHooks extends Context.Service<
       Effect.gen(function* () {
         const context = yield* Effect.context<R>();
 
-        const run = Effect.fn("StopHooks.run")(function* (threadId: ThreadId) {
+        const run = Effect.fn("StopHooks.run")(function* (
+          threadId: ThreadId,
+          stoppedAt: DateTime.Utc
+        ) {
           for (const hook of hooks) {
-            yield* hook.run(threadId).pipe(
+            yield* hook.run(threadId, stoppedAt).pipe(
               Effect.provideContext(context),
               Effect.catchCause((cause) =>
                 Effect.logWarning("stop hook failed").pipe(

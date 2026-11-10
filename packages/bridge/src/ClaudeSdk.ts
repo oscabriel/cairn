@@ -633,12 +633,15 @@ export class ClaudeSdkScripts extends Context.Service<
     readonly probes: ReadonlyArray<FakeProbe>;
     /** Every probe started, with its options. */
     readonly probed: Ref.Ref<ReadonlyArray<ProbeOptions>>;
+    /** Children, by start index, that never read their stdin: a write to them is never taken. */
+    readonly wedged: ReadonlySet<number>;
   }
 >()("cairn/bridge/ClaudeSdk/ClaudeSdkScripts") {
   /** Scripts with empty records. */
   static readonly make = (
     scripts: ReadonlyArray<FakeScript>,
-    probes: ReadonlyArray<FakeProbe> = []
+    probes: ReadonlyArray<FakeProbe> = [],
+    wedged: ReadonlySet<number> = new Set()
   ): Effect.Effect<ClaudeSdkScripts["Service"]> =>
     Effect.gen(function* () {
       const runs = yield* Ref.make<ReadonlyArray<FakeRun>>([]);
@@ -658,6 +661,7 @@ export class ClaudeSdkScripts extends Context.Service<
         forks,
         probes,
         probed,
+        wedged,
       });
     });
 }
@@ -913,20 +917,23 @@ export class ClaudeSdk extends Context.Service<
             });
           });
 
+        // A wedged child never reads its stdin at all.
+        const reads = Effect.gen(function* () {
+          let next = yield* input.take;
+
+          while (Option.isSome(next)) {
+            const message = next.value;
+
+            yield* Ref.update(writtenLog, (log) => [...log, message]);
+            yield* Queue.offer(written, message);
+            next = yield* input.take;
+          }
+
+          yield* Queue.end(written);
+        });
+
         const pump = yield* Effect.forkDetach(
-          Effect.gen(function* () {
-            let next = yield* input.take;
-
-            while (Option.isSome(next)) {
-              const message = next.value;
-
-              yield* Ref.update(writtenLog, (log) => [...log, message]);
-              yield* Queue.offer(written, message);
-              next = yield* input.take;
-            }
-
-            yield* Queue.end(written);
-          })
+          fake.wedged.has(index) ? Effect.never : reads
         );
 
         const io: FakeIO = {

@@ -14,6 +14,7 @@ import type { ThreadId } from "@cairn/protocol/Ids";
 import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import { NO_SUBAGENTS } from "@cairn/protocol/Subagents";
 import type { ConversationView } from "@cairn/protocol/Thread";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Context,
@@ -79,6 +80,8 @@ class FakeHarness extends Context.Service<
     readonly signals: PubSub.PubSub<ProjectorSignal>;
     readonly live: Ref.Ref<ReadonlyArray<LiveThreadState>>;
     readonly views: Ref.Ref<ReadonlyMap<ThreadId, ConversationView>>;
+    /** Every view (`watch`) and document (`document`) read, as `<kind>:<thread>`. */
+    readonly reads: Ref.Ref<ReadonlyArray<string>>;
   }
 >()("cairn/server/shell/ShellProjector.test/FakeHarness") {}
 
@@ -95,6 +98,8 @@ const FakeLayer = Layer.effectContext(
       new Map()
     );
 
+    const reads = yield* Ref.make<ReadonlyArray<string>>([]);
+
     const seam = HarnessSeam.of({
       ensureThread: () => unsupported("ensure threads"),
       configure: () => unsupported("configure"),
@@ -107,6 +112,8 @@ const FakeLayer = Layer.effectContext(
       watch: (threadId) =>
         Stream.unwrap(
           Effect.gen(function* () {
+            yield* Ref.update(reads, (all) => [...all, `view:${threadId}`]);
+
             const view = (yield* Ref.get(views)).get(threadId);
 
             if (view === undefined) {
@@ -128,7 +135,18 @@ const FakeLayer = Layer.effectContext(
           })
         ),
       whenEnsured: () => unsupported("wait for threads"),
-      document: () => unsupported("read documents"),
+      document: (threadId, kind) =>
+        Effect.gen(function* () {
+          yield* Ref.update(reads, (all) => [...all, `${kind}:${threadId}`]);
+
+          const view = (yield* Ref.get(views)).get(threadId);
+
+          return Option.fromNullishOr(
+            // SAFETY: a view's documents are the seam's JSON, read back as the test wrote them.
+            // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+            view?.docs[kind] as JsonValue | undefined
+          );
+        }),
       history: () => unsupported("page history"),
       entry: () => unsupported("read entries"),
       entryImage: () => unsupported("read images"),
@@ -142,7 +160,10 @@ const FakeLayer = Layer.effectContext(
         ProjectorSignals,
         ProjectorSignals.of({ signals: Stream.fromPubSub(signals) })
       ),
-      Context.add(FakeHarness, FakeHarness.of({ events, signals, live, views }))
+      Context.add(
+        FakeHarness,
+        FakeHarness.of({ events, signals, live, views, reads })
+      )
     );
   })
 );
@@ -197,6 +218,31 @@ const RefusingSink = Layer.effect(
 const RefusingLayer = ShellProjector.layer.pipe(
   Layer.provideMerge(FakeLayer),
   Layer.provideMerge(RefusingSink),
+  Layer.provideMerge(ShellTestLayer)
+);
+
+/** A thread whose row the projector cannot read: every read of it dies. */
+const BROKEN = testThreadId(3);
+
+/** The real rows, except thread 3's, whose every read dies. */
+const BrokenRows = Layer.effect(
+  ThreadRows,
+  Effect.gen(function* () {
+    const real = yield* ThreadRows;
+
+    return ThreadRows.of({
+      ...real,
+      get: (threadId) =>
+        threadId === BROKEN
+          ? Effect.die("a row that does not decode")
+          : real.get(threadId),
+    });
+  })
+);
+
+const BrokenRowLayer = ShellProjector.layer.pipe(
+  Layer.provideMerge(FakeLayer),
+  Layer.provideMerge(BrokenRows),
   Layer.provideMerge(ShellTestLayer)
 );
 
@@ -409,6 +455,37 @@ describe("the shell projector", () => {
         assert.strictEqual(done.queueLength, 0);
       })
     )
+  );
+
+  it.effect(
+    "an event the projector cannot apply is skipped, and the rows still update after it",
+    () =>
+      Effect.gen(function* () {
+        yield* seedThreads(3);
+
+        // Thread 3's row is a value the projector cannot read: applying its event dies.
+        yield* emit([
+          RunStarted.make({
+            threadId: BROKEN,
+            runId: RunId.make(9),
+            at: at(1),
+          }),
+          RunStarted.make({ threadId: THREAD, runId: run7, at: at(2) }),
+          RunStarted.make({
+            threadId: testThreadId(2),
+            runId: RunId.make(8),
+            at: at(2),
+          }),
+        ]);
+
+        assert.deepStrictEqual(
+          [
+            (yield* shellOf(THREAD)).activity,
+            (yield* shellOf(testThreadId(2))).activity,
+          ],
+          ["running", "running"]
+        );
+      }).pipe(Effect.scoped, Effect.provide(BrokenRowLayer))
   );
 
   it.effect(
@@ -1352,6 +1429,11 @@ describe("a goal thread's tally of its criteria", () => {
           const fake = yield* FakeHarness;
           const projector = yield* ShellProjector;
 
+          // The thread was running at the crash, so its goal can have moved past its row.
+          yield* emit([
+            RunStarted.make({ threadId: THREAD, runId: run7, at: at(1) }),
+          ]);
+
           yield* Ref.set(
             fake.views,
             new Map([
@@ -1384,6 +1466,53 @@ describe("a goal thread's tally of its criteria", () => {
             Option.some({ total: 3, met: 1, failed: 1 })
           );
           assert.strictEqual((yield* projector.reconcile).patched, 0);
+        })
+      )
+  );
+});
+
+describe("the boot reconcile's reads", () => {
+  it.effect(
+    "read nothing of an idle thread with no goal, and one document per goal or parent row, a view only for a thread that can have changed",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const IDLE = 60;
+
+          yield* seedThreads(IDLE + 2);
+
+          const fake = yield* FakeHarness;
+          const projector = yield* ShellProjector;
+          const busy = testThreadId(IDLE + 1);
+          const goal = testThreadId(IDLE + 2);
+
+          // One thread running at the crash, one idle thread holding a goal.
+          yield* emit([
+            RunStarted.make({ threadId: busy, runId: run7, at: at(1) }),
+            GoalUpdated.make({
+              threadId: goal,
+              tally: Option.some({ total: 1, met: 0, failed: 0 }),
+            }),
+          ]);
+          yield* Ref.set(
+            fake.views,
+            new Map([
+              [busy, finishedView],
+              [goal, finishedView],
+            ])
+          );
+          yield* Ref.set(fake.reads, []);
+
+          yield* projector.reconcile;
+
+          assert.deepStrictEqual(
+            [...(yield* Ref.get(fake.reads))].toSorted(),
+            [
+              `${GOAL_DOCUMENT}:${busy}`,
+              `${GOAL_DOCUMENT}:${goal}`,
+              `view:${busy}`,
+            ].toSorted()
+          );
         })
       )
   );

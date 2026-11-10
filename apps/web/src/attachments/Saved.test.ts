@@ -232,6 +232,50 @@ describe("saved attachments in two tabs", () => {
   );
 });
 
+describe("saved attachments in one tab", () => {
+  it.effect(
+    "stay gone once a send clears the tray before the last attachment's save answers",
+    () =>
+      Effect.gen(function* () {
+        const inA = { draftKey: Option.some("thread:a") };
+
+        /** `tab` once `answers` arrived, in order. */
+        const answered = (tab: Model, answers: ReadonlyArray<Message>) => {
+          let model = tab;
+
+          for (const answer of answers) {
+            ({ model } = update(model, answer, inA));
+          }
+
+          return model;
+        };
+
+        // One attachment ready and saved: the tab and storage agree.
+        const first = restore({ ...initial, loaded: true }, "thread:a", [
+          ref("att_a"),
+        ]);
+
+        const saved = answered(first.model, yield* runSaves(first));
+
+        // A second one is ready, and its save is on its way when the send clears the tray (the
+        // upload that releases a waiting send does both in one update).
+        const second = restore(saved, "thread:a", [ref("att_b")]);
+        const sent = clearSent(second.model, "thread:a");
+
+        const secondAnswers = yield* runSaves(second);
+        const sentAnswers = yield* runSaves(sent);
+
+        const tab = answered(sent.model, [...secondAnswers, ...sentAnswers]);
+        const stored = yield* loadSaved;
+
+        expect({
+          tray: readyIds(tab, "thread:a"),
+          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
+        }).toStrictEqual({ tray: [], stored: [] });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
 describe("an upload answer", () => {
   it("is worth a new URL when the old one expired, is unknown or was used", () => {
     expect(isRetryableAnswer(400, Option.some("expired"))).toBeTruthy();

@@ -378,6 +378,45 @@ const clickNow = async (page: Page, name: string) => {
 const toolSaid = (page: Page) =>
   page.locator('[data-message-role="assistant"]', { hasText: "Tool said:" });
 
+/**
+ * How many times the model said what a tool answered after the user's message `words` and before
+ * the user's next message: the answers that reached the model for that request. Both widths play on
+ * one thread, and the transcript draws only the rows around the reader (ADR 0041), so a count of
+ * every drawn line stops growing once older lines leave the window; the request's own rows, at the
+ * end, are always drawn. -1 while the message itself is not drawn.
+ */
+const toolSaidAfter = async (page: Page, words: string): Promise<number> =>
+  await page.evaluate((sent) => {
+    const rows = [
+      ...document.querySelectorAll<HTMLElement>("[data-message-role]"),
+    ].toSorted(
+      (one, other) =>
+        one.getBoundingClientRect().top - other.getBoundingClientRect().top
+    );
+
+    const start = rows.findIndex(
+      (row) =>
+        row.dataset.messageRole === "user" &&
+        (row.textContent ?? "").includes(sent)
+    );
+
+    if (start === -1) {
+      return -1;
+    }
+
+    const next = rows.findIndex(
+      (row, index) => index > start && row.dataset.messageRole === "user"
+    );
+
+    return rows
+      .slice(start + 1, next === -1 ? rows.length : next)
+      .filter(
+        (row) =>
+          row.dataset.messageRole === "assistant" &&
+          (row.textContent ?? "").includes("Tool said:")
+      ).length;
+  }, words);
+
 const send = async (page: Page, words: string) => {
   await editor(page).fill(words);
   await page.locator('[data-testid="composer-send"]').first().click();
@@ -493,10 +532,11 @@ const cardApproval = async (browser: Browser, url: string, width: number) => {
 
   try {
     const a = await openThread(contextA, url);
-    const said = await toolSaid(a.page).count();
+    const firstAsk = `open the gate (${width})`;
+    const secondAsk = `open the gate again (${width})`;
 
     // One approval, answered once.
-    await send(a.page, `open the gate (${width})`);
+    await send(a.page, firstAsk);
     await card(a.page).waitFor({ state: "visible", timeout: 15_000 });
     expect(
       (await card(a.page).getAttribute("data-request-kind")) === "tool-call",
@@ -522,8 +562,8 @@ const cardApproval = async (browser: Browser, url: string, width: number) => {
     await card(a.page).waitFor({ state: "hidden", timeout: 10_000 });
 
     const accepted = await waitForCount(
-      async () => await toolSaid(a.page).count(),
-      said + 1,
+      async () => await toolSaidAfter(a.page, firstAsk),
+      1,
       10_000
     );
 
@@ -533,8 +573,8 @@ const cardApproval = async (browser: Browser, url: string, width: number) => {
       `Approve sent ${a.responds.length - before} thread.respond frames`
     );
     expect(
-      accepted === said + 1 && (await toolSaid(a.page).count()) === said + 1,
-      `the model read ${(await toolSaid(a.page).count()) - said} answers`
+      accepted === 1 && (await toolSaidAfter(a.page, firstAsk)) === 1,
+      `the model read ${await toolSaidAfter(a.page, firstAsk)} answers`
     );
     const first = (await toolSaid(a.page).last().textContent()) ?? "";
 
@@ -544,7 +584,7 @@ const cardApproval = async (browser: Browser, url: string, width: number) => {
     );
 
     // A second request: it survives a reload, then two devices answer it at once.
-    await send(a.page, `open the gate again (${width})`);
+    await send(a.page, secondAsk);
     await card(a.page).waitFor({ state: "visible", timeout: 15_000 });
     await a.page.reload({ waitUntil: "networkidle" });
     await card(a.page).waitFor({ state: "visible", timeout: 15_000 });
@@ -570,8 +610,8 @@ const cardApproval = async (browser: Browser, url: string, width: number) => {
     await card(b.page).waitFor({ state: "hidden", timeout: 10_000 });
 
     const settled = await waitForCount(
-      async () => await toolSaid(a.page).count(),
-      said + 2,
+      async () => await toolSaidAfter(a.page, secondAsk),
+      1,
       10_000
     );
 
@@ -581,8 +621,8 @@ const cardApproval = async (browser: Browser, url: string, width: number) => {
     const declined = final.includes("Tool said: declined: not now");
 
     expect(
-      settled === said + 2 && (await toolSaid(a.page).count()) === said + 2,
-      `two devices answering made ${(await toolSaid(a.page).count()) - said - 1} answers reach the model`
+      settled === 1 && (await toolSaidAfter(a.page, secondAsk)) === 1,
+      `two devices answering made ${await toolSaidAfter(a.page, secondAsk)} answers reach the model`
     );
     expect(
       declined || final.includes("Tool said: accepted"),
@@ -687,9 +727,9 @@ const cardQuestion = async (browser: Browser, url: string, width: number) => {
   try {
     const device = await openThread(context, url);
     const { page } = device;
-    const said = await toolSaid(page).count();
+    const ask = `ask me (${width})`;
 
-    await send(page, `ask me (${width})`);
+    await send(page, ask);
     await card(page).waitFor({ state: "visible", timeout: 15_000 });
     expect(
       (await card(page).getAttribute("data-request-kind")) === "user-input",
@@ -787,8 +827,8 @@ const cardQuestion = async (browser: Browser, url: string, width: number) => {
     await card(page).waitFor({ state: "hidden", timeout: UNDO_MS + 5000 });
 
     const reached = await waitForCount(
-      async () => await toolSaid(page).count(),
-      said + 1,
+      async () => await toolSaidAfter(page, ask),
+      1,
       10_000
     );
 
@@ -808,7 +848,7 @@ const cardQuestion = async (browser: Browser, url: string, width: number) => {
     const answer = (await toolSaid(page).last().textContent()) ?? "";
 
     expect(
-      reached === said + 1 &&
+      reached === 1 &&
         answer.includes("Database: SQLite") &&
         answer.includes("Name: kestrel wren"),
       `the model read ${JSON.stringify(answer)}`

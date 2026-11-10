@@ -1,6 +1,6 @@
 /*
  * The design token colour names and the animations the `next` utilities name, for the dev-only look
- * catalogue's build (catalogue/catalogue.css), which does not load styles.css. The colour list is the
+ * catalogue's own build (catalogue/catalogue.css), a second Tailwind build. The colour list is the
  * same list as styles.css's `@theme inline`, and a name added to one is added to the other.
  */
 @theme inline {

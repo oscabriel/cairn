@@ -70,7 +70,10 @@ export const Model = Schema.Struct({
   waitingSends: Schema.Record(Schema.String, SendIntent),
   /** Each draft's tray note, such as why a file was refused or why a send did not go. */
   notices: Schema.Record(Schema.String, Schema.String),
-  /** The saved attachments as this tab last read or wrote them; a save writes what changed since. */
+  /**
+   * The saved attachments as this tab last read them or asked for them to be written (before the
+   * save answers); a save writes what changed since.
+   */
   stored: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
 });
 

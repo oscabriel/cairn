@@ -31,6 +31,7 @@ import {
   ThreadId,
 } from "@cairn/protocol/Ids";
 import type { ModelListing } from "@cairn/protocol/Models";
+import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { NodeServices } from "@effect/platform-node";
 import {
   Clock,
@@ -199,7 +200,7 @@ export interface CairnApp {
     effect: Effect.Effect<
       A,
       E,
-      GoalBook | ScriptedGoals | ScriptedStore | HarnessSeam
+      GoalBook | ScriptedGoals | ScriptedStore | HarnessSeam | EventSink
     >
   ) => Promise<A>;
   readonly stop: () => Promise<void>;
@@ -457,6 +458,63 @@ export const putChangedFiles = (
     });
     yield* publish;
   });
+
+/** A thread the user launched in the seeded project, as `putThread` makes it. */
+export interface ThreadSeed {
+  /** Picks the thread's id (`seededThreadId`) and its create command's; one per thread. */
+  readonly index: number;
+  readonly title: string;
+  readonly runtimeMode: RuntimeMode;
+}
+
+/** The id `putThread` gives the thread of `index`. */
+export const seededThreadId = (index: number): ThreadId =>
+  ThreadId.make(seededId("f", index));
+
+/**
+ * Makes a thread the user launched in the seeded project, neither its project thread nor one it
+ * manages, working in the project's workspace in `runtimeMode` (the look tool's brief and steps
+ * states). A second call finds the thread and changes nothing, so a state's later widths reach the
+ * thread its first width left.
+ */
+export const putThread = Effect.fnUntraced(function* (seed: ThreadSeed) {
+  const store = yield* ScriptedStore;
+  const threadId = seededThreadId(seed.index);
+
+  if (store.threads.has(threadId)) {
+    return threadId;
+  }
+
+  const sink = yield* EventSink;
+  const seam = yield* HarnessSeam;
+  const parity = yield* seededThread;
+
+  yield* sink.commitCommand(
+    ThreadCreate.make({
+      commandId: CommandId.make(seededId("a", seed.index)),
+      threadId,
+      projectId: PROJECT_ID,
+      title: seed.title,
+      provider: "scripted",
+      modelId: "echo",
+      thinkingLevel: "medium",
+      runtimeMode: seed.runtimeMode,
+      branch: Option.none(),
+      worktreePath: Option.none(),
+    })
+  );
+  yield* seam.ensureThread({
+    threadId,
+    projectId: PROJECT_ID,
+    model: { provider: "scripted", modelId: "echo" },
+    thinkingLevel: "medium",
+    cwd: parity.agent.cwd,
+    instructions: Option.none(),
+    runtimeMode: seed.runtimeMode,
+  });
+
+  return threadId;
+});
 
 /** Removes what `putChangedFiles` wrote, so the states after it see the thread as seeded. */
 export const takeChangedFiles = Effect.gen(function* () {

@@ -70,18 +70,29 @@ import {
   importT3Thread,
   parseT3ThreadExport,
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
+import {
+  lookBrain,
+  SPAWN_ASK,
+  SPAWNING_THREADS,
+} from "./fixtures/look/LookBrain.ts";
 import { PICKER_MODELS } from "./fixtures/look/PickerModels.ts";
 import {
   putChangedFiles,
+  putThread,
+  seededThreadId,
   SHELL_SEED,
   startCairn,
   takeChangedFiles,
 } from "./fixtures/parity/CairnApp.ts";
-import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
+import type { CairnApp, ThreadSeed } from "./fixtures/parity/CairnApp.ts";
 import { clearGoal, seedGoal } from "./fixtures/surfaces/GoalBrain.ts";
-import { launchBrain } from "./fixtures/workflows/LaunchBrain.ts";
 import { chromium } from "./lib/Browser.ts";
-import type { Browser, BrowserContextOptions, Page } from "./lib/Browser.ts";
+import type {
+  Browser,
+  BrowserContextOptions,
+  Page,
+  WebSocketRoute,
+} from "./lib/Browser.ts";
 import {
   ALLOWANCE,
   CELL_CSS_PX,
@@ -183,13 +194,16 @@ interface LookState {
   /** Whether the state is also drawn in light. */
   readonly light: boolean;
   readonly enter: (page: Page, width: LookWidth) => Promise<void>;
+  /** What the state does to its page before it opens (the outbox states route its socket). */
+  readonly before?: (page: Page) => Promise<void>;
   /**
    * What the state puts in the brain before its page opens, and takes out after its shot, so no
-   * other state draws it (the goal state's criteria).
+   * other state draws it (the goal state's criteria). A state with nothing to take puts only what
+   * no other state draws (a thread of its own, which the sidebar does not list).
    */
   readonly brain?: {
     readonly put: (reach: Reach) => Promise<void>;
-    readonly take: (reach: Reach) => Promise<void>;
+    readonly take?: (reach: Reach) => Promise<void>;
   };
 }
 
@@ -236,6 +250,140 @@ const openLastFold = async (page: Page) => {
   await folds.last().evaluate((element) => {
     element.scrollIntoView({ block: "start" });
   });
+};
+
+/** A thread of the spawning brain's, made before the state's page opens; never taken out. */
+const spawningThread = (seed: ThreadSeed) => ({
+  path: () => `/t/${seededThreadId(seed.index)}`,
+  brain: {
+    put: async ({ app }: Reach) => {
+      await app.inBrain(putThread(seed));
+    },
+  },
+});
+
+/** The request card on the page. */
+const requestCard = (page: Page) => page.getByTestId("request-card");
+
+/**
+ * Asks the spawning thread for its subagent, so its brief waits for Go, unless an earlier width
+ * already asked: the brief stays pending, and the thread's transcript is the same either way.
+ */
+const askForSubagent = async (page: Page) => {
+  await editor(page).waitFor({ state: "visible", timeout: 15_000 });
+
+  const asked = await page
+    .locator(drawn('[data-testid="subagent-row"]'))
+    .first()
+    .waitFor({ state: "visible", timeout: 2000 })
+    .then(
+      () => true,
+      () => false
+    );
+
+  if (!asked) {
+    await editor(page).fill(SPAWN_ASK);
+    await page.getByTestId("composer-send").first().click();
+    await requestCard(page).waitFor({ state: "visible", timeout: 15_000 });
+  }
+};
+
+/** The brief card's state: a spawning thread whose brief waits for Go. */
+const briefCardEnter = async (page: Page) => {
+  await askForSubagent(page);
+  await requestCard(page).waitFor({ state: "visible", timeout: 15_000 });
+  await settle(page, 1200);
+};
+
+/** The page's socket routes, and whether the outbox states cut them, by page. */
+const sockets = new WeakMap<
+  Page,
+  { cut: boolean; readonly routes: Array<WebSocketRoute> }
+>();
+
+/**
+ * Stands in for the page's protocol socket: through to the brain until `cutSocket`, and after it
+ * every new socket closes as it opens, as a dial to a brain out of reach fails.
+ */
+const routeSocket = async (page: Page) => {
+  const link = { cut: false, routes: new Array<WebSocketRoute>() };
+
+  sockets.set(page, link);
+  await page.routeWebSocket(/\/ws(?:\?|$)/u, (socket) => {
+    link.routes.push(socket);
+
+    if (link.cut) {
+      socket.close();
+    } else {
+      socket.connectToServer();
+    }
+  });
+};
+
+/** Drops the page's socket and refuses the next ones: the page is offline, reconnecting. */
+const cutSocket = async (page: Page) => {
+  const link = sockets.get(page);
+
+  if (link === undefined) {
+    throw new Error("look.ts: the page's socket was not routed");
+  }
+
+  link.cut = true;
+
+  for (const route of link.routes) {
+    route.close();
+  }
+
+  await page
+    .locator('[data-testid="connection-state"]:not([data-state="Live"])')
+    .first()
+    .waitFor({ state: "attached", timeout: 10_000 });
+  // A few dials fail and the page settles into its slowest backoff, where it stays.
+  await page.waitForTimeout(3000);
+};
+
+/** The file the outbox states attach. */
+const ATTACHED_FILE = "release-checklist.pdf";
+
+/** What the outbox states send. */
+const UNSENT_MESSAGE =
+  "Go through the release checklist I attached and tell me what is still open.";
+
+/**
+ * The thread with a message sent while the brain was out of reach: a file attached (uploaded
+ * while the page was live), then the socket cut, then Send, so the turn waits in the outbox.
+ */
+const sendOffline = async (page: Page) => {
+  await waitForThread(page);
+  await page.evaluate((name) => {
+    const form = document.querySelector("[data-chat-composer-form]");
+    const transfer = new DataTransfer();
+
+    transfer.items.add(
+      new File(["%PDF-1.7\n% look\n"], name, { type: "application/pdf" })
+    );
+
+    for (const type of ["dragover", "drop"]) {
+      form?.dispatchEvent(
+        new DragEvent(type, {
+          dataTransfer: transfer,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    }
+  }, ATTACHED_FILE);
+  await page
+    .locator('[data-testid="attachment-chip"][data-attachment-state="ready"]')
+    .first()
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await editor(page).fill(UNSENT_MESSAGE);
+  await cutSocket(page);
+  await page.getByTestId("composer-send").first().click();
+  await page
+    .locator(drawn('[data-testid="pending-message"]'))
+    .last()
+    .waitFor({ state: "visible", timeout: 10_000 });
 };
 
 /** The changed files of the thread-files state: paths as long as the phone run's (2026-10-30). */
@@ -435,6 +583,42 @@ const STATES: ReadonlyArray<LookState> = [
     },
   },
   {
+    name: "outbox-pending",
+    title: "A message that has not gone yet",
+    caption:
+      "The thread at its end while the brain is out of reach: a message sent with a file attached waits in the outbox, its bubble dimmed, with the file's chip and “Not sent yet” where its time goes, and the header says Reconnecting.",
+    path: ({ app }) => new URL(app.threadUrl).pathname,
+    widths: [390, 1440],
+    light: false,
+    before: routeSocket,
+    enter: async (page) => {
+      await sendOffline(page);
+      await settle(page, 800);
+    },
+  },
+  {
+    name: "outbox-cleared",
+    title: "An unsent message after site data was cleared",
+    caption:
+      "The same unsent message after site data was cleared in another tab: the banner says it may not have been sent, and the message and its file are back in the composer.",
+    path: ({ app }) => new URL(app.threadUrl).pathname,
+    widths: [390, 1440],
+    light: false,
+    before: routeSocket,
+    enter: async (page) => {
+      await sendOffline(page);
+      await page.evaluate(() => {
+        localStorage.clear();
+        // What the browser raises in every other tab of the site when one of them clears it.
+        globalThis.dispatchEvent(new StorageEvent("storage", { key: null }));
+      });
+      await page
+        .getByTestId("notice")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await settle(page, 800);
+    },
+  },
+  {
     name: "launch-approval",
     title: "A workflow's launch approval",
     caption:
@@ -542,6 +726,59 @@ const STATES: ReadonlyArray<LookState> = [
         }
       });
       await settle(page, 300);
+    },
+  },
+  {
+    name: "brief-card",
+    title: "A subagent's brief, judged by its command",
+    caption:
+      "A thread whose subagent brief waits for Go, in Full access: Done when names the command the brief gave and that it exits 0, and Judged by says an outside judge runs it, Cairn in the child's workspace once its run completes. In the composer's slot at 390 px, above the composer at 1,440 px.",
+    ...spawningThread(SPAWNING_THREADS.brief),
+    widths: [390, 1440],
+    light: false,
+    enter: briefCardEnter,
+  },
+  {
+    name: "brief-card-supervised",
+    title: "The same brief in Supervised mode",
+    caption:
+      "The same brief from a thread in Supervised mode, where a command asks first: Cairn does not run it unasked, so Judged by says there is no outside judge and the parent accepts the result.",
+    ...spawningThread(SPAWNING_THREADS.supervised),
+    widths: [390, 1440],
+    light: false,
+    enter: briefCardEnter,
+  },
+  {
+    name: "child-steps",
+    title: "A subagent's steps, checked",
+    caption:
+      "The subagent's own page after Go, once it answered, with its steps open: Go, started, working, said what it did, and the fifth, checked by an outside judge, done, so the header reads 5/5 steps. A column beside the chat at 1,440 px, a bottom sheet at 390 px.",
+    ...spawningThread(SPAWNING_THREADS.steps),
+    widths: [390, 1440],
+    light: false,
+    enter: async (page) => {
+      await askForSubagent(page);
+
+      const go = requestCard(page).locator('[data-action="go"]');
+
+      if ((await requestCard(page).count()) > 0) {
+        await go.click();
+      }
+
+      // The child's row in the parent's transcript, a link once Go started it.
+      const child = page.locator(
+        drawn('a[data-testid="subagent-row"][data-child-thread-id]')
+      );
+
+      await child.first().waitFor({ state: "visible", timeout: 15_000 });
+      await child.first().click();
+      await page.getByTestId("work-toggle").click();
+      await page
+        .locator(
+          '[data-testid="work-step"][data-step="checked"][data-step-state="done"]'
+        )
+        .waitFor({ state: "visible", timeout: 15_000 });
+      await settle(page, 600);
     },
   },
 ];
@@ -692,6 +929,8 @@ const openState = async (
   const page = await context.newPage();
   const errors: Array<string> = [];
 
+  await state.before?.(page);
+
   page.on("pageerror", (error) => {
     errors.push(error.message);
   });
@@ -817,7 +1056,7 @@ const takeShot = async (
     };
   } finally {
     await opened.context.close();
-    await shot.state.brain?.take(reach);
+    await shot.state.brain?.take?.(reach);
   }
 };
 
@@ -1015,8 +1254,9 @@ const startApp = async (): Promise<CairnApp> => {
       entries: importT3Thread(exported).entries,
     },
     // The launch brain answers "Noted." as the parity brain does, and proposes a workflow on
-    // "launch opencode-go/gpt-6-luna look" for the launch-approval state.
-    { shell: SHELL_SEED, brain: launchBrain, pickerModels: PICKER_MODELS }
+    // "launch opencode-go/gpt-6-luna look" for the launch-approval state; the look brain adds the
+    // threads that spawn a subagent, for the brief-card and child-steps states.
+    { shell: SHELL_SEED, brain: lookBrain, pickerModels: PICKER_MODELS }
   );
 };
 

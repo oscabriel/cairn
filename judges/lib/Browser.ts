@@ -567,6 +567,11 @@ export class WebSocketRoute {
     this.pageHandler = handler;
   }
 
+  /** Closes the page's socket, and the real one behind it when there is one, as a dropped link does. */
+  close(): void {
+    this.command("close");
+  }
+
   /** Opens the real socket behind this one. */
   connectToServer(): WebSocketRouteServer {
     this.connected = true;

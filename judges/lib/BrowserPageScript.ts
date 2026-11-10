@@ -906,6 +906,9 @@ export const webSocketRouteScript = (binding: string): string =>
         case "toServer":
           socket.real?.send(data);
           break;
+        case "close":
+          socket.close();
+          break;
         default:
           break;
       }

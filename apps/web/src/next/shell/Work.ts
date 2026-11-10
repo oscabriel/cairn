@@ -383,7 +383,8 @@ const ancestorRow = (h: H, ancestor: LineageAncestor, index: number): Html => {
 
 /**
  * A row's Stop (U-3): the word and the one Stop glyph, never a bare square. Nothing undoes a stop,
- * so the first press asks "Stop?" in place and the second stops; leaving the control lets it go.
+ * so the first press asks "Stop?" in place and the second stops; leaving the control, any other
+ * press in the panel, or a pause of `STOP_ASK_MS` lets it go.
  */
 const rowStop = (
   h: H,

@@ -9,9 +9,12 @@
 // sidebar lists with the threads it manages, and the scratch thread the caller holds. An old
 // top-level thread no list shows never counts, since the user could not open it to clear the badge.
 //
-// The scratch thread's identity lives in the page's localStorage (`cairn:next:scratch-thread:v1`),
-// so the caller passes it. The brain cannot see it: the push's number leaves out a scratch thread
-// that needs the user, which the open page's favicon and app icon count.
+// Two things only the page knows, so the caller passes them (`NeedsYouPage`). The scratch thread's
+// identity lives in the page's localStorage (`cairn:next:scratch-thread:v1`): the push's number
+// leaves out a scratch thread that needs the user, which the open page's favicon and app icon
+// count. And the thread on screen: the user watches its result land, so the page's producers do not
+// count that result while the visit round-trips (its requests still count). The brain sees no page
+// (`NO_PAGE`), so a push's number counts that result.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
@@ -50,6 +53,26 @@ const rootOf = (thread: ThreadShell): ThreadId =>
     onNone: () => thread.id,
     onSome: (lineage) => lineage.rootThreadId,
   });
+
+/** What only the page knows: the scratch thread it holds, and the thread it shows. */
+export interface NeedsYouPage {
+  /** The scratch thread this device holds (its localStorage); the brain cannot see it. */
+  readonly scratchThreadId: Option.Option<ThreadId>;
+  /** The thread on screen, whose own result the user sees as it lands. */
+  readonly openThreadId: Option.Option<ThreadId>;
+}
+
+/** What the brain passes: it sees no page, so no scratch thread and no thread on screen. */
+export const NO_PAGE: NeedsYouPage = {
+  scratchThreadId: Option.none(),
+  openThreadId: Option.none(),
+};
+
+/** `needsYou` as the page counts it: the open thread's own result is seen as it lands. */
+const needsYouOn = (thread: ThreadShell, page: NeedsYouPage): boolean =>
+  Option.contains(page.openThreadId, thread.id)
+    ? hasPendingRequest(thread)
+    : needsYou(thread);
 
 /** What the count reads: the projects and the live rows (a shell snapshot, or the brain's rows). */
 export interface NeedsYouShell {
@@ -91,14 +114,15 @@ const reachableRoots = (
 };
 
 /**
- * The reachable roots whose tree needs the user (`needsYou` on the root or any row under it).
- * Archived rows are skipped. The rail reads it per project; the badges count it.
+ * The reachable roots whose tree needs the user (`needsYou` on the root or any row under it, the
+ * open thread's own result aside). Archived rows are skipped. The rail reads it per project; the
+ * badges count it.
  */
 export const rootsNeedingYou = (
   shell: NeedsYouShell,
-  scratchThreadId: Option.Option<ThreadId>
+  page: NeedsYouPage
 ): ReadonlySet<ThreadId> => {
-  const reachable = reachableRoots(shell, scratchThreadId);
+  const reachable = reachableRoots(shell, page.scratchThreadId);
   const roots = new Set<ThreadId>();
 
   for (const thread of shell.threads) {
@@ -107,7 +131,7 @@ export const rootsNeedingYou = (
     if (
       reachable.has(root) &&
       Option.isNone(thread.archivedAt) &&
-      needsYou(thread)
+      needsYouOn(thread, page)
     ) {
       roots.add(root);
     }
@@ -118,9 +142,9 @@ export const rootsNeedingYou = (
 
 /**
  * The one counting rule: how many threads the user talks to need them. The favicon, the app icon
- * and the push's number all show it; the brain passes no scratch thread (module header).
+ * and the push's number all show it; the brain passes `NO_PAGE` (module header).
  */
 export const needsYouCount = (
   shell: NeedsYouShell,
-  scratchThreadId: Option.Option<ThreadId>
-): number => rootsNeedingYou(shell, scratchThreadId).size;
+  page: NeedsYouPage
+): number => rootsNeedingYou(shell, page).size;

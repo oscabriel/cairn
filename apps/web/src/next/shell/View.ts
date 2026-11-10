@@ -7,6 +7,7 @@
 
 import { managedGroupsOf } from "@cairn/client-logic/Sidebar";
 import { lineageWindow } from "@cairn/client-logic/ThreadLineage";
+import type { LineageWindow } from "@cairn/client-logic/ThreadLineage";
 import { formatSidebarAge } from "@cairn/client-logic/Time";
 import { Array, Option, Predicate, Record } from "effect";
 import { Submodel } from "foldkit";
@@ -136,8 +137,31 @@ const previousContentOf = (
 };
 
 /**
+ * A group's window that keeps the open thread's row on screen: past the window, it follows the
+ * shown rows, one fewer hidden.
+ */
+const windowKeepingOpen = (
+  rows: ReadonlyArray<ManagedRow>,
+  shown: number
+): LineageWindow<ManagedRow> => {
+  const window = lineageWindow(rows, shown);
+
+  const open = rows
+    .slice(window.visibleRows.length)
+    .find((each) => each.isOpen);
+
+  return open === undefined
+    ? window
+    : {
+        visibleRows: [...window.visibleRows, open],
+        hiddenCount: window.hiddenCount - 1,
+      };
+};
+
+/**
  * The managed rows (newest first) in the work panel's shape (U-9): asking and live rows first, the
- * resting ones folded, each group in its window.
+ * resting ones folded, each group in its window. The open thread's row always shows: past its
+ * group's window it follows the shown rows, and in the closed fold it shows under the fold's header.
  */
 const managedContentOf = (
   model: Model,
@@ -148,10 +172,13 @@ const managedContentOf = (
 
   return {
     count: rows.length,
-    live: lineageWindow(groups.live, list.shownLive),
-    resting: lineageWindow(groups.resting, list.shownResting),
+    live: windowKeepingOpen(groups.live, list.shownLive),
+    resting: windowKeepingOpen(groups.resting, list.shownResting),
     restingCount: groups.resting.length,
     isRestingOpen: list.isRestingOpen,
+    openResting: list.isRestingOpen
+      ? Option.none()
+      : Option.fromUndefinedOr(groups.resting.find((each) => each.isOpen)),
   };
 };
 

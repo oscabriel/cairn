@@ -520,6 +520,13 @@ const setWork = (
   model: modifyFields(model, { work: change }),
 });
 
+/**
+ * The panel with no "Stop?" asked: a blur, the pause running out, a close, or any other press in
+ * the panel lets the question go, since WebKit gives a tapped button no focus to lose (U-3).
+ */
+const disarmStop = (work: WorkState): WorkState =>
+  modifyFields(work, { armedStop: () => Option.none() });
+
 /** A row's Stop pressed once: it asks "Stop?" now, and any other row's question lets go (U-3). */
 const armStop = (model: Model, key: string): UpdateReturn =>
   setWork(model, (work) =>
@@ -1149,15 +1156,17 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       ),
     ClickedPreviousChildren: () =>
       setWork(model, (work) =>
-        modifyFields(work, { isPreviousOpen: (open) => !open })
+        modifyFields(disarmStop(work), { isPreviousOpen: (open) => !open })
       ),
     ClickedMoreChildren: ({ group }) =>
       group === "active"
         ? setWork(model, (work) =>
-            modifyFields(work, { shownActive: (shown) => shown + LINEAGE_PAGE })
+            modifyFields(disarmStop(work), {
+              shownActive: (shown) => shown + LINEAGE_PAGE,
+            })
           )
         : setWork(model, (work) =>
-            modifyFields(work, {
+            modifyFields(disarmStop(work), {
               shownPrevious: (shown) => shown + LINEAGE_PAGE,
             })
           ),
@@ -1186,9 +1195,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     BlurredStop: () =>
       Option.isNone(model.work.armedStop)
         ? { model }
-        : setWork(model, (work) =>
-            modifyFields(work, { armedStop: () => Option.none() })
-          ),
+        : setWork(model, disarmStop),
+    LapsedStop: ({ key }) =>
+      Option.contains(model.work.armedStop, key)
+        ? setWork(model, disarmStop)
+        : { model },
     // The stop's answer comes after the run's abort joined, so the row now says what is true: a
     // child the stop could not bring to rest (held, or one whose queued input started a run) shows
     // its own state again rather than Stopping for ever.
@@ -1248,7 +1259,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       ),
     ClickedDismissWorkFailure: () =>
       setWork(model, (work) =>
-        modifyFields(work, { failure: () => Option.none() })
+        modifyFields(disarmStop(work), { failure: () => Option.none() })
       ),
 
     ClickedRestingThreads: () =>
@@ -1375,8 +1386,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         goal: (goal) => modifyFields(goal, { isOpen: (open) => !open }),
         work: (work) =>
           model.goal.isOpen
-            ? work
-            : modifyFields(work, { isOpen: () => false }),
+            ? disarmStop(work)
+            : modifyFields(disarmStop(work), { isOpen: () => false }),
       }),
     }),
     ClickedCloseGoal: () =>

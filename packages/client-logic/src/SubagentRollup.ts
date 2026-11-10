@@ -8,7 +8,9 @@
 // chain stops the walk, a subagent's row resolves to its nearest ancestor that is not one, and the
 // parent's banner names its asking descendants unless the parent asks the user itself. Changed: Cairn's shell rows (`lineage` is an Option, the run is
 // live while `activeRunId` is set or `activity` is busy), a brief or a criteria proposal counts with
-// no live run because no run holds one (ADR 0030), one environment, plain functions instead of atoms.
+// no live run because no run holds one (ADR 0030), a brief rolls up as Go (between approval and
+// input) so its ancestors say what its own row says, one environment, plain functions instead of
+// atoms.
 // Not ported: provider-native subagents, forks, the atom caches and their reference stability.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
@@ -36,8 +38,18 @@ import { Option } from "effect";
 import type { ThreadLabel } from "./ThreadState.ts";
 import { isRunLive, THREAD_LABELS } from "./ThreadState.ts";
 
-/** What a descendant's pending request asks of the user, as its ancestors show it. */
-export type SubagentRequest = "approval" | "input";
+/**
+ * What a descendant's pending request asks of the user, as its ancestors show it: an approval, a
+ * brief's Go, or input. Each reads on the ancestors in the word the child's own row says (U-14).
+ */
+export type SubagentRequest = "approval" | "go" | "input";
+
+/** Which request an ancestor shows when several descendants ask: approval, then Go, then input. */
+const REQUEST_RANK: Readonly<Record<SubagentRequest, number>> = {
+  approval: 2,
+  go: 1,
+  input: 0,
+};
 
 /** The fields of a row the rollup reads. */
 export type RollupRow = Pick<
@@ -75,9 +87,14 @@ const HELD_BY_NO_RUN: ReadonlySet<RuntimeRequestKind> = new Set([
   "criteria",
 ]);
 
-/** Approvals of every kind but a question or a sign-in, which ask for input. */
-export const requestOfKind = (kind: RuntimeRequestKind): SubagentRequest =>
-  kind === "user-input" || kind === "sign-in" ? "input" : "approval";
+/** A brief waits for Go, a question or a sign-in for input, and every other kind for approval. */
+export const requestOfKind = (kind: RuntimeRequestKind): SubagentRequest => {
+  if (kind === "brief") {
+    return "go";
+  }
+
+  return kind === "user-input" || kind === "sign-in" ? "input" : "approval";
+};
 
 /** What a subagent's own pending request asks its ancestors to show, if it counts. */
 export const subagentRequestOf = (
@@ -101,7 +118,8 @@ const indexById = <T extends RollupRow>(
 
 /**
  * Each ancestor of a subagent with a counting request, mapped to what it should show: approval
- * wins over input from any descendant. A thread with no asking descendant is absent.
+ * wins over Go, and Go over input, from any descendant. A thread with no asking descendant is
+ * absent.
  */
 export const pendingSubagentRequests = (
   threads: ReadonlyArray<RollupRow>
@@ -124,7 +142,12 @@ export const pendingSubagentRequests = (
 
       seen.add(parentId);
 
-      if (requests.get(parentId) !== "approval") {
+      const shown = requests.get(parentId);
+
+      if (
+        shown === undefined ||
+        REQUEST_RANK[request.value] > REQUEST_RANK[shown]
+      ) {
         requests.set(parentId, request.value);
       }
 
@@ -206,15 +229,7 @@ export const childrenAsking = <T extends RollupRow>(
 export const askingLabelOf = (child: RollupRow): ThreadLabel =>
   Option.match(child.pendingRuntimeRequest, {
     onNone: () => THREAD_LABELS.approval,
-    onSome: ({ kind }) => {
-      if (kind === "brief") {
-        return THREAD_LABELS.go;
-      }
-
-      return requestOfKind(kind) === "input"
-        ? THREAD_LABELS.input
-        : THREAD_LABELS.approval;
-    },
+    onSome: ({ kind }) => THREAD_LABELS[requestOfKind(kind)],
   });
 
 /** The one label every asking child shares, if they share one. */

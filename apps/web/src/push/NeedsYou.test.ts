@@ -2,7 +2,7 @@
 // favicon, the app icon and the push (the server counts with the same client-logic rule), and the
 // rail lights its project exactly when that number counts the project's thread.
 
-import { needsYouCount } from "@cairn/client-logic/Badge";
+import { NO_PAGE, needsYouCount } from "@cairn/client-logic/Badge";
 import {
   asking,
   EARLIER,
@@ -21,6 +21,7 @@ import { DateTime, Option } from "effect";
 
 import { projectMarkOf, requestsOf } from "../next/shell/Derived.ts";
 import { initial as initialShell } from "../next/shell/Model.ts";
+import { AppRoute } from "../Route.ts";
 import { initial as initialSidebar } from "../sidebar/Model.ts";
 import { inform as informSidebar } from "../sidebar/Update.ts";
 import { pushContextOf } from "./Context.ts";
@@ -138,12 +139,15 @@ const REVIEW_CASES: ReadonlyArray<{
 ];
 
 /** The favicon's number, as the headless sidebar's update sets it for this shell. */
-const faviconOf = (shell: ShellSnapshot): number =>
+const faviconOf = (
+  shell: ShellSnapshot,
+  openThreadId: Option.Option<ThreadShell["id"]> = none
+): number =>
   informSidebar(
     { ...initialSidebar, nowMs: DateTime.toEpochMillis(NOW) },
     {
       shell: Option.some(shell),
-      openThreadId: Option.none(),
+      openThreadId,
       openDraftId: Option.none(),
       scratchThreadId: Option.none(),
       connection: "Live",
@@ -166,7 +170,7 @@ describe("needs you", () => {
       }).badge;
 
       // The brain's notifier counts the live projects and rows with no scratch thread.
-      const push = needsYouCount(shell, Option.none());
+      const push = needsYouCount(shell, NO_PAGE);
 
       const shellModel = {
         ...initialShell,
@@ -208,7 +212,7 @@ describe("needs you", () => {
 
     assert.deepStrictEqual(
       {
-        page: needsYouCount(shell, scratch),
+        page: needsYouCount(shell, { ...NO_PAGE, scratchThreadId: scratch }),
         appIcon: pushContextOf({
           epoch: 1,
           hasClient: true,
@@ -217,9 +221,56 @@ describe("needs you", () => {
           openThreadId: Option.none(),
           scratchThreadId: scratch,
         }).badge,
-        push: needsYouCount(shell, Option.none()),
+        push: needsYouCount(shell, NO_PAGE),
       },
       { page: 1, appIcon: 1, push: 0 }
+    );
+  });
+
+  it("leaves out the result the user is watching on the page's producers, never a request", () => {
+    // The project thread is open and its run has just finished: the user sees it as it lands,
+    // before the visit round-trips, so the favicon, the app icon and the rail stay quiet. A request
+    // on it still counts. The brain sees no page, so its number counts the result.
+    const open = Option.some(PROJECT_THREAD);
+
+    const unseen: Partial<ThreadShell> = {
+      latestRunCompletedAt: Option.some(NOW),
+      lastVisitedAt: Option.some(EARLIER),
+    };
+
+    const producers = (shell: ShellSnapshot) => {
+      const shellModel = {
+        ...initialShell,
+        context: {
+          ...initialShell.context,
+          route: AppRoute.Thread({ threadId: PROJECT_THREAD }),
+          shell: Option.some(shell),
+          nowMs: DateTime.toEpochMillis(NOW),
+        },
+      };
+
+      return {
+        favicon: faviconOf(shell, open),
+        appIcon: pushContextOf({
+          epoch: 1,
+          hasClient: true,
+          hello: Option.none(),
+          shell: Option.some(shell),
+          openThreadId: open,
+          scratchThreadId: none,
+        }).badge,
+        rail: projectMarkOf(shellModel, project, requestsOf(shellModel)),
+      };
+    };
+
+    assert.deepStrictEqual(producers(shellOf([shellRow(1, unseen)])), {
+      favicon: 0,
+      appIcon: 0,
+      rail: "none",
+    });
+    assert.deepStrictEqual(
+      producers(shellOf([shellRow(1, { ...unseen, ...approval("a-1") })])),
+      { favicon: 1, appIcon: 1, rail: "needs" }
     );
   });
 });

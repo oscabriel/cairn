@@ -257,10 +257,10 @@ const hasChildrenAtWork = (thread: Pick<ThreadShell, "subagents">): boolean =>
   thread.subagents.working + thread.subagents.asking > 0;
 
 /**
- * A thread's status. A request for the user first, its own (approval, a brief's Go, then a
- * question) or a descendant's (`subagentRequest`, approval over input); then a child waiting on
- * its parent's answer; then busy work; then the latest run's failure (a spent
- * plan window reads as limited); then a finished run whose children still work, "Waiting".
+ * A thread's status. A request for the user first, its own or a descendant's (`subagentRequest`):
+ * approval, then a brief's Go, then a question; then a child waiting on its parent's answer; then
+ * busy work; then the latest run's failure (a spent plan window reads as limited); then a finished
+ * run whose children still work, "Waiting".
  */
 export const threadStatus = (
   thread: ThreadStateRow,
@@ -279,7 +279,7 @@ export const threadStatus = (
     return "approval";
   }
 
-  if (Option.contains(own, "brief")) {
+  if (Option.contains(own, "brief") || Option.contains(subagentRequest, "go")) {
     return "go";
   }
 

@@ -20,7 +20,11 @@
 // minutes after its last push. The badge is `@cairn/client-logic/Badge`'s one counting rule, the count
 // the page shows (`badge`; BudgetGuard and the workflow budget pushes read it too).
 
-import { hasPendingRequest, needsYouCount } from "@cairn/client-logic/Badge";
+import {
+  hasPendingRequest,
+  NO_PAGE,
+  needsYouCount,
+} from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord } from "@cairn/protocol/Policy";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
@@ -405,7 +409,8 @@ export class Notifier extends Context.Service<
     /**
      * The app icon's badge every push carries: client-logic's one counting rule over the live
      * projects and threads (`needsYouCount`), 0 when the store cannot be read. The brain cannot
-     * see the scratch thread a page holds, so a scratch thread that needs the user is not in it.
+     * see the page: a scratch thread that needs the user is not in it, and a result the user
+     * watched land on the open thread is, until the visit is recorded.
      */
     readonly badge: Effect.Effect<number>;
   }
@@ -556,7 +561,8 @@ export class Notifier extends Context.Service<
         });
 
       // The page's rule (C-4): a subagent's request counts on its root, its result never does, and
-      // only a project thread the sidebar lists counts. No scratch thread: the brain cannot see it.
+      // only a project thread the sidebar lists counts. No page: the brain cannot see the scratch
+      // thread a page holds, nor the thread on its screen.
       const badgeCount = Effect.all({
         projects: projects.listActive,
         threads: threads.listLive,
@@ -567,7 +573,7 @@ export class Notifier extends Context.Service<
               projects: live.projects,
               threads: live.threads.map((row) => row.shell),
             },
-            Option.none()
+            NO_PAGE
           )
         ),
         Effect.orElseSucceed(() => 0)

@@ -63,6 +63,11 @@ export interface ManagedContent {
   readonly resting: LineageWindow<ManagedRow>;
   readonly restingCount: number;
   readonly isRestingOpen: boolean;
+  /**
+   * The open thread's row while it rests in the closed fold: drawn under the fold's header, so the
+   * list still says where the user is. Each window keeps the open row in it too.
+   */
+  readonly openResting: Option.Option<ManagedRow>;
 }
 
 /** The project thread as its row shows it. */
@@ -536,6 +541,10 @@ const managedSection = (
           ),
         ]
       ),
+  Option.match(managed.openResting, {
+    onNone: () => h.empty,
+    onSome: (open) => managedList(h, "shell-resting-open", [open]),
+  }),
 ];
 
 const footButton = (

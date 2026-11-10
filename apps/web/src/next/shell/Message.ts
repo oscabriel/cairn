@@ -90,6 +90,11 @@ export const Message = defineMessageUnion({
   ClickedStopChild: { threadId: ThreadId },
   /** A row's Stop lost focus: a "Stop?" it was asking lets go. */
   BlurredStop: {},
+  /**
+   * The pause after a row's first press ran out (`STOP_ASK_MS`): the "Stop?" asked under `key`
+   * lets go. WebKit does not focus a tapped button, so no blur may ever come.
+   */
+  LapsedStop: { key: Schema.String },
   StoppedChild: { threadId: ThreadId },
   FailedStopChild: { threadId: ThreadId, message: Schema.String },
   /**

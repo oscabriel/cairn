@@ -206,11 +206,38 @@ describe("subagent request rollup", () => {
       pendingRuntimeRequest: request("brief"),
     };
 
-    assert.deepStrictEqual(subagentRequestOf(child), Option.some("approval"));
+    assert.deepStrictEqual(subagentRequestOf(child), Option.some("go"));
     assert.deepStrictEqual(
       [...pendingSubagentRequests([root, child])],
-      [[root.id, "approval"]]
+      [[root.id, "go"]]
     );
+  });
+
+  it("rolls a brief up as Go: below an approval, above a question (U-14)", () => {
+    const root = top("root");
+
+    const briefing = {
+      ...subagentOf("child", root.id),
+      pendingRuntimeRequest: request("brief"),
+    };
+
+    const asking = {
+      ...subagentOf("sibling", root.id),
+      pendingRuntimeRequest: request("user-input"),
+    };
+
+    const approving = {
+      ...subagentOf("review", root.id),
+      pendingRuntimeRequest: request("tool-call"),
+    };
+
+    const rollup = (threads: ReadonlyArray<RollupRow>) =>
+      pendingSubagentRequests(threads).get(root.id);
+
+    assert.strictEqual(rollup([root, asking, briefing]), "go");
+    assert.strictEqual(rollup([root, briefing, asking]), "go");
+    assert.strictEqual(rollup([root, briefing, approving]), "approval");
+    assert.strictEqual(rollup([root, approving, briefing]), "approval");
   });
 
   it("brings a nested subagent's approval to every ancestor, over input", () => {

@@ -260,7 +260,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `RuntimeRequestKind` | `tool-call` | "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `user-input` | "Input". | Sidebar row |
 | `RuntimeRequestKind` | `sign-in` | "Input". | Sidebar row |
-| `RuntimeRequestKind` | `brief` | "Waiting for Go", in the approval colour. A child's brief shows on its ancestors as "Approval". | Sidebar row |
+| `RuntimeRequestKind` | `brief` | "Waiting for Go", in the approval colour. A child's brief shows the same words on its ancestors, below a descendant's approval and above its question. | Sidebar row |
 | `RuntimeRequestKind` | `criteria` | "Approval". | Sidebar row |
 | `ApprovalStatus` | `pending` | Only through the thread's row ("Approval" or "Input"). There is no approval card yet. | Sidebar row |
 | `ApprovalStatus` | `accepted` | Not shown. | None |

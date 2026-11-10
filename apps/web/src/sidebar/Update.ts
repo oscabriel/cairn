@@ -348,7 +348,10 @@ const settleDerived = (model: Model): UpdateReturn => {
   const count = Option.match(withPending.context.shell, {
     onNone: () => 0,
     onSome: (shell) =>
-      needsYouCount(shell, withPending.context.scratchThreadId),
+      needsYouCount(shell, {
+        scratchThreadId: withPending.context.scratchThreadId,
+        openThreadId: withPending.context.openThreadId,
+      }),
   });
 
   const visited = modifyFields(withPending, {

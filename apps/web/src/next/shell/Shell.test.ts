@@ -15,6 +15,8 @@ import { RequestId } from "@cairn/protocol/Ids";
 import { SendInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
+import * as Scene from "foldkit/scene";
 
 import { OutboxItem } from "../../connection/Outbox.ts";
 import { AppRoute } from "../../Route.ts";
@@ -42,6 +44,7 @@ import {
   SHELL,
   shellModelOn,
 } from "./ShellFixtures.ts";
+import { sidebarList } from "./Sidebar.ts";
 import { inform, update, USAGE_PATH } from "./Update.ts";
 import {
   headerContentOf,
@@ -73,6 +76,17 @@ const threadOf = (id: string) => {
 /** Each managed row's status word, the first part of its quiet line. */
 const words = (rows: ReadonlyArray<{ readonly meta: string }>) =>
   rows.map(({ meta }) => meta.split(" · ")[0]);
+
+/** The sidebar's list alone, over a shell model that no message changes. */
+const sidebarApp = {
+  update: (model: Model) => ({ model }),
+  view: (model: Model, h: HtmlBuilder<Message>): Html =>
+    sidebarList(h, sidebarContentOf(model)),
+};
+
+/** The managed row of `threadId`, drawn as the open one. */
+const openRow = (threadId: string) =>
+  Scene.selector(`[data-thread-item="${threadId}"][aria-current="page"]`);
 
 /** Runs the Command a step asked for, which needs no service, to its Message. */
 const runOnly = (
@@ -246,6 +260,66 @@ describe("the rail and the project's list", () => {
 
     assert.isTrue(grown.isRestingOpen);
     assert.strictEqual(grown.resting.visibleRows.length, 18);
+  });
+
+  it("keeps the open thread's row on screen in the closed fold and past the window (U-9)", () => {
+    const onResting = shellModelOn(AppRoute.Thread({ threadId: rowId(6) }));
+
+    assert.deepStrictEqual(
+      Option.map(
+        sidebarContentOf(onResting).managed.openResting,
+        ({ thread }) => thread.id
+      ),
+      Option.some(rowId(6))
+    );
+
+    // A finished child opened from the work panel's Previous rests in the fold, folded.
+    Scene.scene(
+      sidebarApp,
+      Scene.given(onResting),
+      Scene.expect(Scene.testId("shell-resting-toggle")).toHaveAttr(
+        "aria-expanded",
+        "false"
+      ),
+      Scene.expect(openRow(rowId(6))).toExist(),
+      Scene.expectAll(Scene.all.testId("shell-managed-thread")).toHaveCount(4)
+    );
+
+    // Eight newer working children push an older working one past the first six.
+    const older = shellModelOn(AppRoute.Thread({ threadId: rowId(3) }));
+    const shell = Option.getOrThrow(older.context.shell);
+
+    const crowded = {
+      ...older,
+      context: {
+        ...older.context,
+        shell: Option.some({
+          ...shell,
+          threads: [
+            ...shell.threads,
+            ...Array.from({ length: 8 }, (_, index) =>
+              shellRow(300 + index, {
+                projectId: CAIRN,
+                activity: "running" as const,
+                createdAt: NOW,
+                lineage: Option.some({
+                  parentThreadId: PROJECT_THREAD,
+                  relationshipToParent: "subagent" as const,
+                  rootThreadId: PROJECT_THREAD,
+                }),
+              })
+            ),
+          ],
+        }),
+      },
+    };
+
+    Scene.scene(
+      sidebarApp,
+      Scene.given(crowded),
+      Scene.expect(openRow(rowId(3))).toExist(),
+      Scene.expect(Scene.testId("shell-managed-more")).toExist()
+    );
   });
 
   it("draws the project thread's row as open and counts its managed threads", () => {

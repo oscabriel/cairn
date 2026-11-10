@@ -1,7 +1,8 @@
 // What the root tells the push toggle, built from what the root already holds: the epoch and its
 // client, the VAPID key from that epoch's `session.hello`, the thread on screen, and the badge
 // count (`@cairn/client-logic/Badge`'s one counting rule, which the push's notifier counts with;
-// the page also counts the scratch thread it holds, which the brain cannot see).
+// the page also counts the scratch thread it holds, which the brain cannot see, and leaves out the
+// result the user watches land on the thread on screen).
 
 import { needsYouCount } from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
@@ -30,7 +31,11 @@ export const pushContextOf = (inputs: PushInputs): PushContext => ({
   threadId: inputs.openThreadId,
   badge: Option.match(inputs.shell, {
     onNone: () => 0,
-    onSome: (shell) => needsYouCount(shell, inputs.scratchThreadId),
+    onSome: (shell) =>
+      needsYouCount(shell, {
+        scratchThreadId: inputs.scratchThreadId,
+        openThreadId: inputs.openThreadId,
+      }),
   }),
 });
 

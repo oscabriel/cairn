@@ -37,6 +37,7 @@ import {
   pendingSubagentRequests,
   subagentRequestFor,
 } from "./SubagentRollup.ts";
+import type { SubagentRequest } from "./SubagentRollup.ts";
 import {
   HOLD_LABELS,
   isRunLive,
@@ -108,6 +109,16 @@ const request = (kind: RuntimeRequestKind) =>
   });
 
 const none = Option.none();
+
+/** The status of a row asking `own`, whose descendants ask `rolled`. */
+const status = (
+  own: Option.Option<RuntimeRequestKind>,
+  rolled: Option.Option<SubagentRequest>
+) =>
+  threadStatus(
+    { ...base, pendingRuntimeRequest: Option.flatMap(own, request) },
+    rolled
+  );
 
 const stateOf = (thread: ThreadShell) =>
   threadState(thread, { now: NOW, subagentRequest: none });
@@ -456,6 +467,36 @@ describe(threadState, () => {
     assert.strictEqual(asking.category, "waiting-on-you");
     assert.deepStrictEqual(asking.label, Option.some(THREAD_LABELS.approval));
     assert.strictEqual(rootState([root, child, grandchild]).status, "waiting");
+
+    // A child's brief reads on its ancestors as the child's own row reads it (U-14).
+    const briefing = rootState([
+      root,
+      { ...child, pendingRuntimeRequest: request("brief") },
+    ]);
+
+    assert.strictEqual(briefing.status, "go");
+    assert.strictEqual(briefing.category, "waiting-on-you");
+    assert.deepStrictEqual(briefing.label, Option.some(THREAD_LABELS.go));
+  });
+
+  it("keeps a rolled-up order: approval, then Go, then input, own or a descendant's", () => {
+    assert.strictEqual(status(Option.none(), Option.some("go")), "go");
+    assert.strictEqual(
+      status(Option.some("user-input"), Option.some("go")),
+      "go"
+    );
+    assert.strictEqual(
+      status(Option.some("brief"), Option.some("input")),
+      "go"
+    );
+    assert.strictEqual(
+      status(Option.some("brief"), Option.some("approval")),
+      "approval"
+    );
+    assert.strictEqual(
+      status(Option.some("tool-call"), Option.some("go")),
+      "approval"
+    );
   });
 
   it("gives every label words and a tone, and no label shows a raw status", () => {

@@ -227,8 +227,8 @@ export type ProjectMark = "needs" | "working" | "none";
 
 /**
  * The mark of `project`'s bubble: "needs" exactly when the one counting rule counts its project
- * thread (`rootsNeedingYou`, the favicon's and the push's rule, C-4), else "working" while a thread
- * it lists is at work.
+ * thread (`rootsNeedingYou`, the favicon's and the push's rule, C-4; the open thread's result the
+ * user watches land does not light it), else "working" while a thread it lists is at work.
  */
 export const projectMarkOf = (
   model: Model,
@@ -237,9 +237,12 @@ export const projectMarkOf = (
 ): ProjectMark => {
   const threads = threadsOf(model);
 
-  if (
-    rootsNeedingYou({ projects: [project], threads }, Option.none()).size > 0
-  ) {
+  const page = {
+    scratchThreadId: Option.none(),
+    openThreadId: Option.map(openThreadOf(model), (thread) => thread.id),
+  };
+
+  if (rootsNeedingYou({ projects: [project], threads }, page).size > 0) {
     return "needs";
   }
 

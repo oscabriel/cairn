@@ -817,6 +817,34 @@ describe("the shell's update for the work panel", () => {
     assert.strictEqual(update(nodeArmed.model, nodeStop).commands?.length, 1);
   });
 
+  it("lets Stop? go on any other press in the panel, and after a pause, where no blur comes", () => {
+    // WebKit does not focus a tapped button, so no blur ever lets the question go (U-3 review).
+    const armed = update(
+      onParent,
+      Message.ClickedStopChild({ threadId: rowId(2) })
+    ).model;
+
+    const armedAfter = (message: Message) =>
+      update(armed, message).model.work.armedStop;
+
+    for (const message of [
+      Message.ClickedPreviousChildren(),
+      Message.ClickedMoreChildren({ group: "active" }),
+      Message.ClickedMoreChildren({ group: "previous" }),
+      Message.ClickedGoal(),
+      Message.ClickedDismissWorkFailure(),
+      Message.LapsedStop({ key: rowId(2) }),
+    ]) {
+      assert.isTrue(Option.isNone(armedAfter(message)), message._tag);
+    }
+
+    // A pause that began before another row's Stop does not let that row's question go.
+    assert.deepStrictEqual(
+      armedAfter(Message.LapsedStop({ key: rowId(3) })),
+      Option.some<string>(rowId(2))
+    );
+  });
+
   it("asks Stop once and remembers it until the child rests", () => {
     const first = stopTwice(onParent, rowId(2));
 

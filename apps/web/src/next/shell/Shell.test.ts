@@ -1,9 +1,11 @@
 // The `next` shell's logic, over the shell fixture: the rail's projects and marks, the selected
 // project and its project thread's running list with each row's status from the one thread-state
 // function, the header's word for the open thread, and the update's navigation, refresh and scratch
-// flows (what it asks the root for, and the turns and commands it mints).
+// flows (what it asks the root for, and the turns and commands it mints). The rail follows the
+// hero's project (U-21), the "Previous" fold reads and opens earlier project threads read only
+// (ADR 0048), and the menus rename and remove (U-10).
 
-import { rowId } from "@cairn/client-logic/ShellRowTestKit";
+import { NOW, rowId, shellRow } from "@cairn/client-logic/ShellRowTestKit";
 import { RequestId } from "@cairn/protocol/Ids";
 import { SendInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
@@ -22,6 +24,7 @@ import {
   threadRoleOf,
 } from "./Derived.ts";
 import { Message, OutMessage } from "./Message.ts";
+import { ManageAction, MenuTarget } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
   CAIRN,
@@ -35,7 +38,12 @@ import {
   shellModelOn,
 } from "./ShellFixtures.ts";
 import { inform, update, USAGE_PATH } from "./Update.ts";
-import { headerContentOf, railBubblesOf, sidebarContentOf } from "./View.ts";
+import {
+  headerContentOf,
+  isEarlierThreadOpen,
+  railBubblesOf,
+  sidebarContentOf,
+} from "./View.ts";
 
 const projectOf = (id: string) => {
   const found = SHELL.projects.find((project) => project.id === id);
@@ -521,8 +529,11 @@ describe("the shell's stale answers and overlays", () => {
       [["PrepareScratchTurn", Option.none()]],
       "the turn went to the cleared thread"
     );
+    // The fold's first read of the project's earlier project threads goes out beside it.
     assert.deepStrictEqual(
-      (cleared.commands ?? []).map((command) => [command.name, command.args]),
+      (cleared.commands ?? [])
+        .filter((command) => command.name !== "FetchPreviousThreads")
+        .map((command) => [command.name, command.args]),
       [["SaveScratch", { threadId: Option.none() }]]
     );
 
@@ -706,6 +717,430 @@ describe("the shell's stale answers and overlays", () => {
     assert.isTrue(
       Option.isNone(confirmed.failure),
       "the scratch overlay holds the refresh's failure"
+    );
+  });
+});
+
+describe("the hero and the rail agree on the project (U-21)", () => {
+  it("selects the draft's project on the hero, over a project picked earlier on the rail", () => {
+    const onHero: Model = {
+      ...shellModelOn(AppRoute.Hero()),
+      selectedProjectId: Option.some(CAIRN),
+    };
+
+    const told = inform(onHero, {
+      ...onHero.context,
+      draftProjectId: Option.some(MYR),
+    }).model;
+
+    assert.strictEqual(Option.getOrThrow(selectedProjectOf(told)).id, MYR);
+    assert.deepStrictEqual(
+      railBubblesOf(told)
+        .filter((bubble) => bubble.isSelected)
+        .map((bubble) => bubble.project.id),
+      [MYR]
+    );
+    assert.strictEqual(headerContentOf(told).title, "myr");
+
+    // Off the hero the draft's project no longer leads.
+    const onThread = inform(told, {
+      ...told.context,
+      route: AppRoute.Thread({ threadId: PROJECT_THREAD }),
+      draftProjectId: Option.none(),
+    }).model;
+
+    assert.strictEqual(
+      Option.getOrThrow(selectedProjectOf(onThread)).id,
+      CAIRN
+    );
+  });
+
+  it("falls back to the hero's default project, the most recently updated one", () => {
+    const recent = shellModelOn(AppRoute.Settings());
+
+    const dev = {
+      ...recent,
+      context: {
+        ...recent.context,
+        shell: Option.some({
+          ...SHELL,
+          projects: SHELL.projects.map((project) =>
+            project.id === DEV ? { ...project, updatedAt: NOW } : project
+          ),
+        }),
+      },
+    };
+
+    assert.strictEqual(Option.getOrThrow(selectedProjectOf(dev)).id, DEV);
+  });
+});
+
+/** An earlier project thread of cairn's. */
+const earlier = shellRow(40, {
+  projectId: CAIRN,
+  title: "Last week's project thread",
+  archivedAt: Option.some(NOW),
+});
+
+/** The project thread's page once the shell is told it, with the fold's first read asked. */
+const withFoldAsked = () => {
+  const told = inform(onProjectThread, onProjectThread.context);
+
+  return {
+    model: told.model,
+    fetch: (told.commands ?? []).find(
+      (command) => command.name === "FetchPreviousThreads"
+    ),
+  };
+};
+
+describe("the Previous fold (ADR 0048)", () => {
+  it("reads the selected project's earlier project threads, and again once a refresh moves the mark", () => {
+    const { fetch, model } = withFoldAsked();
+
+    assert.deepStrictEqual(fetch?.args, {
+      request: 1,
+      projectId: CAIRN,
+      after: Option.none(),
+    });
+    assert.isTrue(model.previous.isLoading);
+
+    // Told the same again, nothing more is read.
+    assert.isUndefined(
+      (inform(model, model.context).commands ?? []).find(
+        (command) => command.name === "FetchPreviousThreads"
+      )
+    );
+
+    // A refresh moves the mark: the fold reads again.
+    const refreshed = inform(model, {
+      ...model.context,
+      shell: Option.some({
+        ...SHELL,
+        projects: SHELL.projects.map((project) =>
+          project.id === CAIRN
+            ? { ...project, projectThreadId: Option.some(rowId(41)) }
+            : project
+        ),
+      }),
+    });
+
+    assert.deepStrictEqual(
+      (refreshed.commands ?? []).find(
+        (command) => command.name === "FetchPreviousThreads"
+      )?.args,
+      { request: 2, projectId: CAIRN, after: Option.none() }
+    );
+  });
+
+  it("shows nothing while the project has none, and Previous (n) once it has", () => {
+    const { model } = withFoldAsked();
+
+    const none = update(
+      model,
+      Message.ReceivedPreviousThreads({
+        request: 1,
+        page: { threads: [], next: Option.none() },
+        more: false,
+      })
+    ).model;
+
+    assert.isTrue(Option.isNone(sidebarContentOf(none).previous));
+
+    const some = update(
+      model,
+      Message.ReceivedPreviousThreads({
+        request: 1,
+        page: { threads: [earlier], next: Option.none() },
+        more: false,
+      })
+    ).model;
+
+    const shown = Option.getOrThrow(sidebarContentOf(some).previous);
+
+    assert.deepStrictEqual(
+      shown.rows.map((row) => row.thread.id),
+      [earlier.id]
+    );
+    assert.isFalse(shown.isOpen);
+    assert.isTrue(
+      Option.getOrThrow(
+        sidebarContentOf(update(some, Message.ClickedPreviousThreads()).model)
+          .previous
+      ).isOpen
+    );
+
+    // An answer to a read asked before the last one is dropped.
+    assert.strictEqual(
+      update(
+        some,
+        Message.ReceivedPreviousThreads({
+          request: 0,
+          page: { threads: [], next: Option.none() },
+          more: false,
+        })
+      ).model,
+      some
+    );
+  });
+
+  it("opens an earlier project thread read only, named in the header, with the way to the project thread", () => {
+    const { model } = withFoldAsked();
+
+    const read = update(
+      model,
+      Message.ReceivedPreviousThreads({
+        request: 1,
+        page: { threads: [earlier], next: Option.none() },
+        more: false,
+      })
+    ).model;
+
+    const clicked = update(
+      read,
+      Message.ClickedPreviousThread({ thread: earlier })
+    );
+
+    assert.deepStrictEqual(
+      clicked.outMessage,
+      OutMessage.RequestedNavigate({ url: `/t/${earlier.id}` })
+    );
+
+    const opened = inform(clicked.model, {
+      ...clicked.model.context,
+      route: AppRoute.Thread({ threadId: earlier.id }),
+    }).model;
+
+    assert.isTrue(isEarlierThreadOpen(opened));
+
+    const header = headerContentOf(opened);
+
+    assert.strictEqual(header.title, earlier.title);
+    assert.deepStrictEqual(header.role, Option.some("earlier project thread"));
+    assert.isFalse(header.canRefresh);
+    assert.isTrue(Option.isNone(header.menu));
+    // The project it belonged to stays selected, and its row reads as the open page.
+    assert.strictEqual(Option.getOrThrow(selectedProjectOf(opened)).id, CAIRN);
+    assert.isTrue(
+      Option.getOrThrow(sidebarContentOf(opened).previous).rows[0]?.isOpen ===
+        true
+    );
+
+    assert.deepStrictEqual(
+      update(opened, Message.ClickedOpenProjectThread({ projectId: CAIRN }))
+        .outMessage,
+      OutMessage.RequestedNavigate({ url: `/t/${PROJECT_THREAD}` })
+    );
+
+    // A live thread is never read only.
+    assert.isFalse(isEarlierThreadOpen(onProjectThread));
+  });
+
+  it("reads the next page after the rows shown and adds it below them", () => {
+    const { model } = withFoldAsked();
+    const cursor = { archivedAt: NOW, threadId: earlier.id };
+
+    const older = shellRow(42, {
+      projectId: CAIRN,
+      archivedAt: Option.some(NOW),
+    });
+
+    const first = update(
+      model,
+      Message.ReceivedPreviousThreads({
+        request: 1,
+        page: { threads: [earlier], next: Option.some(cursor) },
+        more: false,
+      })
+    ).model;
+
+    assert.isTrue(Option.getOrThrow(sidebarContentOf(first).previous).hasMore);
+
+    const more = update(first, Message.ClickedMorePreviousThreads());
+
+    assert.deepStrictEqual(more.commands?.[0]?.args, {
+      request: 2,
+      projectId: CAIRN,
+      after: Option.some(cursor),
+    });
+
+    const both = update(
+      more.model,
+      Message.ReceivedPreviousThreads({
+        request: 2,
+        page: { threads: [older], next: Option.none() },
+        more: true,
+      })
+    ).model;
+
+    assert.deepStrictEqual(
+      Option.getOrThrow(sidebarContentOf(both).previous).rows.map(
+        (row) => row.thread.id
+      ),
+      [earlier.id, older.id]
+    );
+  });
+});
+
+/** The rename or remove a step sent to the brain, if any. */
+const dispatched = (result: {
+  readonly commands?: ReadonlyArray<{
+    readonly name: string;
+    readonly args?: unknown;
+  }>;
+}) =>
+  (result.commands ?? []).find((command) => command.name === "DispatchManage")
+    ?.args;
+
+describe("the project and thread menus (U-10)", () => {
+  it("renames the project from its menu, with the name it has to start from", () => {
+    const opened = update(
+      onProjectThread,
+      Message.ClickedMenu({ target: MenuTarget.Project({ projectId: CAIRN }) })
+    ).model;
+
+    assert.isTrue(sidebarContentOf(opened).isProjectMenuOpen);
+
+    const asked = update(
+      opened,
+      Message.ClickedManage({
+        action: ManageAction.RenameProject({ projectId: CAIRN }),
+      })
+    ).model;
+
+    assert.isTrue(Option.isNone(asked.menu));
+    assert.strictEqual(Option.getOrThrow(asked.manage).text, "cairn");
+
+    // An empty name is refused here.
+    const emptied = update(
+      update(asked, Message.ChangedManageText({ value: "  " })).model,
+      Message.ClickedConfirmManage()
+    );
+
+    assert.isUndefined(dispatched(emptied));
+    assert.isTrue(
+      Option.isSome(Option.getOrThrow(emptied.model.manage).failure)
+    );
+
+    const typed = update(
+      asked,
+      Message.ChangedManageText({ value: " cairn v2 " })
+    ).model;
+
+    const sent = update(typed, Message.ClickedConfirmManage());
+
+    assert.deepStrictEqual(dispatched(sent), {
+      action: ManageAction.RenameProject({ projectId: CAIRN }),
+      text: "cairn v2",
+    });
+    assert.isTrue(Option.getOrThrow(sent.model.manage).isSending);
+
+    const done = update(
+      sent.model,
+      Message.CompletedManage({
+        action: ManageAction.RenameProject({ projectId: CAIRN }),
+      })
+    );
+
+    assert.isTrue(Option.isNone(done.model.manage));
+    assert.isUndefined(done.outMessage);
+  });
+
+  it("removes a project after its confirm, and leaves its page for the hero", () => {
+    const remove = ManageAction.RemoveProject({ projectId: CAIRN });
+
+    const opened = update(
+      onProjectThread,
+      Message.ClickedManage({ action: remove })
+    ).model;
+
+    const sent = update(opened, Message.ClickedConfirmManage());
+
+    assert.deepStrictEqual(dispatched(sent), { action: remove, text: "" });
+
+    const refused = update(
+      sent.model,
+      Message.FailedManage({ message: "Cairn is reconnecting." })
+    ).model;
+
+    assert.deepStrictEqual(
+      Option.map(refused.manage, (manage) => [
+        manage.isSending,
+        manage.failure,
+      ]),
+      Option.some([false, Option.some("Cairn is reconnecting.")])
+    );
+
+    const done = update(
+      sent.model,
+      Message.CompletedManage({ action: remove })
+    );
+
+    assert.isTrue(Option.isNone(done.model.manage));
+    assert.deepStrictEqual(
+      done.outMessage,
+      OutMessage.RequestedNavigate({ url: "/" })
+    );
+
+    // Removing a project whose page is not open stays where it is.
+    const other = update(
+      onProjectThread,
+      Message.CompletedManage({
+        action: ManageAction.RemoveProject({ projectId: MYR }),
+      })
+    );
+
+    assert.isUndefined(other.outMessage);
+  });
+
+  it("renames the open thread from the header's menu, and Escape closes the dialog then the menu", () => {
+    const header = headerContentOf(onProjectThread);
+
+    assert.deepStrictEqual(
+      Option.map(header.menu, (menu) => menu.threadId),
+      Option.some(PROJECT_THREAD)
+    );
+
+    const rename = ManageAction.RenameThread({ threadId: PROJECT_THREAD });
+
+    const renaming = update(
+      onProjectThread,
+      Message.ClickedManage({ action: rename })
+    ).model;
+
+    assert.strictEqual(
+      Option.getOrThrow(renaming.manage).text,
+      threadOf(PROJECT_THREAD).title
+    );
+    assert.deepStrictEqual(
+      dispatched(update(renaming, Message.ClickedConfirmManage())),
+      { action: rename, text: threadOf(PROJECT_THREAD).title }
+    );
+    assert.isTrue(
+      Option.isNone(update(renaming, Message.PressedEscape()).model.manage)
+    );
+
+    const menu = update(
+      onProjectThread,
+      Message.ClickedMenu({
+        target: MenuTarget.Thread({ threadId: PROJECT_THREAD }),
+      })
+    ).model;
+
+    assert.isTrue(Option.getOrThrow(headerContentOf(menu).menu).isOpen);
+    assert.isTrue(
+      Option.isNone(update(menu, Message.PressedEscape()).model.menu)
+    );
+    // A second click on its button closes it.
+    assert.isTrue(
+      Option.isNone(
+        update(
+          menu,
+          Message.ClickedMenu({
+            target: MenuTarget.Thread({ threadId: PROJECT_THREAD }),
+          })
+        ).model.menu
+      )
     );
   });
 });

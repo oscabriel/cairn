@@ -32,6 +32,7 @@ import {
 import type { Services } from "./Command.ts";
 import { burnBusyBudget } from "./composer/Busy.ts";
 import { composerContext } from "./composer/Context.ts";
+import { draftProject, isDraftTarget } from "./composer/Drafts.ts";
 import { OutMessage as ComposerOutMessage } from "./composer/Message.ts";
 import type { Message as ComposerMessage } from "./composer/Message.ts";
 import * as Composer from "./composer/Update.ts";
@@ -1011,6 +1012,10 @@ const syncNextShell: Step = (model) => {
     defaults: Option.map(model.hello, (hello) => hello.defaults),
     nowMs: model.sidebar.nowMs,
     isMac: model.sidebar.isMac,
+    // The rail and the list show the project the hero names (U-21).
+    draftProjectId: isDraftTarget(model.composer)
+      ? Option.map(draftProject(model.composer), (project) => project.id)
+      : Option.none(),
   };
 
   // The first update starts the shell, even with nothing new to tell.
@@ -1021,7 +1026,8 @@ const syncNextShell: Step = (model) => {
     current.hasClient === context.hasClient &&
     Equal.equals(current.defaults, context.defaults) &&
     current.nowMs === context.nowMs &&
-    current.isMac === context.isMac;
+    current.isMac === context.isMac &&
+    Equal.equals(current.draftProjectId, context.draftProjectId);
 
   return unchanged ? { model } : informNextShell(model, context);
 };

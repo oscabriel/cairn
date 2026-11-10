@@ -32,6 +32,7 @@ import {
   DisplayText,
   EntryId,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   RunId,
   TaskId,
@@ -280,6 +281,40 @@ export type ShellDelta = Exclude<
   ShellStreamItem,
   { readonly _tag: "Snapshot" } | { readonly _tag: "Synchronized" }
 >;
+
+/** Where a page of earlier project threads ends: the last row's archive time and id. */
+export const PreviousThreadsCursor = Schema.Struct({
+  archivedAt: Schema.DateTimeUtc,
+  threadId: ThreadId,
+});
+
+export type PreviousThreadsCursor = typeof PreviousThreadsCursor.Type;
+
+/** The most rows one page of earlier project threads holds. */
+export const PREVIOUS_THREADS_PAGE_MAX = 50;
+
+/**
+ * `shell.previousThreads` input (ADR 0048): one page of a project's earlier project threads, the
+ * archived top-level threads a refresh replaced, newest first. They stay out of the shell stream.
+ */
+export const PreviousThreadsInput = Schema.Struct({
+  projectId: ProjectId,
+  /** The page after this cursor (the `next` of the page before); none for the newest. */
+  after: Schema.OptionFromNullOr(PreviousThreadsCursor),
+  limit: PositiveInt.check(
+    Schema.isLessThanOrEqualTo(PREVIOUS_THREADS_PAGE_MAX)
+  ),
+});
+
+export type PreviousThreadsInput = typeof PreviousThreadsInput.Type;
+
+/** `shell.previousThreads` result: the rows as archived, and the cursor of the next page if any. */
+export const PreviousThreadsPage = Schema.Struct({
+  threads: Schema.Array(ThreadShell),
+  next: Schema.OptionFromNullOr(PreviousThreadsCursor),
+});
+
+export type PreviousThreadsPage = typeof PreviousThreadsPage.Type;
 
 /** `shell.subscribe` input. */
 export const SubscribeShellInput = Schema.Struct({

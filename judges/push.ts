@@ -39,6 +39,7 @@ import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { RequestId } from "@cairn/protocol/Ids";
 import { RootWorkspace } from "@cairn/protocol/Launch";
+import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { ProjectCreate } from "@cairn/protocol/ShellCommands";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
@@ -566,8 +567,8 @@ const fakeCheck = Effect.gen(function* () {
       Effect.map(Option.flatten)
     );
 
-  const launch = (n: number, title: string, text: string) =>
-    client["thread.launch"]({
+  const launch = (n: number, title: string, text: string) => {
+    const input: ThreadLaunchInput = {
       commandId: testCommandId(100 + n),
       threadId: testThreadId(n),
       projectId: projectIdFor(projectCommand),
@@ -582,7 +583,14 @@ const fakeCheck = Effect.gen(function* () {
         attachments: [],
         skillRefs: [],
       },
-    }).pipe(Effect.as(testThreadId(n)));
+    };
+
+    // Each later launch in the folder project refreshes its project thread, so it names the one
+    // before it (ADR 0048), as it replaced it unnamed before.
+    return client["thread.launch"](
+      n > 1 ? { ...input, replaces: testThreadId(n - 1) } : input
+    ).pipe(Effect.as(testThreadId(n)));
+  };
 
   const presence = (visible: boolean, threadId: Option.Option<ThreadId>) =>
     client["presence.report"]({

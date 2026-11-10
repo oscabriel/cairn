@@ -55,7 +55,13 @@ import {
   ReachListInput,
 } from "./Reach.ts";
 import { ServerSettings, SettingsPatch } from "./Settings.ts";
-import { ProjectShell, ShellStreamItem, SubscribeShellInput } from "./Shell.ts";
+import {
+  PreviousThreadsInput,
+  PreviousThreadsPage,
+  ProjectShell,
+  ShellStreamItem,
+  SubscribeShellInput,
+} from "./Shell.ts";
 import { DispatchResult, ShellCommand } from "./ShellCommands.ts";
 import { SkillList, SkillsInput } from "./Skills.ts";
 import { Spend, SpendGetInput } from "./Spend.ts";
@@ -156,6 +162,13 @@ export const CairnRpcs = RpcGroup.make(
     payload: ShellCommand,
     success: DispatchResult,
     error: Change,
+  }),
+  // A project's earlier project threads, a page at a time (ADR 0048); archived rows stay out of
+  // the stream.
+  Rpc.make("shell.previousThreads", {
+    payload: PreviousThreadsInput,
+    success: PreviousThreadsPage,
+    error: Lookup,
   }),
 
   Rpc.make("thread.launch", {

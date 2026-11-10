@@ -180,3 +180,53 @@ describe("visits to the open thread", () => {
     expect([offline.issuedCount, live.issuedCount]).toStrictEqual([0, 1]);
   });
 });
+
+/** The commands the sidebar asks for when `command` is pressed. */
+const commandsOf = (model: Model, command: string) =>
+  (update(model, Message.PressedShortcut({ command })).commands ?? []).map(
+    ({ name, args }) => ({ name, args })
+  );
+
+/** The sidebar with `project` marked as having `bridges` for its project thread. */
+const marked = (open: Option.Option<ThreadShell>): Model => {
+  const base = sidebarWith(open);
+
+  return {
+    ...base,
+    context: {
+      ...base.context,
+      shell: Option.some(
+        ShellSnapshot.make({
+          snapshotSequence: 7,
+          projects: [{ ...project, projectThreadId: Option.some(bridges.id) }],
+          threads: [bridges, research, kickoff],
+        })
+      ),
+    },
+  };
+};
+
+describe("chat.new", () => {
+  it("opens the project thread instead of a new draft while the project has one (ADR 0048)", () => {
+    for (const command of ["chat.new", "chat.newLocal"]) {
+      expect(commandsOf(marked(Option.some(research)), command)).toStrictEqual([
+        { name: "NavigateTo", args: { url: `/t/${bridges.id}` } },
+      ]);
+      expect(commandsOf(marked(Option.none()), command)).toStrictEqual([
+        { name: "NavigateTo", args: { url: `/t/${bridges.id}` } },
+      ]);
+    }
+  });
+
+  it("stays put on the project thread itself", () => {
+    expect(commandsOf(marked(Option.some(bridges)), "chat.new")).toStrictEqual(
+      []
+    );
+  });
+
+  it("opens a new draft in a project with no project thread yet", () => {
+    expect(
+      commandsOf(sidebarWith(Option.none()), "chat.new").map(({ name }) => name)
+    ).toStrictEqual(["MintDraftId"]);
+  });
+});

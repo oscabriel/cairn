@@ -1,6 +1,6 @@
 // The `next` shell's Subscriptions: Cmd+J and Ctrl+J show or hide the scratch thread on any
-// platform, even while typing (the user, 2026-10-29), and Escape closes the add-project picker, the
-// refresh confirm or the overlay while one is open. The root lifts them only while the `next` views draw.
+// platform, even while typing (the user, 2026-10-29), and Escape closes the rename or remove dialog,
+// an open menu, the add-project picker, the refresh confirm or the overlay while one is open. The root lifts them only while the `next` views draw.
 
 import { Option, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";
@@ -41,7 +41,9 @@ export const subscriptions = Subscription.make<Model, Message, Services>()(
           open:
             model.scratch.isOpen ||
             Option.isSome(model.refresh) ||
-            Option.isSome(model.addProject),
+            Option.isSome(model.addProject) ||
+            Option.isSome(model.menu) ||
+            Option.isSome(model.manage),
         }),
         dependenciesToStream: ({ open }) => (open ? escape : Stream.empty),
       }

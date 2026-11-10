@@ -61,6 +61,18 @@ export class ThreadRows extends Context.Service<
     listByProject(
       projectId: ProjectId
     ): Effect.Effect<ReadonlyArray<ThreadRow>, ShellStoreError>;
+    /**
+     * One page of the project's earlier project threads (ADR 0048): its archived top-level rows, not
+     * deleted, newest archive first, after `after` (an archive time and id) when given.
+     */
+    listPrevious(
+      projectId: ProjectId,
+      after: Option.Option<{
+        readonly archivedAt: DateTime.Utc;
+        readonly threadId: ThreadId;
+      }>,
+      limit: number
+    ): Effect.Effect<ReadonlyArray<ThreadRow>, ShellStoreError>;
     /** The earliest snooze end among threads in the shell. */
     readonly nextSnoozeEnd: Effect.Effect<
       Option.Option<DateTime.Utc>,
@@ -110,6 +122,40 @@ export class ThreadRows extends Context.Service<
 
         return rows.map(toRow);
       }, shellStoreFailure("ThreadRows.listByProject"));
+
+      const listPrevious = Effect.fn("ThreadRows.listPrevious")(function* (
+        projectId: ProjectId,
+        after: Option.Option<{
+          readonly archivedAt: DateTime.Utc;
+          readonly threadId: ThreadId;
+        }>,
+        limit: number
+      ) {
+        // A top-level row stores its lineage as null, or (from before phase 2) not at all.
+        const rows = yield* Option.match(after, {
+          onNone: () => sql`
+            SELECT deleted_at, last_snooze_wake_at, shell_json FROM threads
+            WHERE project_id = ${projectId} AND deleted_at IS NULL AND archived_at IS NOT NULL
+              AND json_extract(shell_json, '$.lineage') IS NULL
+            ORDER BY archived_at DESC, id DESC
+            LIMIT ${limit}
+          `,
+          onSome: (cursor) => {
+            const at = DateTime.toEpochMillis(cursor.archivedAt);
+
+            return sql`
+              SELECT deleted_at, last_snooze_wake_at, shell_json FROM threads
+              WHERE project_id = ${projectId} AND deleted_at IS NULL AND archived_at IS NOT NULL
+                AND json_extract(shell_json, '$.lineage') IS NULL
+                AND (archived_at < ${at} OR (archived_at = ${at} AND id < ${cursor.threadId}))
+              ORDER BY archived_at DESC, id DESC
+              LIMIT ${limit}
+            `;
+          },
+        }).pipe(Effect.flatMap(decodeRows));
+
+        return rows.map(toRow);
+      }, shellStoreFailure("ThreadRows.listPrevious"));
 
       const NextSnoozeEnd = Schema.Array(
         Schema.Struct({
@@ -179,6 +225,7 @@ export class ThreadRows extends Context.Service<
         get,
         listLive,
         listByProject,
+        listPrevious,
         nextSnoozeEnd,
         snoozesEndedBy,
         write,

@@ -1,9 +1,13 @@
 // What the `next` shell reads off its Model: the rail's projects and their marks, the selected
 // project, its project thread and the threads it manages, each with its status from the one
 // thread-state function (`ThreadState.ts`), and what the chat header says about the open thread.
-// Pure, so the views, the catalogue and the tests read the same answers.
+// On the hero and a draft's page the selected project is the draft's, so the rail, the list and the
+// hero name one project (U-21). An earlier project thread opened from the "Previous" fold is read
+// from the fold, since archived rows are not in the shell (ADR 0048). Pure, so the views, the
+// catalogue and the tests read the same answers.
 
 import {
+  defaultProjectOf,
   listedThreadsOf,
   managedThreadsOf,
   projectThreadOf,
@@ -97,24 +101,59 @@ const openProjectId = (model: Model): Option.Option<ProjectId> =>
     )
   );
 
+/** The earlier project thread the route opens, when it was opened from the "Previous" fold. */
+export const openEarlierThreadOf = (model: Model): Option.Option<ThreadShell> =>
+  Predicate.isTagged(model.context.route, "Thread") &&
+  Option.isNone(openThreadOf(model))
+    ? Option.filter(
+        model.previous.opened,
+        (thread) =>
+          Predicate.isTagged(model.context.route, "Thread") &&
+          thread.id === model.context.route.threadId
+      )
+    : Option.none();
+
 /**
- * The project the sidebar shows: the one picked on the rail, else the open thread's, else the
- * first. None when there is no folder project.
+ * The project the sidebar shows. On the hero and a draft's page it is the draft's project, the one
+ * the hero names and launches in; elsewhere the one picked on the rail, else the open thread's
+ * (or the earlier project thread's), else the hero's default. None when there is no folder project.
  */
 export const selectedProjectOf = (
   model: Model
 ): Option.Option<ProjectShell> => {
   const projects = railProjectsOf(model);
+  const { route } = model.context;
 
   const byId = (id: ProjectId) =>
     Array.findFirst(projects, (project) => project.id === id);
 
+  const onDraft =
+    Predicate.isTagged(route, "Hero") || Predicate.isTagged(route, "Draft");
+
   return Option.firstSomeOf([
+    onDraft
+      ? Option.flatMap(model.context.draftProjectId, byId)
+      : Option.none(),
     Option.flatMap(model.selectedProjectId, byId),
     Option.flatMap(openProjectId(model), byId),
-    Array.head(projects),
+    Option.flatMap(openEarlierThreadOf(model), (thread) =>
+      byId(thread.projectId)
+    ),
+    defaultProjectOf(projects),
   ]);
 };
+
+/**
+ * What the "Previous" fold reads for the selected project: its id and its project thread, so a
+ * refresh (which moves the mark) reads the fold again. None when no project is selected.
+ */
+export const previousKeyOf = (
+  model: Model
+): Option.Option<{ readonly key: string; readonly projectId: ProjectId }> =>
+  Option.map(selectedProjectOf(model), (project) => ({
+    key: `${project.id} ${Option.getOrElse(project.projectThreadId, () => "none")}`,
+    projectId: project.id,
+  }));
 
 /** The project's one project thread, when the shell holds it. */
 export const projectThreadFor = (

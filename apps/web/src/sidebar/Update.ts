@@ -24,6 +24,7 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
+import { newThreadOpens } from "@cairn/client-logic/ProjectThread";
 import {
   nextThreadAfterLeaving,
   resolveAdjacentThreadId,
@@ -215,6 +216,21 @@ const onOpenThread = (
     { onNone: () => ({ model }), onSome: act }
   );
 
+/** The project thread `chat.new` opens: the one of the project the user is in, when it has one. */
+const newThreadOpensFrom = (model: Model): Option.Option<ThreadId> =>
+  newThreadOpens(
+    Option.match(model.context.shell, {
+      onNone: () => [],
+      onSome: (shell) => shell.projects,
+    }),
+    Option.map(
+      Option.flatMap(model.context.openThreadId, (threadId) =>
+        findThread(model, threadId)
+      ),
+      (thread) => thread.projectId
+    )
+  );
+
 const pressShortcut = (model: Model, command: string): UpdateReturn => {
   switch (command) {
     case "sidebar.toggle": {
@@ -225,8 +241,19 @@ const pressShortcut = (model: Model, command: string): UpdateReturn => {
       };
     }
 
+    // A new thread never replaces a live project thread unasked (ADR 0048): in a project that has
+    // one, the shortcut opens it, and only the header's Refresh replaces it.
     case "chat.new":
-    case "chat.newLocal":
+    case "chat.newLocal": {
+      return Option.match(newThreadOpensFrom(model), {
+        onNone: () => ({ model, commands: [MintDraftId()] }),
+        onSome: (threadId) =>
+          Option.contains(model.context.openThreadId, threadId)
+            ? { model }
+            : { model, commands: [navigateToThread(threadId)] },
+      });
+    }
+
     case "chat.newWithoutProject": {
       return { model, commands: [MintDraftId()] };
     }

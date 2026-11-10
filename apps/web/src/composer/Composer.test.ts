@@ -32,6 +32,7 @@ import { AppRoute } from "../Route.ts";
 import {
   FocusPopoverSearch,
   MoveHeroToDraftUrl,
+  OpenProjectThread,
   PrepareLaunch,
   PrepareSend,
   SaveDrafts,
@@ -1412,6 +1413,114 @@ describe("composer sends", () => {
       launchOf(picked)?.args?.projectId,
       Option.some(myr.id)
     );
+  });
+
+  it("opens the project thread with the draft's words and attachments instead of launching while its project has one (ADR 0048)", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b0a";
+    const key = `draft:${draftId}`;
+    const to = `thread:${otherThreadId}`;
+
+    const ref = {
+      id: AttachmentId.make("att_9"),
+      name: "plan.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 12,
+      kind: "pdf" as const,
+      sha256: "0".repeat(64),
+    };
+
+    const base = composerOn(ComposerTarget.Draft({ draftId }));
+
+    const ready: Model = {
+      ...base,
+      context: {
+        ...base.context,
+        projects: [{ ...project, projectThreadId: Option.some(otherThreadId) }],
+      },
+      drafts: {
+        [key]: {
+          ...emptyDraft,
+          text: "and one more thing",
+          attachments: [ref.id],
+        },
+      },
+      attachments: {
+        ...base.attachments,
+        loaded: true,
+        nextLocalId: 2,
+        items: [
+          {
+            localId: "attachment-1",
+            draftKey: key,
+            name: ref.name,
+            mimeType: ref.mimeType,
+            sizeBytes: ref.sizeBytes,
+            isImage: false,
+            file: Option.none(),
+            previewUrl: Option.none(),
+            pastedAt: Option.none(),
+            pasteToRequestMs: Option.none(),
+            attempts: 1,
+            status: AttachmentStatus.Ready({ ref }),
+          },
+        ],
+      },
+    };
+
+    const sent = update(
+      ready,
+      Message.PressedSubmitKey({ intent: "foreground" })
+    );
+
+    const names = (sent.commands ?? []).map(({ name }) => name);
+
+    assert.deepStrictEqual(
+      {
+        launched: names.includes(PrepareLaunch.name),
+        opened: (sent.commands ?? []).find(
+          ({ name }) => name === OpenProjectThread.name
+        )?.args,
+        outMessage: sent.outMessage,
+        heroDraft: sent.model.drafts[key],
+        moved: sent.model.drafts[to]?.text,
+        movedAttachments: sent.model.drafts[to]?.attachments,
+        tray: readyIds(sent.model.attachments, to),
+        heroTray: readyIds(sent.model.attachments, key),
+      },
+      {
+        launched: false,
+        opened: { threadId: otherThreadId },
+        outMessage: undefined,
+        heroDraft: undefined,
+        moved: "and one more thing",
+        movedAttachments: [ref.id],
+        tray: [ref.id],
+        heroTray: [],
+      }
+    );
+
+    // On the project thread's page its composer holds the words, unsent, and says why.
+    const opened = inform(
+      sent.model,
+      contextFor(ComposerTarget.Thread({ threadId: otherThreadId }))
+    ).model;
+
+    assert.strictEqual(activeDraft(opened).text, "and one more thing");
+    assert.match(
+      Option.getOrElse(shownNotice(opened), () => ""),
+      /already has a project thread/u
+    );
+  });
+
+  it("still launches the first thread of a project with no project thread", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b0b";
+
+    const typed = update(
+      composerOn(ComposerTarget.Draft({ draftId })),
+      Message.ChangedDraft({ value: "begin" })
+    ).model;
+
+    assert.isDefined(launchOf(typed));
   });
 
   it.effect(

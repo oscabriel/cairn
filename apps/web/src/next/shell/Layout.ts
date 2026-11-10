@@ -1,8 +1,9 @@
 // The `next` app's layout (plan look track L6), drawn in the root's boundary: the shell's left
 // column (or the phone's sheet), and beside it the open page under the new chat header, with the
 // hold banner above a thread's transcript, and beside the chat column the work panel (plan 6E) or
-// the goal panel (plan 6H) while one is open (a bottom sheet under `lg`); the scratch overlay, the refresh confirm and the add-project
-// picker float over it. The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
+// the goal panel (plan 6H) while one is open (a bottom sheet under `lg`); the scratch overlay, the refresh confirm, the add-project
+// picker and the rename and remove dialog float over it. An earlier project thread is read only:
+// a bar in place of the composer leads to the project thread (ADR 0048). The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
 // (the transcript, the composer, the hero and settings pages, the diff toggle) are the root's
 // regions, placed beside them rather than inside them, so their Mounts keep the root as their
 // render owner.
@@ -69,6 +70,29 @@ const hold = (h: H, model: Model): Html =>
     toParentMessage: (message) => Message.GotParkedMessage({ message }),
   });
 
+/**
+ * Under the transcript: the composer's lane, or for an earlier project thread (read only, ADR
+ * 0048) the bar that leads to the project thread.
+ */
+const lane = (
+  h: H,
+  model: Model,
+  regions: ShellRegions
+): ReadonlyArray<Html> => {
+  if (!Shell.isEarlierThreadOpen(model.nextShell)) {
+    return regions.composerLane();
+  }
+
+  return [
+    h.submodel({
+      slotId: "earlier-thread-lane",
+      model: model.nextShell,
+      view: Shell.earlierLaneView,
+      toParentMessage: toShell,
+    }),
+  ];
+};
+
 const routeBody = (
   h: H,
   model: Model,
@@ -113,7 +137,7 @@ const routeBody = (
               ]),
               hold(h, model),
               regions.thread(),
-              ...regions.composerLane(),
+              ...lane(h, model, regions),
             ]
           ),
           h.submodel({
@@ -247,6 +271,13 @@ export const layout = (model: Model, h: H, regions: ShellRegions): Html =>
         slotId: "next-shell-add-project",
         model: model.nextShell,
         view: Shell.addProjectView,
+        viewInputs: { placement: "viewport" },
+        toParentMessage: toShell,
+      }),
+      h.submodel({
+        slotId: "next-shell-manage",
+        model: model.nextShell,
+        view: Shell.manageView,
         viewInputs: { placement: "viewport" },
         toParentMessage: toShell,
       }),

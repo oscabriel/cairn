@@ -1,17 +1,23 @@
 // The `next` shell's views (plan look track L6), each a Submodel view over the shell's Model: the
 // project rail with the selected project's list (a column on a desktop, a sheet on a phone), the
-// chat header's lead and actions, the refresh confirm, the add-project picker, and the scratch
-// overlay's scrim, head and foot. `Layout.ts` places them around the page's own parts, which keep their own Messages; the
+// chat header's lead and actions, the refresh confirm, the add-project picker, the rename and remove
+// dialog, the read-only bar under an earlier project thread, and the scratch overlay's scrim, head
+// and foot. `Layout.ts` places them around the page's own parts, which keep their own Messages; the
 // look catalogue draws them over a fixture.
 
-import { Option, Predicate, Record } from "effect";
+import { formatSidebarAge } from "@cairn/client-logic/Time";
+import { Array, Option, Predicate, Record } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { classNames } from "../../ui/ClassNames.ts";
+import { buttonDefaults, button } from "../ui/Button.ts";
+import { TYPE } from "../ui/Classes.ts";
 import { addProjectPicker } from "./AddProject.ts";
 import {
   managedMetaOf,
   managedThreadsFor,
+  openEarlierThreadOf,
   openThreadOf,
   projectMarkOf,
   projectOfThread,
@@ -25,7 +31,10 @@ import {
 } from "./Derived.ts";
 import { headerActions, headerLead } from "./Header.ts";
 import type { HeaderContent } from "./Header.ts";
+import { manageDialog } from "./Manage.ts";
+import type { ManageNames } from "./Manage.ts";
 import { Message } from "./Message.ts";
+import { ManageAction, MenuTarget } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { projectFaviconUrl, rail } from "./Rail.ts";
 import type { RailBubble, RailDirection } from "./Rail.ts";
@@ -33,7 +42,7 @@ import { refreshConfirm } from "./Refresh.ts";
 import { scratchFoot, scratchHead, scratchScrim } from "./Scratch.ts";
 import type { Placement } from "./Scratch.ts";
 import { sidebarList } from "./Sidebar.ts";
-import type { SidebarContent } from "./Sidebar.ts";
+import type { PreviousContent, SidebarContent } from "./Sidebar.ts";
 
 type H = HtmlBuilder<Message>;
 
@@ -60,6 +69,63 @@ const footCurrentOf = (model: Model): SidebarContent["current"] => {
   return Predicate.isTagged(model.context.route, "Settings")
     ? "settings"
     : "none";
+};
+
+/** Whether the open menu is `target`'s. */
+const isMenuOpen = (model: Model, target: MenuTarget): boolean =>
+  Option.exists(model.menu, (open) =>
+    MenuTarget.match(open, {
+      Project: ({ projectId }) =>
+        Predicate.isTagged(target, "Project") && target.projectId === projectId,
+      Thread: ({ threadId }) =>
+        Predicate.isTagged(target, "Thread") && target.threadId === threadId,
+    })
+  );
+
+/**
+ * The "Previous" fold for the selected project: its earlier project threads once read, none before
+ * that, and none while it has none (unless the read failed, which the fold says).
+ */
+const previousContentOf = (
+  model: Model,
+  projectId: Option.Option<string>
+): Option.Option<PreviousContent> => {
+  const { previous } = model;
+
+  if (
+    !Option.isSome(projectId) ||
+    !Option.contains(previous.projectId, projectId.value)
+  ) {
+    return Option.none();
+  }
+
+  const routed = Predicate.isTagged(model.context.route, "Thread")
+    ? Option.some(model.context.route.threadId)
+    : Option.none();
+
+  const rows = Option.match(previous.rows, {
+    onNone: () => [],
+    onSome: (read) => read.threads,
+  });
+
+  if (rows.length === 0 && Option.isNone(previous.failure)) {
+    return Option.none();
+  }
+
+  return Option.some({
+    isOpen: previous.isOpen,
+    rows: rows.map((thread) => ({
+      thread,
+      age: formatSidebarAge(
+        Option.getOrElse(thread.archivedAt, () => thread.updatedAt),
+        model.context.nowMs
+      ),
+      isOpen: Option.contains(routed, thread.id),
+    })),
+    hasMore: Option.exists(previous.rows, (read) => Option.isSome(read.next)),
+    isLoading: previous.isLoading,
+    failure: previous.failure,
+  });
 };
 
 /** What the sidebar list shows for the selected project. */
@@ -93,6 +159,13 @@ export const sidebarContentOf = (model: Model): SidebarContent => {
           };
         }),
     }),
+    previous: previousContentOf(
+      model,
+      Option.map(project, (each) => each.id)
+    ),
+    isProjectMenuOpen: Option.exists(project, (each) =>
+      isMenuOpen(model, MenuTarget.Project({ projectId: each.id }))
+    ),
     current: footCurrentOf(model),
   };
 };
@@ -122,6 +195,7 @@ export const headerContentOf = (model: Model): HeaderContent => {
     role: Option.none(),
     status: Option.none(),
     canRefresh: false,
+    menu: Option.none(),
     scratchHint,
   });
 
@@ -139,7 +213,14 @@ export const headerContentOf = (model: Model): HeaderContent => {
   }
 
   return Option.match(openThreadOf(model), {
-    onNone: () => plain(PAGE_TITLES.Thread),
+    onNone: () =>
+      Option.match(openEarlierThreadOf(model), {
+        onNone: () => plain(PAGE_TITLES.Thread),
+        onSome: (thread) => ({
+          ...plain(thread.title),
+          role: Option.some("earlier project thread"),
+        }),
+      }),
     onSome: (thread) => {
       const role = threadRoleOf(model, thread);
       const project = projectOfThread(model, thread);
@@ -161,6 +242,10 @@ export const headerContentOf = (model: Model): HeaderContent => {
         ),
         status: Option.some(row),
         canRefresh: role === "project-thread",
+        menu: Option.some({
+          threadId: thread.id,
+          isOpen: isMenuOpen(model, MenuTarget.Thread({ threadId: thread.id })),
+        }),
         scratchHint,
       };
     },
@@ -178,7 +263,7 @@ export const navigation = (
   direction: RailDirection
 ): ReadonlyArray<Html> => [
   rail(h, direction, railBubblesOf(model)),
-  sidebarList(h, sidebarContentOf(model)),
+  sidebarList(h, sidebarContentOf(model), `-${direction}`),
 ];
 
 /**
@@ -282,4 +367,95 @@ export const scratchHeadView = Submodel.defineView<Model, Message>((model, h) =>
 /** The scratch overlay's foot. */
 export const scratchFootView = Submodel.defineView<Model, Message>((model, h) =>
   scratchFoot(h, model.scratch, model.failure)
+);
+
+/** A project's name and folder, for the dialog. */
+const projectNames = (model: Model, projectId: string): ManageNames =>
+  Option.match(
+    Array.findFirst(
+      railProjectsOf(model),
+      (project) => project.id === projectId
+    ),
+    {
+      onNone: () => ({ name: "this project", folder: "its folder" }),
+      onSome: (project) => ({
+        name: project.title,
+        folder: project.workspaceRoot,
+      }),
+    }
+  );
+
+/** The names the rename or remove dialog shows for its target. */
+const manageNamesOf = (model: Model): ManageNames =>
+  Option.match(model.manage, {
+    onNone: () => ({ name: "", folder: "" }),
+    onSome: ({ action }) =>
+      ManageAction.match(action, {
+        RenameProject: ({ projectId }) => projectNames(model, projectId),
+        RemoveProject: ({ projectId }) => projectNames(model, projectId),
+        RenameThread: () => ({ name: "", folder: "" }),
+      }),
+  });
+
+/** The rename or remove dialog, while a menu item opened one. */
+export const manageView = Submodel.defineView<Model, Message, PlacementInput>(
+  (model, { placement }, h) =>
+    manageDialog(h, model.manage, manageNamesOf(model), placement)
+);
+
+/** True when the route shows an earlier project thread: its page is read only (ADR 0048). */
+export const isEarlierThreadOpen = (model: Model): boolean =>
+  Option.isSome(openEarlierThreadOf(model));
+
+/**
+ * In place of the composer under an earlier project thread: what it is, and the way to its
+ * project's project thread. Only a refresh makes a project thread, so this one is not unarchived.
+ */
+export const earlierLaneView = Submodel.defineView<Model, Message>((model, h) =>
+  Option.match(openEarlierThreadOf(model), {
+    onNone: () => h.empty,
+    onSome: (thread) =>
+      h.div(
+        [
+          h.DataAttribute("testid", "earlier-thread-lane"),
+          h.Role("status"),
+          h.Class(
+            "chat-composer-lane w-full shrink-0 px-(--space-2) pt-(--space-2) pb-[calc(env(safe-area-inset-bottom)+var(--space-3))] sm:px-(--space-5)"
+          ),
+        ],
+        [
+          h.div(
+            [
+              h.Class(
+                "mx-auto flex w-full max-w-(--chat-content-max-width) flex-wrap items-center gap-(--space-3) rounded-(--radius-large) border border-stroke-2 bg-surface-raised px-(--space-4) py-(--space-3)"
+              ),
+            ],
+            [
+              h.p(
+                [h.Class(classNames("min-w-0 flex-1 text-ink-2", TYPE.ui))],
+                [
+                  "An earlier project thread, kept to read. A refresh replaced it, so new messages go to the project thread.",
+                ]
+              ),
+              button(
+                h,
+                {
+                  ...buttonDefaults<Message>(),
+                  size: "small",
+                  onClick: Option.some(
+                    Message.ClickedOpenProjectThread({
+                      projectId: thread.projectId,
+                    })
+                  ),
+                  attributes: [
+                    h.DataAttribute("testid", "earlier-thread-open-project"),
+                  ],
+                },
+                ["Open the project thread"]
+              ),
+            ]
+          ),
+        ]
+      ),
+  })
 );

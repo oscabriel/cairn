@@ -3,10 +3,15 @@
 // whose lineage roots at it (subagents, brief children, workflow nodes), newest first, so the
 // running list under the project thread reads like a feed. A mark that names a thread the client
 // does not hold (archived, deleted, or not yet arrived) reads as none.
+//
+// A new top-level thread never replaces a live project thread unasked (ADR 0048): the hero and
+// `chat.new` open the project thread instead, and only the header's Refresh replaces it. The hero's
+// default project (the most recently updated folder project) is read here too, so the hero, the
+// shell's rail and `chat.new` agree on it.
 
-import type { ThreadId } from "@cairn/protocol/Ids";
+import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
-import { DateTime, Option, Order } from "effect";
+import { Array, DateTime, Option, Order } from "effect";
 
 /** The fields of a row the project thread functions read. */
 export type ManagedRow = Pick<
@@ -64,3 +69,61 @@ export const listedThreadsOf = <T extends ManagedRow>(
       ...managedThreadsOf(projectThread.id, threads),
     ],
   });
+
+const byRecentUpdate = Order.mapInput(
+  Order.flip(DateTime.Order),
+  (project: Pick<ProjectShell, "updatedAt">) => project.updatedAt
+);
+
+/** The folder projects a new thread can start in, most recently updated first. */
+export const folderProjectsByRecent = <
+  P extends Pick<ProjectShell, "kind" | "updatedAt">,
+>(
+  projects: ReadonlyArray<P>
+): ReadonlyArray<P> =>
+  projects
+    .filter((project) => project.kind === "folder")
+    .toSorted(byRecentUpdate);
+
+/**
+ * The hero's default project: the most recently updated folder project, where a draft that names
+ * none launches. None when there is no folder project.
+ */
+export const defaultProjectOf = <
+  P extends Pick<ProjectShell, "kind" | "updatedAt">,
+>(
+  projects: ReadonlyArray<P>
+): Option.Option<P> => Array.head(folderProjectsByRecent(projects));
+
+/**
+ * The live project thread a new top-level thread in `project` would replace, which the hero and
+ * `chat.new` open instead of launching (ADR 0048). The mark is cleared when its thread is archived or
+ * deleted, so a mark is a live thread; the scratch project has none.
+ */
+export const projectThreadToOpen = (
+  project: Pick<ProjectShell, "kind" | "projectThreadId">
+): Option.Option<ThreadId> =>
+  project.kind === "folder" ? project.projectThreadId : Option.none();
+
+/**
+ * Where `chat.new` goes (ADR 0048): the project thread of the project the user is in (the open
+ * thread's folder project, else the hero's default), when it has one; none opens a new draft.
+ */
+export const newThreadOpens = (
+  projects: ReadonlyArray<
+    Pick<ProjectShell, "id" | "kind" | "updatedAt" | "projectThreadId">
+  >,
+  openProjectId: Option.Option<ProjectId>
+): Option.Option<ThreadId> =>
+  Option.flatMap(
+    Option.orElse(
+      Option.flatMap(openProjectId, (id) =>
+        Array.findFirst(
+          projects,
+          (project) => project.id === id && project.kind === "folder"
+        )
+      ),
+      () => defaultProjectOf(projects)
+    ),
+    projectThreadToOpen
+  );

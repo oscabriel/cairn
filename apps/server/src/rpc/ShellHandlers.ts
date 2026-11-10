@@ -1,4 +1,4 @@
-// `shell.subscribe` and `shell.dispatch`: thin calls into the shell store that translate its
+// `shell.subscribe`, `shell.dispatch` and `shell.previousThreads`: thin calls into the shell store that translate its
 // failures into the protocol's public errors, carrying the RPC request id. A `ProjectCreate` first
 // passes `FolderRules` (the deny list, dot folders, links escaping the home) and is committed with
 // the folder's real path. Deleting or archiving a thread, or deleting a project, first stops the
@@ -271,10 +271,61 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
 );
 
 /**
- * Both shell handlers. Needs `ShellStream`, `EventSink`, `CommandReceipts`, `FolderRules`, `ThreadRows`, `Projects`,
- * `ScratchProject` and `Threads`.
+ * A project's earlier project threads, a page at a time (ADR 0048): its archived top-level rows,
+ * newest archive first. A project that is gone or deleted is `NotFound`.
+ */
+export const ShellPreviousThreadsHandler = CairnRpcs.toLayerHandler(
+  "shell.previousThreads",
+  Effect.gen(function* () {
+    const rows = yield* ThreadRows;
+    const projects = yield* Projects;
+
+    return (input, { requestId }) =>
+      Effect.gen(function* () {
+        const project = yield* projects.get(input.projectId);
+
+        if (Option.isNone(project) || Option.isSome(project.value.deletedAt)) {
+          return yield* new NotFound({
+            message: `Project ${input.projectId} does not exist. Pick another project.`,
+            resource: "project",
+            id: input.projectId,
+            requestId: Option.some(String(requestId)),
+          });
+        }
+
+        // One row past the page says whether another page follows.
+        const found = yield* rows.listPrevious(
+          input.projectId,
+          input.after,
+          input.limit + 1
+        );
+
+        const threads = found.slice(0, input.limit).map((row) => row.shell);
+        const last = threads.at(-1);
+
+        return {
+          threads,
+          next:
+            found.length > input.limit && last !== undefined
+              ? Option.flatMap(last.archivedAt, (archivedAt) =>
+                  Option.some({ archivedAt, threadId: last.id })
+                )
+              : Option.none(),
+        };
+      }).pipe(
+        Effect.catchTag("ShellStoreError", (failure) =>
+          Effect.fail(unavailable(String(requestId))(failure))
+        )
+      );
+  })
+);
+
+/**
+ * The shell handlers. Needs `ShellStream`, `EventSink`, `CommandReceipts`, `FolderRules`,
+ * `ThreadRows`, `Projects`, `ScratchProject` and `Threads`.
  */
 export const ShellHandlers = Layer.mergeAll(
   ShellSubscribeHandler,
-  ShellDispatchHandler
+  ShellDispatchHandler,
+  ShellPreviousThreadsHandler
 );

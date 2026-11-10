@@ -2,6 +2,7 @@
 // review): a hung thread that is deleted must free its run, its queue and its Claude Code child.
 // Clearing a scratch thread stops its run and its subagents' first and releases its folder after
 // the commit; a clear refused for a folder project's thread stops and releases nothing.
+// `shell.previousThreads` pages a project's earlier project threads (ADR 0048).
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { ProjectId } from "@cairn/protocol/Ids";
@@ -284,5 +285,109 @@ describe("shell.dispatch clears a scratch thread", () => {
           assert.deepStrictEqual(released, []);
         })
       )
+  );
+});
+
+describe("shell.previousThreads", () => {
+  /** A project whose project thread was refreshed three times, with a child and a deleted row. */
+  const seedRefreshed = Effect.gen(function* () {
+    const client = yield* makeClient;
+    const sink = yield* EventSink;
+    const { projectId, command } = createProject(5);
+
+    yield* client["shell.dispatch"](command);
+
+    const refresh = (n: number, replaces: Option.Option<ThreadId>) =>
+      sink.commitCommand({
+        ...createThread(projectId, n),
+        projectThread: { replaces },
+      });
+
+    yield* refresh(11, Option.none());
+    yield* sink.commitCommand({
+      ...createThread(projectId, 12),
+      lineage: Option.some({
+        parentThreadId: testThreadId(11),
+        relationshipToParent: "subagent" as const,
+        rootThreadId: testThreadId(11),
+      }),
+    });
+    yield* refresh(13, Option.some(testThreadId(11)));
+    yield* refresh(14, Option.some(testThreadId(13)));
+    yield* refresh(15, Option.some(testThreadId(14)));
+    yield* client["shell.dispatch"](
+      ThreadDelete.make({
+        commandId: testCommandId(90),
+        threadId: testThreadId(14),
+      })
+    );
+
+    return { client, projectId };
+  });
+
+  it.effect(
+    "pages a project's archived top-level threads, newest first, without children, deleted or live rows",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const { client, projectId } = yield* seedRefreshed;
+
+          const first = yield* client["shell.previousThreads"]({
+            projectId,
+            after: Option.none(),
+            limit: 1,
+          });
+
+          // 15 is the live project thread, 14 was deleted and 12 is a child of 11.
+          assert.deepStrictEqual(
+            first.threads.map((thread) => thread.id),
+            [testThreadId(13)]
+          );
+          assert.isTrue(
+            first.threads.every((thread) => Option.isSome(thread.archivedAt))
+          );
+          assert.isTrue(Option.isSome(first.next));
+
+          const second = yield* client["shell.previousThreads"]({
+            projectId,
+            after: first.next,
+            limit: 1,
+          });
+
+          assert.deepStrictEqual(
+            second.threads.map((thread) => thread.id),
+            [testThreadId(11)]
+          );
+          assert.isTrue(Option.isNone(second.next));
+
+          const whole = yield* client["shell.previousThreads"]({
+            projectId,
+            after: Option.none(),
+            limit: 50,
+          });
+
+          assert.deepStrictEqual(
+            whole.threads.map((thread) => thread.id),
+            [testThreadId(13), testThreadId(11)]
+          );
+          assert.isTrue(Option.isNone(whole.next));
+        })
+      )
+  );
+
+  it.effect("answers NotFound for a project that does not exist", () =>
+    run(
+      Effect.gen(function* () {
+        const client = yield* makeClient;
+
+        const refused = yield* client["shell.previousThreads"]({
+          projectId: ProjectId.make("prj_missing"),
+          after: Option.none(),
+          limit: 10,
+        }).pipe(Effect.flip);
+
+        assert.strictEqual(refused._tag, "NotFound");
+      })
+    )
   );
 });

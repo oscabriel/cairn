@@ -926,7 +926,8 @@ export class ThreadLaunch extends Context.Service<
 
       /**
        * The live project thread a launch in `input.projectId` would replace, read just before its
-       * commit; none when `replaces` names another (the commit refuses that launch).
+       * commit: the one `replaces` names, when it is still the project thread. None when `replaces`
+       * names another or nothing (ADR 0048): the commit refuses that launch, so nothing is stopped.
        */
       const replacedBy = Effect.fnUntraced(function* (
         input: ThreadLaunchInput
@@ -941,7 +942,7 @@ export class ThreadLaunch extends Context.Service<
         if (
           Option.isNone(marked) ||
           marked.value === input.threadId ||
-          (input.replaces !== undefined && input.replaces !== marked.value)
+          input.replaces !== marked.value
         ) {
           return Option.none<ThreadId>();
         }
@@ -1143,7 +1144,8 @@ export class ThreadLaunch extends Context.Service<
             });
 
             // Every top-level launch in a folder project is its project thread: the first marks
-            // it, a later one refreshes it. A scratch thread is one of many.
+            // it, a later one that names it in `replaces` refreshes it, and one that names nothing
+            // is refused (ADR 0048). A scratch thread is one of many.
             const create = scratchProject
               ? thread
               : ThreadCreate.make({

@@ -9,7 +9,7 @@
 // ensure, and each subagent from the event that first names it (ThreadAliases). Expectations wait
 // up to a timeout for the log or a client's normalized view to show what the line says, so the
 // suite judges what a client would see, not internal state. For the drift goldens, once the lines
-// have held the run waits for every thread to settle (no run live, and the log and each client
+// have held the run waits for every thread to be at rest (no run live, and the log and each client
 // agree on the last message and on every approval record and child) before it records the events
 // and views: the lines need not wait for a run's last steps, and on a loaded machine either feed
 // lags the other.
@@ -115,11 +115,12 @@ export interface RunOptions {
   /** Breaks applied to every instance of the harness (the mutation check). */
   readonly mutations: ReadonlySet<Mutation>;
   /**
-   * Whether the record waits for every thread to settle once the lines have held, and the run
-   * fails when they do not within `timeout`: on for the drift goldens, whose scenarios all end
-   * settled. The suite judges the lines alone, and a tuned scenario may end mid-run.
+   * Whether the record waits, once the lines have held, for every thread to be at rest: no run
+   * live, and the events and its client's view agreeing. The run fails when they are not within
+   * `timeout`. On for the drift goldens, whose scenarios all end at rest; the suite judges the
+   * lines alone, and a tuned scenario may end mid-run.
    */
-  readonly settle?: boolean;
+  readonly awaitAtRest: boolean;
 }
 
 const encodeEvent = Schema.encodeSync(Schema.toCodecJson(HarnessEvent));
@@ -1135,7 +1136,7 @@ export const runScenario = (
        * show no live run, agree on the thread's last committed message, and agree on the status of
        * each of its approval records and children. Either feed may lag the other.
        */
-      const unsettled = (threadId: ThreadId) =>
+      const notAtRest = (threadId: ThreadId) =>
         Effect.gen(function* () {
           const client = views.get(threadId);
 
@@ -1217,12 +1218,12 @@ export const runScenario = (
         });
 
       /**
-       * Every thread the scenario met has settled at once. The lines need not wait for a run's last
+       * Every thread the scenario met is at rest at once. The lines need not wait for a run's last
        * steps, and on a loaded machine either feed lags the other, so the record waits for this.
        */
-      const allSettled = Effect.gen(function* () {
+      const allAtRest = Effect.gen(function* () {
         for (const threadId of aliases.threads()) {
-          const complaint = yield* unsettled(threadId);
+          const complaint = yield* notAtRest(threadId);
 
           if (Option.isSome(complaint)) {
             return Result.fail(`${aliasOf(threadId)}: ${complaint.value}`);
@@ -1240,11 +1241,11 @@ export const runScenario = (
             yield* play(describeLine(index, line), line);
           }
 
-          if (options.settle === true) {
+          if (options.awaitAtRest) {
             yield* eventually(
               options.timeout,
-              "the run settles before the record",
-              allSettled
+              "every thread is at rest before the record",
+              allAtRest
             );
           }
 

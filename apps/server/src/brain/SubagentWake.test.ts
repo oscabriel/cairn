@@ -49,7 +49,7 @@ const passes = (name: string, wokenDelayMillis = 0) =>
         wakeDelayMillis: WAKE_DELAY_MILLIS,
         wokenDelayMillis,
       }),
-      { timeout: Duration.seconds(5), mutations: new Set() }
+      { timeout: Duration.seconds(5), mutations: new Set(), awaitAtRest: false }
     );
 
     assert.deepStrictEqual(outcome.failure, Option.none());

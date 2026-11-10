@@ -1,4 +1,4 @@
-// A scenario's record (the drift goldens' input) is taken once the run has settled, not straight
+// A scenario's record (the drift goldens' input) is taken once every thread is at rest, not straight
 // after the last line: a client that lags the harness, as one does on a loaded machine, must not
 // leave the record short. Each test slows one of the two feeds a run follows, the harness's events
 // or the threads' frames, from a chosen event on, and runs a scenario whose last lines wait on the

@@ -27,7 +27,7 @@ import {
   registerHarnessConformance,
   runScenario,
 } from "./HarnessConformance.ts";
-import type { ConformanceRunner } from "./HarnessConformance.ts";
+import type { ConformanceRunner, RunOptions } from "./HarnessConformance.ts";
 import type { Mutation } from "./Mutations.ts";
 import { piDurableTarget, scriptedTarget } from "./Targets.ts";
 import type { MakeTarget } from "./Targets.ts";
@@ -106,13 +106,17 @@ const pendingOn = (side: Side) =>
   scenarios.filter((scenario) => PENDING[side].has(scenario.name));
 
 /** The suite's run options: no mutation, and a timeout long enough that only a fault trips it. */
-export const SUITE_OPTIONS = {
+export const SUITE_OPTIONS: RunOptions = {
   timeout: Duration.seconds(5),
   mutations: new Set<Mutation>(),
+  awaitAtRest: false,
 };
 
-/** The drift goldens' run options: the suite's, with the record taken once every thread settled. */
-export const GOLDEN_OPTIONS = { ...SUITE_OPTIONS, settle: true };
+/** The drift goldens' run options: the suite's, with the record taken once every thread is at rest. */
+export const GOLDEN_OPTIONS: RunOptions = {
+  ...SUITE_OPTIONS,
+  awaitAtRest: true,
+};
 
 /** The `it.live` of `@effect/vitest`: a test that runs an Effect on the live clock. */
 type LiveTest = (

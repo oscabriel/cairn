@@ -34,9 +34,10 @@ import type { Scenario } from "./Transcript.ts";
 
 /**
  * The mutation check's per-scenario timeout; the unmutated control runs at it too. Its slowest
- * line is `subagent_reply_escalate_reason_bounded`'s wait for the escalation, about 1.1 s on an
- * idle machine (the faux model streams two 4,000-character arguments), so 1.5 s failed that
- * control as soon as the split check's workers ran beside one another.
+ * line is `subagent_reply_escalate_reason_bounded`'s wait for the escalation: the faux model
+ * streams two 4,000-character arguments, a second of streaming at its rate. With three runs of
+ * this folder at once that wait took at most 1.4 s once the faux model streamed in large deltas
+ * (`Targets.ts`); in small ones it passed this timeout in five of nine such runs.
  */
 const MUTATION_TIMEOUT = Duration.millis(2500);
 
@@ -78,6 +79,7 @@ const failures = (
         runScenario(scenario, target, {
           timeout: MUTATION_TIMEOUT,
           mutations,
+          awaitAtRest: false,
         }),
         (outcome) => (Option.isSome(outcome.failure) ? [scenario.name] : [])
       ),

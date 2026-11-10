@@ -11,21 +11,29 @@ import { Option } from "effect";
 import type { Schema } from "effect";
 import * as Scene from "foldkit/scene";
 
+import { Message as ComposerMessage } from "../../composer/Message.ts";
 import { ConnectionState } from "../../connection/Reconnect.ts";
 import { Message as RootMessage } from "../../Message.ts";
 import type { Model as RootModel } from "../../Model.ts";
-import { liveModel } from "../../TestFixtures.ts";
+import { liveModel, sendItem } from "../../TestFixtures.ts";
 import { update as rootUpdate } from "../../Update.ts";
-import { resolvedCheck } from "./CardFixtures.ts";
+import { resolvedCheck, unreadyCheck } from "./CardFixtures.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
+  CheckModels,
+  composerBlurred,
+  composerFocused,
+  composerSent,
+  composerTyped,
   inform,
   RespondToRequest,
+  shownRequest,
   update,
   WaitToAdvance,
   WaitToSend,
+  WaitTypingPause,
 } from "./Update.ts";
 import { view } from "./View.ts";
 
@@ -838,4 +846,438 @@ describe("the request card's answer lifecycle", () => {
       );
     }
   );
+});
+
+/** Runs the composer's reports (`composerFocused`, `composerTyped`, ...) on the card from `model`. */
+const report = (
+  model: Model,
+  ...reports: ReadonlyArray<(card: Model) => ReturnType<typeof update>>
+): Step => {
+  let step: Step = { model, commands: [] };
+
+  for (const told of reports) {
+    const next = told(step.model);
+
+    step = { model: next.model, commands: next.commands ?? [] };
+  }
+
+  return step;
+};
+
+/** The card with the composer focused and typed in once (its pause timer 1), and no request. */
+const typingInComposer = (): Step =>
+  report(showing(null), composerFocused, composerTyped);
+
+/** The request the card shows, by id; what `data-request-card-up` and the card draw from. */
+const shownId = (model: Model) =>
+  Option.map(shownRequest(model), (request) => request.record.id);
+
+const cardIsUp = (model: Model, approvalId: ApprovalId) => {
+  assert.deepStrictEqual(shownId(model), Option.some(approvalId));
+  Scene.scene(
+    config,
+    Scene.given(model),
+    Scene.expect(Scene.testId("request-card")).toHaveAttr(
+      "data-approval-id",
+      approvalId
+    ),
+    Scene.expect(Scene.selector('[data-request-card-up="true"]')).toExist()
+  );
+};
+
+const cardWaits = (model: Model) => {
+  assert.isTrue(Option.isNone(shownId(model)), "the card did not wait");
+  Scene.scene(
+    config,
+    Scene.given(model),
+    Scene.expect(Scene.testId("request-card")).toBeAbsent(),
+    Scene.expect(Scene.selector('[data-request-card-up="false"]')).toExist()
+  );
+};
+
+describe("the request card while the user types in the composer (W-1)", () => {
+  it("waits for the typing to pause before it takes the composer's slot", () => {
+    const typing = typingInComposer();
+
+    assert.deepStrictEqual(
+      typing.commands.map((command) => command.name),
+      [WaitTypingPause.name]
+    );
+
+    const arrived = informed(typing.model, doc(approval));
+
+    cardWaits(arrived.model);
+
+    // Another keystroke starts the pause over, so the first one's end is stale.
+    const more = report(arrived.model, composerTyped);
+
+    assert.deepStrictEqual(
+      more.commands.map((command) => command.args),
+      [{ timer: 2 }]
+    );
+
+    const stale = run(more.model, Message.ElapsedTypingPause({ timer: 1 }));
+
+    cardWaits(stale.model);
+
+    const paused = run(stale.model, Message.ElapsedTypingPause({ timer: 2 }));
+
+    cardIsUp(paused.model, aId);
+    assert.deepStrictEqual(paused.model.shown, Option.some(aId));
+  });
+
+  it.each([
+    ["sends", composerSent],
+    ["leaves the composer", composerBlurred],
+  ] as const)(
+    "shows a waiting request at once when the user %s",
+    (_name, release) => {
+      const arrived = informed(typingInComposer().model, doc(approval));
+
+      assert.deepStrictEqual(arrived.model.typing.held, [aId]);
+      cardWaits(arrived.model);
+
+      const released = report(arrived.model, release).model;
+
+      assert.deepStrictEqual(released.typing.held, []);
+      cardIsUp(released, aId);
+    }
+  );
+
+  it("shows a request at once while the composer is focused but idle, or typed in and left", () => {
+    const idle = informed(
+      report(showing(null), composerFocused).model,
+      doc(approval)
+    ).model;
+
+    const left = informed(
+      report(typingInComposer().model, composerBlurred).model,
+      doc(approval)
+    ).model;
+
+    assert.deepStrictEqual([idle.typing.held, left.typing.held], [[], []]);
+    cardIsUp(idle, aId);
+    cardIsUp(left, aId);
+  });
+
+  it("keeps a request that already showed when typing starts, and holds only the new one", () => {
+    const shown = report(
+      showing(doc(question)),
+      composerFocused,
+      composerTyped
+    ).model;
+
+    cardIsUp(shown, qId);
+
+    // An approval sorts first, but it arrived mid-word: the question stays until the pause.
+    const arrived = informed(shown, doc(approval, question)).model;
+
+    assert.deepStrictEqual(shownId(arrived), Option.some(qId));
+    Scene.scene(
+      config,
+      Scene.given(arrived),
+      Scene.expect(Scene.testId("request-card")).toHaveAttr(
+        "data-request-kind",
+        "user-input"
+      ),
+      Scene.expect(Scene.testId("request-card-position")).toBeAbsent()
+    );
+
+    const paused = run(arrived, Message.ElapsedTypingPause({ timer: 1 })).model;
+
+    assert.deepStrictEqual(shownId(paused), Option.some(aId));
+    Scene.scene(
+      config,
+      Scene.given(paused),
+      Scene.expect(Scene.testId("request-card")).toHaveAttr(
+        "data-request-kind",
+        "tool-call"
+      ),
+      Scene.expect(Scene.testId("request-card-position")).toHaveText("1/2")
+    );
+  });
+
+  it("holds a request in a second thread whose id repeats one shown in the first", () => {
+    // A budget raise is keyed `budget-raise-<epoch>` in its own thread's approvals, from epoch 0 in
+    // every thread, so two threads' first raises share an id.
+    const raiseId = ApprovalId.make("budget-raise-0");
+    const raise = record({ id: raiseId });
+    const otherThread = ThreadId.make("01890a5d-ac96-774b-bcce-b302099a0002");
+
+    // Thread A's raise shows while the user is idle.
+    const shownInA = informed(showing(null), doc(raise)).model;
+
+    cardIsUp(shownInA, raiseId);
+
+    // The user opens thread B, focuses the composer and types; B's first raise lands mid-word.
+    const typingInB = report(
+      informed(shownInA, null, true, otherThread).model,
+      composerFocused,
+      composerTyped
+    ).model;
+
+    const arrivedInB = informed(typingInB, doc(raise), true, otherThread);
+
+    assert.deepStrictEqual(arrivedInB.model.typing.held, [raiseId]);
+    cardWaits(arrivedInB.model);
+
+    const paused = run(
+      arrivedInB.model,
+      Message.ElapsedTypingPause({ timer: typingInB.typingTimer })
+    );
+
+    cardIsUp(paused.model, raiseId);
+  });
+
+  it("forgets the requests it saw on a thread switch, and keeps the composer's focus and typing", () => {
+    const typingInA = informed(typingInComposer().model, doc(approval)).model;
+
+    const moved = informed(
+      typingInA,
+      null,
+      true,
+      ThreadId.make("01890a5d-ac96-774b-bcce-b302099a0002")
+    ).model;
+
+    assert.deepStrictEqual(
+      [
+        moved.typing.seen,
+        moved.typing.held,
+        moved.typing.focused,
+        moved.typing.lastTypedAt,
+      ],
+      [[], [], true, typingInA.typing.lastTypedAt]
+    );
+  });
+
+  it("checks a held brief's models only once it shows", () => {
+    const arrived = informed(typingInComposer().model, doc(brief));
+
+    assert.lengthOf(arrived.commands, 0);
+
+    const paused = run(arrived.model, Message.ElapsedTypingPause({ timer: 1 }));
+
+    assert.deepStrictEqual(
+      paused.commands.map((command) => command.name),
+      [CheckModels.name]
+    );
+  });
+});
+
+const inBody = (testId: string) =>
+  Scene.selector(`[data-testid="request-card-body"] [data-testid="${testId}"]`);
+
+const inStatus = (testId: string) =>
+  Scene.selector(
+    `[data-testid="request-card-status"] [data-testid="${testId}"]`
+  );
+
+describe("the card's status, pinned with its actions (U-5)", () => {
+  it("keeps why Go is blocked out of the scrolling body", () => {
+    const blocked = update(
+      showing(doc(brief)),
+      Message.ReceivedModelChecks({
+        approvalId: ApprovalId.make("b-1"),
+        generation: 1,
+        checks: unreadyCheck(
+          "claude-bridge/claude-sonnet-5-5:high",
+          "unknown_model"
+        ),
+      })
+    ).model;
+
+    Scene.scene(
+      config,
+      Scene.given(blocked),
+      Scene.expect(
+        Scene.selector('[data-testid="request-card-body"][data-scroll-edges]')
+      ).toExist(),
+      Scene.expect(inStatus("request-card-go-blocked")).toExist(),
+      Scene.expect(inBody("request-card-go-blocked")).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("keeps the undo bar and a failed answer out of the scrolling body", () => {
+    const opened = inUndoWindow(doc(oneQuestion));
+
+    assert.isTrue(Option.isSome(opened.undo));
+    Scene.scene(
+      config,
+      Scene.given(opened),
+      Scene.expect(inStatus("request-card-undo")).toExist(),
+      Scene.expect(inBody("request-card-undo")).toBeAbsent()
+    );
+
+    const failed = run(
+      showing(doc(approval)),
+      Message.ClickedAccept({ approvalId: aId, decision: "accept" }),
+      Message.FailedRespond({
+        approvalId: aId,
+        message: "The answer did not reach Cairn. Try again.",
+      })
+    ).model;
+
+    Scene.scene(
+      config,
+      Scene.given(failed),
+      Scene.expect(inStatus("request-card-failure")).toContainText(
+        "The answer did not reach Cairn."
+      ),
+      Scene.expect(inBody("request-card-failure")).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("keeps why Go waits on the budget out of the scrolling body", () => {
+    const bId = ApprovalId.make("b-1");
+
+    const typed = run(
+      showing(doc(brief)),
+      Message.ClickedChangeBudget({ approvalId: bId }),
+      Message.ChangedBudgetDollars({ approvalId: bId, value: "abc" })
+    ).model;
+
+    Scene.scene(
+      config,
+      Scene.given(typed),
+      Scene.expect(inStatus("request-card-budget-blocked")).toContainText(
+        "Dollars must be an amount above zero"
+      ),
+      Scene.expect(inBody("request-card-budget-blocked")).toBeAbsent(),
+      Scene.expect(Scene.role("button", { name: "Go" })).toBeDisabled(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("draws no status area when there is nothing to say", () => {
+    Scene.scene(
+      config,
+      Scene.given(showing(doc(approval))),
+      Scene.expect(Scene.testId("request-card")).toExist(),
+      Scene.expect(Scene.testId("request-card-status")).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+});
+
+const multiQuestion = record({
+  ...questionFields,
+  payload: {
+    type: "questions",
+    questions: [
+      {
+        header: "Checks",
+        question: "Which checks should run?",
+        options: [option("lint"), option("test")],
+        multiSelect: true,
+        allowCustomAnswer: false,
+      },
+    ],
+  },
+});
+
+describe("the card's options, marked as choices (U-17)", () => {
+  it("leads a one-answer question's options with a radio, filled once picked", () => {
+    Scene.scene(
+      config,
+      Scene.given(showing(doc(question))),
+      Scene.expect(
+        Scene.selector(
+          '[data-option-index="1"] [data-option-mark="radio"][data-picked="false"]'
+        )
+      ).toExist(),
+      Scene.click(Scene.selector('[data-option-index="1"]')),
+      Scene.expect(
+        Scene.selector(
+          '[data-option-index="1"] [data-option-mark="radio"][data-picked="true"]'
+        )
+      ).toExist(),
+      Scene.expect(
+        Scene.selector(
+          '[data-option-index="2"] [data-option-mark="radio"][data-picked="false"]'
+        )
+      ).toExist(),
+      Scene.Command.resolve(
+        WaitToAdvance({ approvalId: qId, index: 0, timer: 1 }),
+        Message.ElapsedAdvance({ approvalId: qId, index: 0, timer: 1 })
+      ),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("leads a question of several answers' options with a check box", () => {
+    Scene.scene(
+      config,
+      Scene.given(showing(doc(multiQuestion))),
+      Scene.click(Scene.selector('[data-option-index="2"]')),
+      Scene.expect(
+        Scene.selector(
+          '[data-option-index="1"] [data-option-mark="check"][data-picked="false"]'
+        )
+      ).toExist(),
+      Scene.expect(
+        Scene.selector(
+          '[data-option-index="2"] [data-option-mark="check"][data-picked="true"]'
+        )
+      ).toExist(),
+      // Several answers: a pick toggles and waits for Send, with no pause to advance.
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+});
+
+/** The root after the composer reports `message`, from `model`. */
+const afterComposer = (model: RootModel, message: ComposerMessage): RootModel =>
+  rootUpdate(model, RootMessage.GotComposerMessage({ message })).model;
+
+describe("the composer's focus and typing, as the card is told them", () => {
+  it("tells the card when the composer is focused, typed in, sent from and left", () => {
+    const focused = afterComposer(
+      liveModel(2),
+      ComposerMessage.FocusedEditor()
+    );
+
+    const typed = afterComposer(
+      focused,
+      ComposerMessage.ChangedDraft({ value: "h" })
+    );
+
+    const sent = afterComposer(
+      typed,
+      ComposerMessage.PreparedTurn({
+        draftKey: "draft",
+        item: sendItem("r1"),
+        navigateTo: Option.none(),
+        attachments: [],
+      })
+    );
+
+    const left = afterComposer(sent, ComposerMessage.BlurredEditor());
+
+    assert.deepStrictEqual(
+      [focused, typed, sent, left].map(({ requestCard: { typing } }) => [
+        typing.focused,
+        Option.isSome(typing.lastTypedAt),
+      ]),
+      [
+        [true, false],
+        [true, true],
+        [true, false],
+        [false, false],
+      ]
+    );
+  });
 });

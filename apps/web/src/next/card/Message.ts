@@ -75,6 +75,8 @@ export const Message = defineMessageUnion({
   SucceededRespond: { approvalId: ApprovalId },
   FailedRespond: { approvalId: ApprovalId, message: Schema.String },
   DismissedClosed: {},
+  /** The pause after keystroke `timer` in the composer ended (the typing guard, W-1). */
+  ElapsedTypingPause: { timer: Schema.Int },
 });
 
 /** A request card Message. */

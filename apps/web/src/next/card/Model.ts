@@ -4,12 +4,18 @@
 // Send back's notes, a brief's or a launch's budget field, an answer waiting out its undo window,
 // an answer in flight, what the models a
 // brief names resolve to now, and a request that closed under them because it was answered somewhere
-// else. The document comes from the thread page's view, never from the card.
+// else. The document comes from the thread page's view, never from the card. It also holds the
+// composer's typing guard (`ComposerTypingGuard.ts`): a request that arrives while the user types in
+// the focused composer waits there until they pause, send or leave the composer (W-1).
 //
 // This module and `Message.ts` sit in the entry, since the root Model holds the card; the card's
 // update and view come with the `next` chunk (`Update.ts`, `View.ts`, loaded by `FrameLoad.ts`), so
 // the document stays plain JSON here and is decoded there.
 
+import {
+  initialTypingGuard,
+  TypingGuardState,
+} from "@cairn/client-logic/ComposerTypingGuard";
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelCheck } from "@cairn/protocol/ModelSpecs";
 import { Option, Schema } from "effect";
@@ -123,6 +129,15 @@ export const Model = Schema.Struct({
   /** The request the card showed last, to tell when it closes under the user. */
   shown: Schema.Option(ApprovalId),
   closed: Schema.Option(ClosedRequest),
+  /**
+   * The composer's typing guard: the requests seen, those held back while the user types, and the
+   * composer's focus. Its focus and typing carry over a thread switch, since the composer stays
+   * where it is; the requests it saw and holds do not, since a request's id is unique only in its
+   * own thread.
+   */
+  typing: TypingGuardState,
+  /** Bumped by every keystroke in the composer, so only the last one's pause releases the guard. */
+  typingTimer: Schema.Int,
 });
 
 export type Model = typeof Model.Type;
@@ -149,6 +164,8 @@ export const initial: Model = {
   failure: Option.none(),
   shown: Option.none(),
   closed: Option.none(),
+  typing: initialTypingGuard,
+  typingTimer: 0,
 };
 
 /** What the root tells the card: the open thread, its decision records, and whether a client exists. */

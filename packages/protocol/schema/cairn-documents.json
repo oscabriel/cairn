@@ -197,7 +197,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -305,7 +305,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -371,7 +371,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"
@@ -673,7 +673,7 @@
                             "properties": {
                               "spec": {
                                 "type": "string",
-                                "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                               },
                               "label": {
                                 "type": "string",
@@ -845,7 +845,7 @@
                                 "properties": {
                                   "spec": {
                                     "type": "string",
-                                    "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                    "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                   },
                                   "readonly": {
                                     "type": "boolean"
@@ -1229,7 +1229,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -1337,7 +1337,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -2179,7 +2179,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"
@@ -2291,7 +2291,7 @@
                                   "anyOf": [
                                     {
                                       "type": "string",
-                                      "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                      "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                     },
                                     {
                                       "type": "null"
@@ -2459,7 +2459,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "readonly": {
                           "type": "boolean"
@@ -2788,7 +2788,7 @@
                       "anyOf": [
                         {
                           "type": "string",
-                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         {
                           "type": "null"
@@ -2800,7 +2800,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "model": {
                           "type": "object",
@@ -3335,7 +3335,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -3443,7 +3443,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -3509,7 +3509,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"
@@ -3811,7 +3811,7 @@
                             "properties": {
                               "spec": {
                                 "type": "string",
-                                "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                               },
                               "label": {
                                 "type": "string",
@@ -3983,7 +3983,7 @@
                                 "properties": {
                                   "spec": {
                                     "type": "string",
-                                    "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                    "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                   },
                                   "readonly": {
                                     "type": "boolean"
@@ -4367,7 +4367,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -4475,7 +4475,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -5370,7 +5370,7 @@
                         "anyOf": [
                           {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                           },
                           {
                             "type": "null"

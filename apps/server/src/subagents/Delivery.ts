@@ -75,20 +75,22 @@ export const parentHalt = async (
 };
 
 /**
- * Holds a thread's wakes until a run starts after its newest one (a table read, then a document
- * write): Stop all's mark, written before it stops the children, so their stopped results wake no
- * one even when the thread's last run had completed, and a removed thread is never woken (ADR
- * 0028). The user's next input starts a run and so ends the hold.
+ * Holds a thread's wakes until a run starts after `stopped`, the last generation of the run the stop
+ * ended, or after its newest run when it named none (a table read, then a document write): Stop all's
+ * mark, written before it stops the children, so their stopped results wake no one even when the
+ * thread's last run had completed, and a removed thread is never woken (ADR 0028). The user's next
+ * input starts a run and so ends the hold, and so does a run the abort started for a queued input.
  */
 export const holdWakes = async (
   tx: Tx,
-  conversationId: PiConversationId
+  conversationId: PiConversationId,
+  stopped: Option.Option<number>
 ): Promise<void> => {
   const last = await newestRun(tx, conversationId);
   const hold = await tx.doc(WakeHoldDoc, conversationId);
 
   hold.held = true;
-  hold.afterRun = last?.id ?? null;
+  hold.afterRun = Option.getOrElse(stopped, () => last?.id ?? null);
 };
 
 /** Whether a parent is halted (`parentHalt`): the wake rule's read. */

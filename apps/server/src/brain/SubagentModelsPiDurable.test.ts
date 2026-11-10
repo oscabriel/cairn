@@ -2,7 +2,8 @@
 // composition, with model health in reach so a test can mark a provider limited), ADR 0043:
 //
 // - a brief that names no model runs its child on the parent's model and level, and its dispatch
-//   record names them;
+//   record names them, and the registry decodes when that model's id holds `~` (an OpenRouter
+//   alias);
 // - a named `provider/modelId:level` is the child's model and level (`pi.agent`), as its dispatch
 //   record names;
 // - a named model that is not ready is refused at the ask with its reason, and a role name
@@ -21,8 +22,15 @@ import path from "node:path";
 
 import { ApprovalId, ProjectId } from "@cairn/protocol/Ids";
 import type { ConversationId, ThreadId } from "@cairn/protocol/Ids";
+import type { ModelRef } from "@cairn/protocol/Models";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { SubagentsDocument } from "@cairn/protocol/Subagents";
+import {
+  createModels,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -34,6 +42,7 @@ import {
   Option,
   Predicate,
   Ref,
+  Schema,
   Stream,
 } from "effect";
 
@@ -55,6 +64,7 @@ import { durable } from "./Durable.ts";
 import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
+import { BASE_HARNESS_SETTINGS, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
 import { SubagentsDoc } from "./SubagentDocs.ts";
@@ -72,8 +82,53 @@ const SET_DEFAULT = {
 
 const OTHER_PARENT = testThreadId(2);
 
+/** The faux model the brain runs on unless a test names another. */
+const fauxModels = FauxModels.layer({
+  tokensPerSecond: 2000,
+  settings: { retry: { enabled: false } },
+});
+
+/** An OpenRouter alias as pi-ai lists one: its id holds `~` and `/`. */
+const ALIAS_MODEL: ModelRef = {
+  provider: "openrouter",
+  modelId: "~anthropic/claude-haiku-latest",
+};
+
+/** The alias as the only model, on a faux provider of its own, scripted through `FauxModels`. */
+const aliasModels = Layer.effectContext(
+  Effect.sync(() => {
+    const faux = fauxProvider({
+      provider: ALIAS_MODEL.provider,
+      models: [
+        { id: ALIAS_MODEL.modelId, contextWindow: 200_000, reasoning: true },
+      ],
+      tokensPerSecond: 2000,
+    });
+
+    const models = createModels();
+
+    models.setProvider(faux.provider);
+
+    return Context.make(
+      ModelSource,
+      ModelSource.of({
+        models: () => models,
+        settings: () => ({
+          ...BASE_HARNESS_SETTINGS,
+          retry: { enabled: false },
+        }),
+        completeSimple: () => Effect.die("these tests make no direct calls"),
+      })
+    ).pipe(Context.add(FauxModels, FauxModels.of({ faux })));
+  })
+);
+
 /** The brain the conformance suite runs, with `ModelHealth` left in reach. */
-const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
+const brainLayer = (
+  dataDir: string,
+  tuning: SubagentToolOptions,
+  models: typeof fauxModels = fauxModels
+) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
       brainExtensions({
@@ -85,12 +140,7 @@ const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
     Layer.provideMerge(BudgetBook.layer),
     Layer.provideMerge(ModelHealth.layerTest),
     Layer.provideMerge(SettingsStore.layerTest),
-    Layer.provideMerge(
-      FauxModels.layer({
-        tokensPerSecond: 2000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
+    Layer.provideMerge(models),
     Layer.provideMerge(childWorkspacesAt(dataDir)),
     Layer.provide(BrainConfig.layerFrom(dataDir))
   );
@@ -114,13 +164,13 @@ const spawnCall = (description: string, model: string | null, id: string) => {
   return fauxToolCall("subagent_spawn", { description, brief, model }, { id });
 };
 
-/** Ensures `threadId` on the faux model at level `off`. */
-const ensure = (threadId: ThreadId) =>
+/** Ensures `threadId` on `model` (the faux one unless named) at level `off`. */
+const ensure = (threadId: ThreadId, model: ModelRef = FAUX_MODEL) =>
   Effect.flatMap(HarnessSeam, (seam) =>
     seam.ensureThread({
       threadId,
       projectId: ProjectId.make("models"),
-      model: FAUX_MODEL,
+      model,
       thinkingLevel: "off",
       cwd: process.cwd(),
       instructions: Option.none(),
@@ -128,18 +178,25 @@ const ensure = (threadId: ThreadId) =>
     })
   );
 
-/** Over a fresh brain: the parent thread on the faux model at level `off`, resumed. */
+/**
+ * Over a fresh brain: the parent thread at level `off` on the faux model, or on the alias when
+ * `onAlias` says so, resumed.
+ */
 const withBrain = <A, E>(
   tuning: SubagentToolOptions,
   responses: ReadonlyArray<ReturnType<typeof fauxAssistantMessage>>,
-  body: (running: Running) => Effect.Effect<A, E, Services>
+  body: (running: Running) => Effect.Effect<A, E, Services>,
+  onAlias = false
 ) =>
   Effect.acquireUseRelease(
     Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-models-"))),
     (dataDir) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const context = yield* Layer.build(brainLayer(dataDir, tuning));
+          const context = yield* Layer.build(
+            brainLayer(dataDir, tuning, onAlias ? aliasModels : fauxModels)
+          );
+
           const seam = Context.get(context, HarnessSeam);
           const { faux } = Context.get(context, FauxModels);
           const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
@@ -154,9 +211,10 @@ const withBrain = <A, E>(
           faux.setResponses([...responses]);
           yield* Context.get(context, Brain).resume;
 
-          const ensured = yield* ensure(PARENT).pipe(
-            Effect.provideContext(context)
-          );
+          const ensured = yield* ensure(
+            PARENT,
+            onAlias ? ALIAS_MODEL : FAUX_MODEL
+          ).pipe(Effect.provideContext(context));
 
           return yield* body({
             events,
@@ -363,6 +421,52 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
               thinkingLevel: "off",
             });
           })
+      ),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "a brief that names no model runs on a parent's model whose id holds ~ and /, and the registry decodes",
+    () =>
+      withBrain(
+        DEFAULT_TOOL_OPTIONS,
+        [
+          fauxAssistantMessage(spawnCall("Count the files", null, "c1"), {
+            stopReason: "toolUse",
+          }),
+          fauxAssistantMessage("Waiting for Go."),
+          fauxAssistantMessage("There are 3 files."),
+          fauxAssistantMessage("Noted."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            yield* ask(PARENT, "r1");
+            yield* go(PARENT, yield* firstBrief(events, PARENT));
+
+            const child = yield* firstChild(events);
+            const found = yield* dispatchOf(parent, child);
+
+            const registry = yield* read(
+              "test.registry",
+              async (harness, context) =>
+                await harness.snapshot(
+                  SubagentsDoc,
+                  piConversationId(parent),
+                  context
+                )
+            );
+
+            assert.deepStrictEqual(found.model, ALIAS_MODEL);
+            assert.deepInclude(found.dispatch?.resolved ?? {}, {
+              spec: "openrouter/~anthropic/claude-haiku-latest",
+              model: ALIAS_MODEL,
+            });
+            assert.isTrue(
+              Schema.is(SubagentsDocument)(registry),
+              "the registry does not decode as the protocol's SubagentsDocument"
+            );
+          }),
+        true
       ),
     testLimit(30_000)
   );

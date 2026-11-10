@@ -13,10 +13,14 @@
 
 import { ClaudeUsage, INITIAL_READING } from "@cairn/bridge/ClaudeUsage";
 import type { UsageWindow } from "@cairn/bridge/ClaudeUsage";
-import type { ModelRef } from "@cairn/protocol/Models";
+import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { ModelCheck } from "@cairn/protocol/ModelSpecs";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import {
+  getBuiltinModels,
+  getBuiltinProviders,
+} from "@earendil-works/pi-ai/providers/all";
 import { assert, describe, it } from "@effect/vitest";
 import {
   DateTime,
@@ -49,6 +53,7 @@ import {
   modelsText,
   parseModelSpec,
   resolveIn,
+  specOf,
   unreadyOf,
 } from "./ModelSpecs.ts";
 import { PiModelSource } from "./PiModelSource.ts";
@@ -193,6 +198,35 @@ describe("parsing a model spec", () => {
 
       assert.strictEqual(text, expected, spec);
     }
+  });
+
+  it("reads back every model of pi-ai's catalog, with and without a level", () => {
+    // Each model id pi-ai lists (OpenRouter's `~` aliases and `:free` ids, Bedrock's `:0`, Workers
+    // AI's `@cf/...`): the first `/` ends the provider, and a trailing `:level` is the level, which
+    // no listed id ends in.
+    const unread = getBuiltinProviders().flatMap((provider) =>
+      getBuiltinModels(provider).flatMap((model) => {
+        const named = ref(provider, model.id);
+
+        return [
+          Option.none<ThinkingLevel>(),
+          Option.some<ThinkingLevel>("high"),
+        ].flatMap((level) => {
+          const spec = specOf(named, level);
+
+          const readBack = Option.exists(
+            parseModelSpec(spec),
+            (parsed) =>
+              key(parsed.model) === key(named) &&
+              Option.getOrNull(parsed.level) === Option.getOrNull(level)
+          );
+
+          return readBack ? [] : [spec];
+        });
+      })
+    );
+
+    assert.deepStrictEqual(unread, []);
   });
 
   it("refuses what is not provider/modelId, a role name among it", () => {

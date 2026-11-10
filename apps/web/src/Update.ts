@@ -209,12 +209,25 @@ const queuedSendOf = (
 
 /**
  * Where a queued turn's own row will come after: a launch's anywhere in its new thread, a send's
- * past the newest entry its thread showed when this tab first saw it queued (`outboxSince`).
+ * past the newest entry its thread showed when this tab first saw it queued (`outboxSince`); none
+ * for a send this page did not queue, or queued while no page showed its thread's view.
  */
 const sinceOf = (model: Model, item: OutboxItem): Option.Option<number> =>
   Predicate.isTagged(item, "Launch")
     ? Option.some(0)
-    : Record.get(model.outboxSince, outboxKey(item));
+    : Option.flatten(Record.get(model.outboxSince, outboxKey(item)));
+
+/**
+ * `since` with the items this page did not queue (read from storage at start, or adopted from
+ * another tab) noted as having no entry to come after: the brain may already hold their rows.
+ */
+const notQueuedHere = (
+  since: Model["outboxSince"],
+  keys: ReadonlyArray<string>
+): Model["outboxSince"] =>
+  Array.reduce(keys, since, (noted, key) =>
+    Record.set(noted, key, Option.none())
+  );
 
 /** The view `page` shows of `threadId`, when it shows that thread and its view arrived. */
 const shownView = (
@@ -229,8 +242,8 @@ const shownView = (
  * Whether `send`'s own row has come in `state`: a user row past `since` with its words,
  * attachments and skills, or, once the brain acknowledged it, its words in the brain's queue
  * (`pi.inbox`), which the composer lists from then on. A send first seen before its thread's view
- * arrived has no `since`: it is matched only once acknowledged, then against any row, so it never
- * waits for a row that came before it was seen.
+ * arrived, or one this page did not queue, has no `since`: it is matched only once acknowledged,
+ * then against any row, so it never waits for a row that came before it was seen.
  */
 const hasCome = (
   state: Thread.Model.ThreadViewModel,
@@ -296,36 +309,38 @@ const queuedSendsFor = (
     },
   });
 
+/** The newest entry of `threadId`'s view as a page of `model` shows it, when one does. */
+const newestShown = (model: Model, threadId: string): Option.Option<number> =>
+  Array.findFirst([model.thread, model.scratchThread], (page) =>
+    Option.flatMap(shownView(page, threadId), (state) =>
+      Option.fromUndefinedOr(state.view.entries.at(-1)?.id)
+    )
+  );
+
 /**
- * Keeps the pending rows' bookkeeping for the thread `page` shows: notes where each newly seen send
- * to it starts (`outboxSince`), forgets the records of items gone from the outbox, and drops the
- * acknowledged sends whose row came or whose launch failed. `left` is the thread the page is leaving,
- * whose acknowledged sends are dropped: their rows show as the brain's once the page is back.
+ * Keeps the pending rows' bookkeeping for the thread `page` shows: notes where each send this page
+ * queued starts (`outboxSince`) in the update that first sees it, as none for good when no page
+ * showed its thread's view then (a view that comes later may already hold its row), forgets the
+ * records of items gone from the outbox, and drops the acknowledged sends whose row came or whose
+ * launch failed. `left` is the thread the page is leaving, whose acknowledged sends are dropped:
+ * their rows show as the brain's once the page is back.
  */
 const trackSends = (
   model: Model,
   page: Thread.Model.Model,
   left: Option.Option<string>
 ): Model => {
-  const newest = Option.flatMap(page.threadId, (id) =>
-    Option.flatMap(shownView(page, id), (state) =>
-      Option.fromUndefinedOr(state.view.entries.at(-1)?.id)
-    )
-  );
-
-  const noted: { [key: string]: number } = Record.filter(
+  const noted: { [key: string]: Option.Option<number> } = Record.filter(
     model.outboxSince,
     (_, key) => model.outbox.some((item) => outboxKey(item) === key)
   );
 
   for (const item of model.outbox) {
     if (
-      Option.isSome(newest) &&
       Predicate.isTagged(item, "Send") &&
-      Option.contains(page.threadId, item.input.threadId) &&
       !Record.has(noted, outboxKey(item))
     ) {
-      noted[outboxKey(item)] = newest.value;
+      noted[outboxKey(item)] = newestShown(model, item.input.threadId);
     }
   }
 
@@ -1519,6 +1534,7 @@ const step = (received: Message): Step =>
             const keys = outbox.map(outboxKey);
             const held = model.outbox.map(outboxKey);
             const settled = Array.filter(held, (key) => !keys.includes(key));
+            const adopting = Array.filter(keys, (key) => !held.includes(key));
 
             return Update.combine(
               modifyFields(model, {
@@ -1526,8 +1542,9 @@ const step = (received: Message): Step =>
                 outboxStored: () => saved,
                 outboxAdopted: (adopted) => [
                   ...Array.filter(adopted, (key) => keys.includes(key)),
-                  ...Array.filter(keys, (key) => !held.includes(key)),
+                  ...adopting,
                 ],
+                outboxSince: (since) => notQueuedHere(since, adopting),
                 outboxLeft: (left) =>
                   Array.filter(left, (key) => keys.includes(key)),
                 sentTurns: (turns) =>
@@ -1621,7 +1638,7 @@ export const init: Runtime.RoutingApplicationInit<
       outboxAttempt: {},
       outboxResend: [],
       sentTurns: {},
-      outboxSince: {},
+      outboxSince: notQueuedHere({}, flags.outbox.map(outboxKey)),
       outboxEchoes: [],
       outboxAdopted: [],
       outboxLeft: [],

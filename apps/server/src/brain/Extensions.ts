@@ -21,6 +21,7 @@ import type {
   Tx,
 } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer } from "effect";
+import type { Option } from "effect";
 
 import type { AnsweredHook } from "../approvals/ApprovalLedger.ts";
 import type { DurableCallError } from "./Durable.ts";
@@ -73,11 +74,13 @@ export type SteerHook = (
 
 /**
  * A Stop all's hold on the stopped thread's wakes, in its own commit, before any child stops: their
- * stopped results must not wake it (ADR 0028).
+ * stopped results must not wake it (ADR 0028). `stopped` is the generation the stop aborted or
+ * followed, which the hold is written against; none when the stop found no run live.
  */
 export type WakeHoldHook = (
   tx: Tx,
-  conversationId: ConversationId
+  conversationId: ConversationId,
+  stopped: Option.Option<number>
 ) => Promise<void>;
 
 /** What the features give the harness beside their extensions; `R` is what their hooks read. */
@@ -173,10 +176,10 @@ export class Extensions extends Context.Service<
               ),
               (steered) => steered.includes(true)
             ),
-          holdWakes: async (tx, conversationId) => {
+          holdWakes: async (tx, conversationId, stopped) => {
             for (const hook of hooks.holdWakes) {
               // oxlint-disable-next-line no-await-in-loop -- writes of one commit, in turn
-              await hook(tx, conversationId);
+              await hook(tx, conversationId, stopped);
             }
           },
         });

@@ -467,7 +467,7 @@ describe("a scripted subagent's shell row", () => {
   );
 
   it.effect(
-    "takes its title and model when it runs on a parent's model id no spec may name",
+    "takes its title and model when it runs on a parent's OpenRouter alias",
     () =>
       Effect.gen(function* () {
         const sink = yield* EventSink;
@@ -477,8 +477,8 @@ describe("a scripted subagent's shell row", () => {
         yield* sink.commitCommand(project.command);
         yield* sink.commitCommand(createThread(project.projectId, 1));
 
-        // An OpenRouter alias: `~` is outside `ModelSpec`, and the dispatch records the parent's
-        // model unchecked when the brief names none. The row reads only the resolved model.
+        // An OpenRouter alias, `~` and all: the dispatch records the parent's model unchecked when
+        // the brief names none. The row reads only the resolved model.
         const shell = yield* rowThroughSeam(
           parent,
           scriptedDocuments(parent, {

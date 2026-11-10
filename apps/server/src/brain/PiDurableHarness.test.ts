@@ -36,6 +36,7 @@ import {
   expireLapsedApprovalsAtBoot,
 } from "../approvals/ApprovalLedger.ts";
 import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
+import { parentHalted } from "../subagents/Delivery.ts";
 import { escalateIn, mirrorIdOf } from "../subagents/QuestionRoute.ts";
 import { Brain } from "./Brain.ts";
 import { testBrain } from "./BrainTestKit.ts";
@@ -109,6 +110,9 @@ const answerUnlessAborted = (
 
 interface Fixture {
   readonly seam: HarnessSeam["Service"];
+  readonly brain: Brain["Service"];
+  /** The ensured thread's pi-durable conversation. */
+  readonly conversationId: ReturnType<typeof piConversationId>;
   readonly faux: FauxModels["Service"]["faux"];
   readonly events: Ref.Ref<ReadonlyArray<HarnessEvent>>;
   /** Runs an Effect from a faux response. */
@@ -194,7 +198,15 @@ const withHarness = <A, E>(
             return held;
           });
 
-          return yield* body({ seam, faux, events, run, holdNextAbort });
+          return yield* body({
+            seam,
+            brain,
+            conversationId: piConversationId(conversationId),
+            faux,
+            events,
+            run,
+            holdNextAbort,
+          });
         })
       ).pipe(Effect.orDie),
     (dataDir) =>
@@ -326,6 +338,183 @@ describe("PiDurableHarness stop", () => {
           assert.strictEqual(terminal.status, "completed");
           assert.deepStrictEqual(answers, ["one done", "two done"]);
         })
+      ),
+    testLimit(30_000)
+  );
+
+  // A Stop all holds the thread's wakes until a run starts after the one it stopped (ADR 0028).
+  it.live(
+    "a Stop all that keeps the queue holds the stopped run's wakes, not those of the follow-up's run that started as it stopped",
+    () =>
+      withHarness(
+        ({ seam, brain, conversationId, faux, events, run, holdNextAbort }) =>
+          Effect.gen(function* () {
+            const firstAnswer = yield* Latch.make(false);
+
+            faux.setResponses([
+              async () =>
+                await run(
+                  Effect.as(firstAnswer.await, fauxAssistantMessage("one done"))
+                ),
+              async (_request, options) =>
+                await run(
+                  answerUnlessAborted(
+                    options?.signal,
+                    Duration.seconds(1),
+                    fauxAssistantMessage("two done")
+                  )
+                ),
+            ]);
+
+            yield* seam.submit(THREAD_ID, {
+              requestId: "held-1",
+              content: [{ type: "text", text: "one" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+            yield* waitForEvents(events, "RunStarted", 1);
+            yield* seam.submit(THREAD_ID, {
+              requestId: "held-2",
+              content: [{ type: "text", text: "two" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+
+            // The stop has read the first run's task; before its abort lands, that run answers and
+            // a run starts for the queued follow-up, before the stop writes its wake hold.
+            yield* holdNextAbort(firstAnswer.open);
+            yield* seam.stop(THREAD_ID, {
+              clearQueue: false,
+              subagents: "stop",
+            });
+
+            const [terminal] = yield* waitForEvents(events, "RunTerminal", 1);
+            const { harness } = yield* Effect.orDie(brain.session);
+
+            const halted = yield* Effect.promise(
+              async () =>
+                await harness.commit(
+                  async (tx) => await parentHalted(tx, conversationId),
+                  BACKGROUND_CONTEXT
+                )
+            );
+
+            assert.strictEqual(terminal.status, "completed");
+            assert.isFalse(
+              halted,
+              "the follow-up's run, started after the stopped one, is held"
+            );
+          })
+      ),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "a Stop all whose run handed over and whose last generation completed before its abort landed holds that run's wakes",
+    () =>
+      withHarness(
+        ({ seam, brain, conversationId, faux, events, run, holdNextAbort }) =>
+          Effect.gen(function* () {
+            const nextAnswer = yield* Latch.make(false);
+
+            // The first generation calls `gate`; the next one answers once released.
+            faux.setResponses([
+              async () =>
+                await Promise.resolve(
+                  fauxAssistantMessage([fauxToolCall("gate", {})], {
+                    stopReason: "toolUse",
+                  })
+                ),
+              async () =>
+                await run(
+                  Effect.as(
+                    nextAnswer.await,
+                    fauxAssistantMessage("carried on")
+                  )
+                ),
+            ]);
+
+            yield* seam.submit(THREAD_ID, {
+              requestId: "hold-handover-1",
+              content: [{ type: "text", text: "open the gate" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+
+            const [asked] = yield* waitForEvents(
+              events,
+              "RuntimeRequestUpdated",
+              1
+            );
+
+            // Before the first abort lands, the approval ends the tool round and the run hands over.
+            yield* holdNextAbort(
+              seam
+                .respond(THREAD_ID, asked.id, {
+                  decision: "accept",
+                  reason: Option.none(),
+                  answers: Option.none(),
+                  launch: Option.none(),
+                })
+                .pipe(Effect.orDie)
+            );
+
+            // The stop follows the handover; before that abort lands, the next generation answers
+            // and the run completes.
+            const { harness } = yield* Effect.orDie(brain.session);
+            const abortTask = harness.abortTask.bind(harness);
+            const calls = yield* Ref.make(0);
+
+            harness.abortTask = async (taskId, abortContext) => {
+              if ((await run(Ref.getAndUpdate(calls, (n) => n + 1))) === 1) {
+                await run(
+                  Effect.andThen(
+                    nextAnswer.open,
+                    waitFor(
+                      Effect.map(
+                        Effect.promise(
+                          async () =>
+                            await harness.snapshot(
+                              LiveDoc,
+                              conversationId,
+                              abortContext
+                            )
+                        ),
+                        (live) =>
+                          live?.run === undefined
+                            ? Option.some(true)
+                            : Option.none()
+                      )
+                    )
+                  )
+                );
+              }
+
+              return await abortTask(taskId, abortContext);
+            };
+
+            yield* seam.stop(THREAD_ID, {
+              clearQueue: false,
+              subagents: "stop",
+            });
+
+            const [terminal] = yield* waitForEvents(events, "RunTerminal", 1);
+
+            const halted = yield* Effect.promise(
+              async () =>
+                await harness.commit(
+                  async (tx) => await parentHalted(tx, conversationId),
+                  BACKGROUND_CONTEXT
+                )
+            );
+
+            assert.strictEqual(yield* Ref.get(calls), 2, "the stop followed");
+            assert.strictEqual(terminal.status, "completed");
+            assert.isTrue(
+              halted,
+              "the stopped run's last generation is not held"
+            );
+          })
       ),
     testLimit(30_000)
   );

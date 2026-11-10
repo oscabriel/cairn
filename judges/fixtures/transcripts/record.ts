@@ -47,14 +47,11 @@ import {
   HarnessBoot,
   PiDurableBrain,
 } from "../../../apps/server/src/AppLayer.ts";
+import { extensionTestServices } from "../../../apps/server/src/brain/BrainTestKit.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
-import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
-import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
-import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachTestKit.ts";
 
 const { values } = parseArgs({
   options: {
@@ -401,11 +398,8 @@ const Brain = PiDurableBrain({
     Layer.provide(ServerConfig.layerWith({ dataDir }))
   ),
 }).pipe(
-  Layer.provide(ExecutorLink.layerDisabled),
   Layer.provide(PiHost.layerEmpty),
-  Layer.provide(ModelHealth.layerTest),
-  Layer.provide(SettingsStore.layerTest),
-  Layer.provide(ReachServicesTest),
+  Layer.provide(extensionTestServices),
   Layer.provide(ServerConfig.layerWith({ dataDir })),
   Layer.provide(NodeServices.layer),
   Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error"))

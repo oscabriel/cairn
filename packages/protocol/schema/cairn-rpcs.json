@@ -12698,7 +12698,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "model": {
                           "type": "object",
@@ -14998,7 +14998,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"

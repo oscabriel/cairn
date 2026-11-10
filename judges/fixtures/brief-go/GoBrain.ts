@@ -57,7 +57,7 @@ import {
   cancelAbandonedApprovalsAtBoot,
 } from "../../../apps/server/src/approvals/ApprovalLedger.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
-import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
+import { testBrain } from "../../../apps/server/src/brain/BrainTestKit.ts";
 import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { messageText } from "../../../apps/server/src/brain/CommitFeed.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
@@ -67,21 +67,13 @@ import {
   FAUX_MODEL,
 } from "../../../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
-import { PiDurableHarness } from "../../../apps/server/src/brain/PiDurableHarness.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import {
   ChildDoc,
   isLinked,
 } from "../../../apps/server/src/brain/SubagentDocs.ts";
 import { BRIEF_ANSWER_ENTRY } from "../../../apps/server/src/brain/SubagentText.ts";
-import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
-import { ExtensionSet } from "../../../apps/server/src/ExtensionSet.ts";
 import { Git } from "../../../apps/server/src/git/Git.ts";
-import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
-import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
-import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
-import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachTestKit.ts";
 import {
   BriefFaultPoint,
   BriefFaults,
@@ -232,26 +224,8 @@ const answer = (request: TranscriptContext): AssistantMessage => {
 
 // ── The brain ────────────────────────────────────────────────────────────────────────────────────
 
-const brain = PiDurableHarness.layer.pipe(
-  Layer.provide(
-    ExtensionSet.layer.pipe(
-      Layer.provide(Subagents.layer),
-      Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest),
-      Layer.provide(SettingsStore.layerTest),
-      Layer.provide(ReachServicesTest),
-      Layer.provide(PiModelSource.layerFromModelSource)
-    )
-  ),
-  Layer.provideMerge(
-    FauxModels.layer({
-      tokensPerSecond: 4000,
-      settings: { retry: { enabled: false } },
-    })
-  ),
+const brain = testBrain({ subagents: Subagents.layer, dataDir }).pipe(
   Layer.provideMerge(workspacesAt(dataDir)),
-  Layer.provide(BrainConfig.layerFrom(dataDir)),
   Layer.provide(
     Layer.succeed(BriefFaults, judgeFaults(values.fault, Number(values.times)))
   )

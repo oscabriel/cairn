@@ -181,7 +181,10 @@ export const EscalationsDoc = defineDoc<EscalationsState>({
 export interface WakeHoldState {
   [key: string]: JsonValue;
   held: boolean;
-  /** The thread's newest run task when the stop held it; null when it had none. */
+  /**
+   * The last generation of the run the stop ended, else the thread's newest run task when the stop
+   * held it; null when it had none.
+   */
   afterRun: number | null;
 }
 

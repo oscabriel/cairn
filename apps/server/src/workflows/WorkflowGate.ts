@@ -39,6 +39,7 @@ import { hook, LiveDoc, ToolTask } from "@earendil-works/pi-durable";
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import { Effect, Exit, Option, Predicate, Result } from "effect";
 
+import type { DurableRunner } from "../brain/Durable.ts";
 import { NODE_TOOLS, rewriteScript } from "./Prelude.ts";
 import {
   BUILT_IN_RECIPES,
@@ -179,11 +180,14 @@ export const projectLaunchFor = (
   );
 
 /**
- * Reads `code` as a workflow script (a built-in reference as the recipe it names); the refusal's
- * words when it cannot be read.
+ * Reads `code` as a workflow script (a built-in reference as the recipe it names), through
+ * `runner`; the refusal's words when it cannot be read.
  */
-const scriptOf = (code: string): Result.Result<WorkflowScript, string> => {
-  const parsed = Effect.runSyncExit(
+const scriptOf = (
+  runner: DurableRunner,
+  code: string
+): Result.Result<WorkflowScript, string> => {
+  const parsed = runner.syncExit(
     Effect.flatMap(resolveRecipe(code), parseWorkflowScript)
   );
 
@@ -206,7 +210,10 @@ const ROUND_SLACK = 32;
  * What a `codemode` source launches, for counting the calls of a round that launch the same thing:
  * a project recipe by name, or a script by its hash; none for anything the gate does not run.
  */
-const launchKeyOf = (code: string): Option.Option<string> => {
+const launchKeyOf = (
+  runner: DurableRunner,
+  code: string
+): Option.Option<string> => {
   if (!isWorkflowSource(code)) {
     return Option.none();
   }
@@ -221,7 +228,7 @@ const launchKeyOf = (code: string): Option.Option<string> => {
   }
 
   return Option.map(
-    Result.getSuccess(scriptOf(code)),
+    Result.getSuccess(scriptOf(runner, code)),
     (script) => `script:${script.hash}`
   );
 };
@@ -234,6 +241,7 @@ const launchKeyOf = (code: string): Option.Option<string> => {
  * found, is first.
  */
 const roundOf = async (
+  runner: DurableRunner,
   call: ToolHookCall,
   code: string,
   live: Readonly<LiveState> | undefined,
@@ -282,7 +290,7 @@ const roundOf = async (
     }
   }
 
-  const own = launchKeyOf(code);
+  const own = launchKeyOf(runner, code);
 
   return {
     nth: before.filter((slot) => {
@@ -290,7 +298,9 @@ const roundOf = async (
 
       return (
         source !== undefined &&
-        Option.exists(own, (key) => Option.contains(launchKeyOf(source), key))
+        Option.exists(own, (key) =>
+          Option.contains(launchKeyOf(runner, source), key)
+        )
       );
     }).length,
     earlier: new Set(
@@ -331,8 +341,12 @@ const run = async (
   };
 };
 
-/** The gate's decision for one call: pass, block with a text, or run with new arguments. */
+/**
+ * The gate's decision for one call: pass, block with a text, or run with new arguments. A workflow
+ * script's launch leaves a lifecycle line through `runner`: admitted, or refused and why.
+ */
 const decide = async (
+  runner: DurableRunner,
   call: ToolHookCall,
   api: HookApi,
   context: ChordContext
@@ -357,8 +371,49 @@ const decide = async (
     return undefined;
   }
 
+  /** The launch's lifecycle line: `refused` with why, or `admitted` as workflow `workflowId`. */
+  const decided = (
+    outcome: "admitted" | "refused",
+    workflowId: string | null,
+    why: string | null
+  ) => {
+    runner.line(`workflow launch ${outcome}`, {
+      event: "workflow_launch_gated",
+      conversationId: api.conversationId,
+      callId: call.id,
+      outcome,
+      workflowId,
+      why,
+    });
+  };
+
+  /** Blocks the launch with `text`, logging it refused for `why`. */
+  const refuse = (why: string, text: string) => {
+    decided("refused", null, why);
+
+    return { block: text };
+  };
+
+  /** Runs `script` as `row`, logging the launch admitted unless the mark binds another. */
+  const admit = async (
+    script: WorkflowScript,
+    row: Readonly<WorkflowItemState>
+  ) => {
+    const ran = await run(script, row, call, api, context);
+
+    const bound = Predicate.hasProperty(ran, "block");
+
+    decided(
+      bound ? "refused" : "admitted",
+      row.id,
+      bound ? "task-bound-to-another-workflow" : null
+    );
+
+    return ran;
+  };
+
   const live = await api.snapshot(LiveDoc, api.conversationId, context);
-  const round = await roundOf(call, code, live, api, context);
+  const round = await roundOf(runner, call, code, live, api, context);
 
   const view: GateView = {
     ledger: await api.snapshot(WorkflowsDoc, api.conversationId, context),
@@ -385,33 +440,35 @@ const decide = async (
     const launch = projectLaunchFor(view, sources, named.value, round.nth);
 
     if (Option.isNone(launch)) {
-      return { block: UNAPPROVED_REFUSAL(named.value) };
+      return refuse("unapproved", UNAPPROVED_REFUSAL(named.value));
     }
 
-    const kept = scriptOf(launch.value.source);
+    const kept = scriptOf(runner, launch.value.source);
 
     return Result.isFailure(kept)
-      ? { block: kept.failure }
-      : await run(kept.success, launch.value.row, call, api, context);
+      ? refuse("unreadable", kept.failure)
+      : await admit(kept.success, launch.value.row);
   }
 
   // A built-in recipe reference runs the recipe it names: the approved hash is the recipe's own.
-  const read = scriptOf(code);
+  const read = scriptOf(runner, code);
 
   if (Result.isFailure(read)) {
-    return { block: read.failure };
+    return refuse("unreadable", read.failure);
   }
 
   const row = approvedRowFor(view, read.success.hash, round.nth);
 
   if (Option.isNone(row)) {
-    return { block: UNAPPROVED_REFUSAL(read.success.meta.name) };
+    return refuse("unapproved", UNAPPROVED_REFUSAL(read.success.meta.name));
   }
 
-  return await run(read.success, row.value, call, api, context);
+  return await admit(read.success, row.value);
 };
 
-/** The gate hook, installed with the workflows extension. */
-export const workflowGate: HookRegistration = hook(ToolTask, {
-  beforeTool: decide,
-});
+/** The gate hook, installed with the workflows extension, running its Effects through `runner`. */
+export const workflowGate = (runner: DurableRunner): HookRegistration =>
+  hook(ToolTask, {
+    beforeTool: async (call, api, context) =>
+      await decide(runner, call, api, context),
+  });

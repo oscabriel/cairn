@@ -102,6 +102,7 @@ import type {
   JsonRecord,
 } from "../brain/CairnDocs.ts";
 import { ScriptSlots } from "../brain/CodeMode.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
@@ -316,6 +317,8 @@ export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = {
 
 /** What the extension is built with. */
 export interface WorkflowToolOptions {
+  /** Runs the tools' and tasks' Effects and writes their lines, on the extension layer's context. */
+  readonly run: DurableRunner;
   readonly resolveModel: ModelResolver;
   /** Parses and dry-runs a proposed script (`WorkflowPlan`), for `workflow_plan`. */
   readonly plan: PlanAccess;
@@ -450,6 +453,14 @@ type Reserved =
   /** Outside its envelope: its own brief waits for the user. */
   | { readonly kind: "waiting"; readonly row: NodeItemState }
   | { readonly kind: "problem"; readonly text: string };
+
+/** The admission line's words for what the reserve found or made. */
+const admissionMessage: Readonly<Record<Reserved["kind"], string>> = {
+  running: "workflow node admitted",
+  ended: "workflow node already ended",
+  waiting: "workflow node still waits for its own brief",
+  problem: "workflow node not admitted",
+};
 
 /** What the reserve commit is given, read before it. */
 interface ReserveInput {
@@ -936,7 +947,7 @@ const launchRecordOf = async (
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveModel, faults, plan, holdRetryMillis, push } = options;
+  const { run, resolveModel, faults, plan, holdRetryMillis, push } = options;
 
   /** Each child's responses read so far, for the meter (WorkflowBudget.ts). */
   const cache = new SpendCache();
@@ -948,7 +959,7 @@ export const workflowExtension = (
   ): Promise<A> =>
     faults.deafToStop
       ? await work
-      : await untilStopped(context.abortSignal, work);
+      : await untilStopped(run, context.abortSignal, work);
 
   /** A judge's hold point, which a stop ends. */
   const hold = async (
@@ -1215,6 +1226,16 @@ export const workflowExtension = (
           context
         );
 
+        run.line(nodeId === null ? "workflow ended" : "workflow node ended", {
+          event: "workflow_watch",
+          conversationId: runtime.conversationId,
+          taskId: runtime.taskId,
+          workflowId,
+          nodeId,
+          target,
+          outcome: outcome.status,
+        });
+
         // The script call ended, so its workflow takes no more nodes: its slots and meter go.
         if (nodeId === null) {
           slots.delete(workflowId);
@@ -1344,6 +1365,17 @@ export const workflowExtension = (
       }
 
       const problem = await beginRow(api, caller.success, call.value, context);
+
+      run.line(
+        Option.isNone(problem) ? "workflow started" : "workflow not started",
+        {
+          event: "workflow_begin",
+          conversationId: api.conversationId,
+          taskId: api.taskId,
+          workflowId,
+          started: Option.isNone(problem),
+        }
+      );
 
       return Option.match(problem, {
         onSome: (text) => refused(`workflow_begin refused: ${text}.`),
@@ -1741,6 +1773,26 @@ export const workflowExtension = (
       context
     );
 
+    run.line(
+      Option.match(held, {
+        onNone: () => "workflow node not held",
+        // A rerun that finds this attempt already counted goes on at once.
+        onSome: (until) =>
+          until === 0
+            ? "workflow node hold already counted"
+            : "workflow node held for its usage limit",
+      }),
+      {
+        event: "workflow_node_held",
+        conversationId: api.conversationId,
+        taskId: api.taskId,
+        workflowId,
+        nodeId,
+        attempt,
+        until: Option.getOrNull(held),
+      }
+    );
+
     if (Option.isNone(held)) {
       return false;
     }
@@ -2004,7 +2056,7 @@ export const workflowExtension = (
     input: ReserveInput,
     context: ChordContext
   ): Promise<Reserved> => {
-    const settled = await Effect.runPromise(
+    const settled = await run.promise(
       approvalLedger(api).awaitSettlement.pipe(Effect.result),
       { signal: context.abortSignal }
     );
@@ -2033,10 +2085,46 @@ export const workflowExtension = (
     const { dispatch } = input;
     const first = await reserve(api, input, context);
 
+    /**
+     * The node's lifecycle line: `message`, with how it stands (`outcome`, its row's state) and,
+     * once it has one, its child's thread and conversation, so the journal maps the node's thread
+     * to its conversation.
+     */
+    const nodeLine = (
+      message: string,
+      outcome: string,
+      row:
+        | (Pick<NodeItemState, "state"> &
+            Partial<Pick<NodeItemState, "childThreadId" | "conversationId">>)
+        | null
+    ) => {
+      run.line(message, {
+        event: "workflow_node",
+        conversationId: api.conversationId,
+        taskId: api.taskId,
+        workflowId: dispatch.workflowId,
+        nodeId: input.nodeId,
+        outcome,
+        state: row?.state ?? null,
+        childThreadId: row?.childThreadId ?? null,
+        childConversationId: row?.conversationId ?? null,
+      });
+    };
+
+    if (first.kind === "waiting") {
+      nodeLine("workflow node waits for its own brief", "waiting", null);
+    }
+
     const reserved =
       first.kind === "waiting"
         ? await awaitBrief(api, first.row, input, context)
         : first;
+
+    nodeLine(
+      admissionMessage[reserved.kind],
+      reserved.kind,
+      reserved.kind === "problem" ? null : reserved.row
+    );
 
     if (reserved.kind === "waiting") {
       const tool = dispatch.verify ? "verify" : "agent";
@@ -2096,6 +2184,12 @@ export const workflowExtension = (
       },
       { models: api.models, cache },
       context
+    );
+
+    nodeLine(
+      "workflow node settled",
+      Result.isSuccess(ending) ? "answered" : "failed",
+      Option.getOrNull(settled)
     );
 
     if (Option.isSome(settled) && settled.value.state === "stopped") {
@@ -2347,7 +2441,7 @@ export const workflowExtension = (
         Option.map(choices, (labels) => labels.map(summaryOf))
       );
 
-      const settlement = await Effect.runPromise(
+      const settlement = await run.promise(
         Effect.gen(function* () {
           yield* ledger.ask(request);
 
@@ -2531,7 +2625,7 @@ export const workflowExtension = (
     extension: defineExtension({
       name: WORKFLOWS_EXTENSION,
       tools: [
-        planTool(plan),
+        planTool(plan, run),
         begin,
         agent,
         verify,
@@ -2540,7 +2634,7 @@ export const workflowExtension = (
         log,
         budget,
       ],
-      hooks: [workflowGate],
+      hooks: [workflowGate(run)],
       tasks: [
         Watch,
         BudgetStopper,

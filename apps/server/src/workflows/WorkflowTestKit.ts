@@ -73,7 +73,7 @@ import { Approvals, UNDECIDED } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { CodeMode } from "../brain/CodeMode.ts";
 import { messageText } from "../brain/CommitFeed.ts";
-import { errorText } from "../brain/Durable.ts";
+import { durableRunner, errorText } from "../brain/Durable.ts";
 import {
   EVENT_KIND_PREFIX,
   EventsDoc,
@@ -617,6 +617,7 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
   registry.install(codemode.extension.extension);
   registry.install(
     workflowExtension({
+      run: yield* durableRunner,
       resolveModel: kitResolver,
       plan: {
         ...planAccess(

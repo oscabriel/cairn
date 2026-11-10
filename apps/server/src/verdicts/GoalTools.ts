@@ -24,6 +24,7 @@ import { Effect, Option, Result } from "effect";
 import { Type } from "typebox";
 
 import { approvalLedger } from "../brain/CairnDocs.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { taskOf } from "../subagents/Delivery.ts";
@@ -167,12 +168,16 @@ const liveRunOf = async (
   return Option.none();
 };
 
-/** The goals extension over `models` (the model judge's resolver and caller) and `faults`. */
+/**
+ * The goals extension over `models` (the model judge's resolver and caller) and `faults`, running
+ * its Effects through `run`.
+ */
 export const goalsExtension = (
   models: JudgeModels,
-  faults: JudgeFaults
+  faults: JudgeFaults,
+  run: DurableRunner
 ): CairnExtension => {
-  const JudgeRun = judgeRunTask(models, faults);
+  const JudgeRun = judgeRunTask(models, faults, run);
 
   /**
    * Why a model judge cannot run on a thread on `threadModel`; none when it can. A named model must
@@ -381,7 +386,7 @@ export const goalsExtension = (
 
       const ledger = approvalLedger(api);
 
-      const asked = await Effect.runPromise(
+      const asked = await run.promise(
         ledger
           .ask({
             tool: GOAL_CRITERIA_TOOL,

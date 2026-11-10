@@ -318,6 +318,26 @@ export default defineConfig({
       files: ["judges/**"],
       rules: { "automation/no-ambient-nondeterminism": "off" },
     },
+    {
+      // Code the app's layers built runs its Effects on their context (coding standard S43).
+      files: ["apps/server/src/**", "packages/bridge/src/**"],
+      rules: { "automation/no-bare-effect-run": "error" },
+    },
+    {
+      // What runs outside the app's layers: entry points, the extraction worker (its own thread),
+      // fixtures (their own processes), tests, test kits and the conformance suite.
+      files: [
+        server("main.ts"),
+        server("dev-main.ts"),
+        server("judge-main.ts"),
+        server("attachments/ExtractWorker.ts"),
+        server("brain/conformance/**"),
+        "**/fixtures/**",
+        "**/*.test.ts",
+        "**/*TestKit.ts",
+      ],
+      rules: { "automation/no-bare-effect-run": "off" },
+    },
     ...foldkitOverrides,
     ...boundaryOverrides,
     {

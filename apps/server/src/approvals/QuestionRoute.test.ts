@@ -34,6 +34,7 @@ import {
   Duration,
   Effect,
   Layer,
+  Logger,
   Option,
   Predicate,
   PubSub,
@@ -45,7 +46,8 @@ import type { Scope } from "effect";
 import { Brain } from "../brain/Brain.ts";
 import { Approvals } from "../brain/CairnDocs.ts";
 import { piDurableLayer } from "../brain/conformance/Targets.ts";
-import { durable } from "../brain/Durable.ts";
+import { durable, durableRunner, runnerOf } from "../brain/Durable.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { FauxModels } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
@@ -528,9 +530,16 @@ describe("a side of the question race whose wait fails (Q-11)", () => {
       await Promise.reject(new Error("storage failed under the watch")),
   };
 
-  /** The idle side's watch of conversation 1 over the failing observer, raced on `signal`. */
-  const idleSide = async (signal: AbortSignal) =>
+  /**
+   * The idle side's watch of conversation 1 over the failing observer, raced on `signal` and run
+   * through `run` (Effect's defaults unless a test gives one).
+   */
+  const idleSide = async (
+    signal: AbortSignal,
+    run: DurableRunner = runnerOf(Context.empty())
+  ) =>
     await watchFor(
+      run,
       failing,
       LiveDoc,
       piConversationId(ConversationIdOf.make(1)),
@@ -584,6 +593,52 @@ describe("a side of the question race whose wait fails (Q-11)", () => {
         assert.strictEqual(
           yield* Effect.promise(async () => await onEndedRace()),
           "cut"
+        );
+      })
+  );
+
+  /** The side through `run`, on a race that ends a moment later: how it ended. */
+  const ranThrough = async (run: DurableRunner) => {
+    const race = new AbortController();
+    const side = idleSide(race.signal, run);
+
+    await sleep(100);
+    race.abort();
+
+    return await side;
+  };
+
+  it.live(
+    "logs the failed side through the runner it is given, so the line reaches the app's loggers",
+    () =>
+      Effect.gen(function* () {
+        const lines: Array<string> = [];
+
+        // The app's loggers as a layer gives them: here one that keeps each JSON line.
+        const run = yield* durableRunner.pipe(
+          Effect.provide(
+            Logger.layer(
+              [
+                Logger.map(Logger.formatJson, (line) => {
+                  lines.push(line);
+                }),
+              ],
+              { mergeWithExisting: false }
+            )
+          )
+        );
+
+        assert.strictEqual(
+          yield* Effect.promise(async () => await ranThrough(run)),
+          "cut"
+        );
+
+        // Before the fix the line went to Effect's default logger, so none reached these.
+        assert.isTrue(
+          lines.some((line) =>
+            line.includes('"event":"question_route_side_failed"')
+          ),
+          `no side failure line among ${JSON.stringify(lines)}`
         );
       })
   );

@@ -52,6 +52,8 @@ import {
   threadOfCall,
   withTrailerHook,
 } from "./CommitTrailer.ts";
+import { durableRunner } from "./Durable.ts";
+import type { DurableRunner } from "./Durable.ts";
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
 import { gatedTool } from "./Permissions.ts";
@@ -256,10 +258,13 @@ export interface BashOptions {
 const TRAILER_ON: BashOptions = { trailer: true };
 
 /**
- * `bash` as the brain runs it: bounded, with a Cairn-free environment, gated by the mode, and with
- * the commit trailer hook unless `options.trailer` is off.
+ * `bash` as the brain runs it: bounded, with a Cairn-free environment, gated by the mode through
+ * `run`, and with the commit trailer hook unless `options.trailer` is off.
  */
-export const gatedBash = (options: BashOptions = TRAILER_ON) =>
+export const gatedBash = (
+  run: DurableRunner,
+  options: BashOptions = TRAILER_ON
+) =>
   gatedTool(
     boundedBash(
       createBashTool({
@@ -278,25 +283,31 @@ export const gatedBash = (options: BashOptions = TRAILER_ON) =>
       })
     ),
     "command",
-    (args) => `bash: ${args.command}`
+    (args) => `bash: ${args.command}`,
+    run
   );
 
 /** The coding tools, with `read` replay-safe and the writers gated by the thread's mode. */
-const codingTools = (images: ImageProcessor, bash: BashOptions) => {
+const codingTools = (
+  images: ImageProcessor,
+  bash: BashOptions,
+  run: DurableRunner
+) => {
   const read = createReadTool({ images });
 
   return defineExtension({
     name: CODING_TOOLS,
     tools: [
       { ...read, replay: "safe" as const },
-      gatedTool(createWriteTool(), "edit", (args) => `write ${args.path}`),
+      gatedTool(createWriteTool(), "edit", (args) => `write ${args.path}`, run),
       gatedTool(
         createEditTool(),
         "edit",
         (args) =>
-          `edit ${args.path} (${args.edits.length} ${args.edits.length === 1 ? "change" : "changes"})`
+          `edit ${args.path} (${args.edits.length} ${args.edits.length === 1 ? "change" : "changes"})`,
+        run
       ),
-      gatedBash(bash),
+      gatedBash(run, bash),
       grep,
       find,
       ls,
@@ -345,7 +356,7 @@ export class CodingTools extends Context.Service<
       return CodingTools.of({
         extension: {
           order: ExtensionOrder.codingTools,
-          extension: codingTools(images, { trailer }),
+          extension: codingTools(images, { trailer }, yield* durableRunner),
         },
       });
     })

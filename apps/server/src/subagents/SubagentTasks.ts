@@ -136,6 +136,7 @@ import {
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { messageText } from "../brain/CommitFeed.ts";
 import { documentCall } from "../brain/Durable.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import {
   admitNote,
   applyNote,
@@ -1585,7 +1586,7 @@ const tellParent = async <I, S, H extends object>(
   approvalId: string,
   halted: boolean,
   failure: StartFailure | null,
-  context: Parameters<typeof runWait>[1],
+  context: Parameters<typeof runWait>[2],
   delayMillis: number
 ) => {
   const parent = runtime.conversationId;
@@ -1686,6 +1687,8 @@ export interface BudgetAccess {
 
 /** The parts of the extension a task builds with. */
 export interface TaskDependencies {
+  /** Runs the tasks' Effects and writes their lifecycle lines, on the extension layer's context. */
+  readonly run: DurableRunner;
   readonly faults: SubagentFaultSet;
   /**
    * The agent change a child gets at creation: its tools instead of a parent's, and
@@ -1794,9 +1797,11 @@ const answerEntryOf = (settled: SettledSubmissionRecord) =>
 /** A route's view of a reporter task: its commits, its clock and its memo. */
 const taskRouteIo = (
   runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
-  context: Parameters<typeof runWait>[1],
-  crashAt: (point: SubagentCrashPoint) => void
+  context: Parameters<typeof runWait>[2],
+  crashAt: (point: SubagentCrashPoint) => void,
+  run: DurableRunner
 ): RouteIo => ({
+  run,
   observer: runtime,
   now: () => runtime.now(),
   placedAt: async (approvalId, candidate) =>
@@ -1813,9 +1818,15 @@ const taskRouteIo = (
   },
 });
 
+/** The first reason that applies, for a lifecycle line; `none` when none does. */
+const firstReason = (
+  reasons: ReadonlyArray<readonly [applies: boolean, why: string]>
+): string => reasons.find(([applies]) => applies)?.[1] ?? "none";
+
 /** The task definitions, closed over the extension's faults and the child's agent change. */
 export const subagentTaskSet = (dependencies: TaskDependencies) => {
   const {
+    run: runner,
     crashAt,
     faults,
     settleDelayMillis,
@@ -1842,7 +1853,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   const followChild = async (
     runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
     input: ReporterInput,
-    context: Parameters<typeof runWait>[1]
+    context: Parameters<typeof runWait>[2]
   ) => {
     const child = conversationOf(input.child);
     const parent = runtime.conversationId;
@@ -1944,7 +1955,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
     child: ConversationId,
     approvalId: string,
-    context: Parameters<typeof runWait>[1]
+    context: Parameters<typeof runWait>[2]
   ): Promise<void> => {
     const approvals = await runtime.snapshot(Approvals, child, context);
     const record = approvals?.items[approvalId];
@@ -1956,6 +1967,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     const remaining = Math.max(0, record.expiresAt - runtime.now());
 
     const found = await runWait(
+      runner,
       awaitDoc(runtime, Approvals, child, (value) => {
         const current = value?.items[approvalId];
 
@@ -2295,7 +2307,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     input: ReporterInput,
     current: string,
     submission: Submission,
-    context: Parameters<typeof runWait>[1],
+    context: Parameters<typeof runWait>[2],
     nudgeSeq: Option.Option<number>
   ) => {
     const unfollowChild = await followChild(runtime, input, context);
@@ -2657,7 +2669,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const settled = settledOrExpired(runtime, child, approvalId, context);
 
         await routeQuestion(
-          taskRouteIo(runtime, context, crashAt),
+          taskRouteIo(runtime, context, crashAt, runner),
           {
             parent,
             child,
@@ -2773,6 +2785,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               },
             ];
 
+        // What the report's commit decided, for its lifecycle line.
+        let reported = { noted: false, wakes: false, withheld: "child-gone" };
+
         await runtime.commit(
           async (tx): Promise<NextTaskState<ReporterState, null>> => {
             // Table reads first.
@@ -2795,6 +2810,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             const item = registry.items[input.key];
 
             if (item === undefined) {
+              reported = { noted: false, wakes: false, withheld: "child-gone" };
+
               return completed();
             }
 
@@ -2824,6 +2841,20 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               (faults.wakeStoppedParent || !halted) &&
               !queued;
 
+            reported = {
+              noted: notes.length > 0,
+              wakes,
+              withheld: wakes
+                ? "none"
+                : firstReason([
+                    [quiet, "quiet-input"],
+                    [item.wake !== "answer", "quiet-spawn"],
+                    [settlement.usageLimit, "usage-limit"],
+                    [halted && !faults.wakeStoppedParent, "parent-halted"],
+                    [queued, "wake-already-queued"],
+                  ]),
+            };
+
             return {
               status: "running",
               checkpoint: {
@@ -2839,6 +2870,27 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             };
           },
           context
+        );
+
+        const wakeWords = reported.wakes
+          ? "subagent result noted; parent to wake"
+          : "subagent result noted; parent not woken";
+
+        runner.line(
+          reported.withheld === "child-gone"
+            ? "subagent result not noted: child gone"
+            : wakeWords,
+          {
+            event: "subagent_reported",
+            conversationId: parent,
+            taskId: runtime.taskId,
+            childThreadId: input.childThreadId,
+            seq: settlement.seq,
+            outcome: settlement.outcome,
+            noted: reported.noted,
+            wake: reported.wakes,
+            withheld: reported.withheld,
+          }
         );
       }),
       wake: reporterPhase(async (task, runtime, context) => {
@@ -2903,6 +2955,20 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           woke = true;
         }
 
+        if (wakes.length > 0) {
+          runner.line(
+            woke ? "parent woken" : "parent not woken: stopped since",
+            {
+              event: "subagent_wake",
+              conversationId: parent,
+              taskId: runtime.taskId,
+              childThreadId: input.childThreadId,
+              seq: settlement.seq,
+              woke,
+            }
+          );
+        }
+
         if (woke && wokenDelayMillis > 0) {
           await sleep(wokenDelayMillis);
         }
@@ -2945,6 +3011,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
    * Starts a brief's child in one commit, once (ADR 0030): its anchor, its conversation with the
    * child's tools, its thread identity, link and mode, the registry item, the reporter of its first
    * input, and the parent's note that it started. A record already started changes nothing.
+   * Returns the child's conversation, or null when it started none.
    */
   const startChild = async (
     tx: Tx,
@@ -2952,7 +3019,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     parent: ConversationId,
     approvalId: string,
     reads: StartReads
-  ): Promise<void> => {
+  ): Promise<number | null> => {
     const noteId = SubagentRequestIds.briefAnswer(approvalId);
     const noteReads = await readNote(tx, parent, noteId);
     const approvals = await tx.doc(Approvals, parent);
@@ -2964,7 +3031,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       record.started !== null ||
       Option.isNone(brief)
     ) {
-      return;
+      return null;
     }
 
     const now = runtime.now();
@@ -3144,6 +3211,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         at: now,
       })
     );
+
+    return child.id;
   };
 
   /** The task that tells the parent how a brief ended without a child. */
@@ -3165,6 +3234,15 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           wakeDelayMillis
         );
+
+        runner.line("parent told its brief started no child", {
+          event: "subagent_brief_told",
+          conversationId: runtime.conversationId,
+          taskId: runtime.taskId,
+          approvalId,
+          halted,
+          failure: failure?.at ?? null,
+        });
       }),
     },
     abort: async (_task, runtime, context) => {
@@ -3204,7 +3282,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     runtime: TaskRuntime<BriefInput, StartState, null, object>,
     record: ApprovalRecord,
     checkpoint: StartState,
-    context: Parameters<typeof runWait>[1]
+    context: Parameters<typeof runWait>[2]
   ) => {
     const parent = runtime.conversationId;
     const brief = briefOfPayload(record.payload);
@@ -3217,6 +3295,30 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       parent,
       record.id
     );
+
+    /**
+     * The start's lifecycle line: the child started, or why it did not (yet). It names both
+     * threads with their conversations (`childConversationId` once one was made), so the journal
+     * maps a subagent's thread to its conversation where it is born.
+     */
+    const decided = (
+      outcome: string,
+      childConversationId: number | null = null
+    ) => {
+      runner.line(
+        outcome === "started" ? "subagent started" : "subagent not started",
+        {
+          event: "subagent_start",
+          conversationId: parent,
+          parentThreadId: parentMeta?.threadId ?? null,
+          taskId: runtime.taskId,
+          approvalId: record.id,
+          childThreadId,
+          childConversationId,
+          outcome,
+        }
+      );
+    };
 
     const named = Option.flatMap(brief, namedSpecOf);
 
@@ -3239,6 +3341,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           { phase: "start", unread },
           context
         );
+        decided("models-unread-retry");
 
         return;
       }
@@ -3254,6 +3357,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         },
         context
       );
+      decided(retry ? "models-unread" : "model-not-ready");
 
       return;
     }
@@ -3276,6 +3380,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         },
         context
       );
+      decided("budget-at-line");
 
       return;
     }
@@ -3303,14 +3408,23 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     briefFaults.at("prepared");
 
+    // What the creating commit decided, and the child it made, for its lifecycle line.
+    let outcome = "started";
+    let childConversationId: number | null = null;
+
     await runtime.commit(
       async (tx): Promise<NextTaskState<StartState, null>> => {
+        outcome = "started";
+        childConversationId = null;
+
         // The brain's count again, without this start (BrainCap.ts): table reads, so first. The
         // spawn's own count keeps it under the cap; this catches two threads' spawns racing. A
         // worktree made for a brief refused here is removed by the boot's child workspace repair.
         const brain = await countLive(tx, START_TASK, runtime.taskId);
 
         if (Result.isFailure(prepared)) {
+          outcome = "no-workspace";
+
           await newTell(tx, parent, record.id, {
             at: "workspace",
             why: prepared.failure,
@@ -3320,6 +3434,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         }
 
         if (brain.live >= dependencies.maxLivePerBrain) {
+          outcome = "no-room";
+
           await newTell(tx, parent, record.id, {
             at: "room",
             why: "",
@@ -3330,7 +3446,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         }
 
         await listParent(tx, parent);
-        await startChild(tx, runtime, parent, record.id, {
+        childConversationId = await startChild(tx, runtime, parent, record.id, {
           parentLink: isLinked(parentLink)
             ? Option.some({
                 depth: parentLink.depth,
@@ -3349,6 +3465,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       },
       context
     );
+    decided(outcome, childConversationId);
 
     briefFaults.at("created");
   };
@@ -3494,10 +3611,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           return;
         }
 
+        let expired = false;
+
         await runtime.commit(
           async (tx): Promise<NextTaskState<BriefState, null>> => {
             const ledger = await tx.doc(Approvals, parent);
             const expiring = ledger.items[approvalId];
+
+            expired = false;
 
             // Answered meanwhile: the answering commit started the child or told the parent.
             if (expiring?.status !== "pending") {
@@ -3507,10 +3628,22 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             await newTell(tx, parent, approvalId, null);
 
             expirePending(expiring, runtime.now());
+            expired = true;
 
             return completed();
           },
           context
+        );
+
+        runner.line(
+          expired ? "brief expired" : "brief answered before it expired",
+          {
+            event: "subagent_brief_ended",
+            conversationId: parent,
+            taskId: runtime.taskId,
+            approvalId,
+            expired,
+          }
         );
       },
       tell: async (task, runtime, context) => {

@@ -65,6 +65,7 @@ import {
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { durable, errorText } from "../brain/Durable.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import {
   EscalationWhy,
@@ -343,6 +344,8 @@ export const escalateOpenQuestions = async (
  * call's context.
  */
 export interface RouteIo {
+  /** Runs the route's Effects and writes its lines, on the extension layer's context. */
+  readonly run: DurableRunner;
   readonly observer: DocumentObserver;
   /** The Harness clock. */
   readonly now: () => number;
@@ -419,6 +422,7 @@ const untilCut = async (signal: AbortSignal): Promise<RaceEnd> => {
  * and leaves the question neither answered nor escalated.
  */
 const sideFailed = async (
+  run: DurableRunner,
   side: string,
   why: string,
   signal: AbortSignal
@@ -427,7 +431,7 @@ const sideFailed = async (
     return "cut";
   }
 
-  Effect.runFork(
+  run.fork(
     Effect.logWarning("question route side failed").pipe(
       Effect.annotateLogs({
         event: "question_route_side_failed",
@@ -442,9 +446,11 @@ const sideFailed = async (
 
 /**
  * Resolves with `end` once `token` on `conversationId` passes `pick`; `cut` when `signal` ends it. A
- * watch that fails waits for `signal` (`sideFailed`). Exported for its test.
+ * watch that fails waits for `signal` (`sideFailed`). Its wait runs through `run`. Exported for its
+ * test.
  */
 export const watchFor = async <T extends JsonObject>(
+  run: DurableRunner,
   observer: DocumentObserver,
   token: ConversationDocToken<T>,
   conversationId: PiConversationId,
@@ -455,14 +461,14 @@ export const watchFor = async <T extends JsonObject>(
   let found: Option.Option<boolean>;
 
   try {
-    found = await Effect.runPromise(
+    found = await run.promise(
       awaitDoc(observer, token, conversationId, (value) =>
         pick(value) ? Option.some(true) : Option.none()
       ),
       { signal }
     );
   } catch (error) {
-    return await sideFailed(`watch ${end}`, errorText(error), signal);
+    return await sideFailed(run, `watch ${end}`, errorText(error), signal);
   }
 
   return Option.isSome(found) ? end : await untilCut(signal);
@@ -473,6 +479,7 @@ export const watchFor = async <T extends JsonObject>(
  * failure that waits for `signal` otherwise (`sideFailed`).
  */
 const endsAs = async (
+  run: DurableRunner,
   promise: Promise<unknown>,
   end: RaceEnd,
   signal: AbortSignal
@@ -480,7 +487,7 @@ const endsAs = async (
   try {
     await promise;
   } catch (error) {
-    return await sideFailed(end, errorText(error), signal);
+    return await sideFailed(run, end, errorText(error), signal);
   }
 
   return end;
@@ -499,6 +506,7 @@ const windowPassed = async (
   signal: AbortSignal
 ): Promise<RaceEnd> => {
   const left = await watchFor(
+    io.run,
     io.observer,
     InboxDoc,
     route.parent,
@@ -526,7 +534,7 @@ const windowPassed = async (
       await sleep(wait, undefined, { signal });
     }
   } catch (error) {
-    return await sideFailed("window", errorText(error), signal);
+    return await sideFailed(io.run, "window", errorText(error), signal);
   }
 
   return placed ? "window" : await untilCut(signal);
@@ -544,6 +552,17 @@ export const routeQuestion = async (
   route: Route,
   context: ChordContext
 ): Promise<void> => {
+  /** The route's lifecycle line: how it was decided (`how`). */
+  const decided = (how: string) => {
+    io.run.line("question route decided", {
+      event: "question_routed",
+      conversationId: route.parent,
+      childThreadId: route.childThreadId,
+      approvalId: route.approvalId,
+      how,
+    });
+  };
+
   const escalateWith = async (why: string) => {
     await io.commitDocs(async (tx) => {
       await escalateIn(tx, {
@@ -558,6 +577,8 @@ export const routeQuestion = async (
 
   // A halted parent is never offered the question.
   let offer = false;
+  // Why it was not offered: a halted parent sends it to the user; else it settled first.
+  const held = { halted: false };
 
   await io.commitDocs(async (tx) => {
     const halt = await parentHalt(tx, route.parent);
@@ -573,6 +594,8 @@ export const routeQuestion = async (
     }
 
     if (Option.isSome(halt) && !route.offerHalted) {
+      held.halted = true;
+
       await escalateIn(tx, {
         parentConversationId: route.parent,
         childConversationId: route.child,
@@ -588,6 +611,9 @@ export const routeQuestion = async (
   });
 
   if (!offer) {
+    // `settled`: answered, escalated or gone before the route began; `halted`: sent to the user.
+    decided(held.halted ? "escalated-parent-halted" : "already-settled");
+
     return;
   }
 
@@ -607,9 +633,12 @@ export const routeQuestion = async (
   );
 
   if (submission === undefined) {
+    decided("parent-gone");
+
     return;
   }
 
+  decided("offered-to-parent");
   io.offered();
 
   const race = new AbortController();
@@ -618,14 +647,15 @@ export const routeQuestion = async (
     [context.abortSignal, race.signal].filter(Predicate.isNotUndefined)
   );
 
-  const answered = endsAs(route.settled, "answered", signal);
+  const answered = endsAs(io.run, route.settled, "answered", signal);
 
   // The run that placed the question ends; a wait rejected by the call ending is `cut`.
-  const ended = endsAs(submission.wait(context), "ended", signal);
+  const ended = endsAs(io.run, submission.wait(context), "ended", signal);
 
   // A parent whose run failed or stopped keeps the question queued (`afterFailedRun: "keep"`),
   // where no run places it.
   const idle = watchFor(
+    io.run,
     io.observer,
     LiveDoc,
     route.parent,
@@ -636,6 +666,7 @@ export const routeQuestion = async (
 
   // Escalated by something else: the parent's own reply, or the `QuestionRoutes` fiber.
   const escalated = watchFor(
+    io.run,
     io.observer,
     Approvals,
     route.child,
@@ -652,18 +683,22 @@ export const routeQuestion = async (
   race.abort();
 
   if (first === "answered" || first === "cut") {
+    decided(first);
+
     return;
   }
 
   if (first === "escalated") {
     // Out of the parent's hands: a question still queued there is withdrawn.
     await submission.abort(context);
+    decided("escalated-elsewhere");
 
     return;
   }
 
   if (first === "window") {
     await escalateWith(EscalationWhy.parentSlow(route.windowMillis));
+    decided("escalated-window-passed");
 
     return;
   }
@@ -676,12 +711,15 @@ export const routeQuestion = async (
       const after = await Promise.race([answered, ended]);
 
       if (after !== "ended") {
+        decided(after);
+
         return;
       }
     }
   }
 
   await escalateWith(EscalationWhy.parentRunEnded);
+  decided(first === "idle" ? "escalated-parent-idle" : "escalated-run-ended");
 };
 
 /** The open questions of `threadId`'s children escalated with `why`, if it has a conversation. */

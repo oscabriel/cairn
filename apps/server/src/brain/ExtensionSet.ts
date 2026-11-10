@@ -4,7 +4,7 @@
 
 import { Effect, Layer } from "effect";
 
-import { askUserExtension } from "../approvals/AskUserTool.ts";
+import { askUserSource } from "../approvals/AskUserTool.ts";
 import { ProviderRequestLog } from "../attachments/ProviderRequestExtension.ts";
 import { ExecutorExtension } from "../executor/ExecutorExtension.ts";
 import { ModelsTool } from "../models/ModelsExtension.ts";
@@ -60,7 +60,7 @@ const production: ReadonlyArray<
   ModelsTool.useSync((models) => models.extension),
   ResultTool.useSync((results) => results.extension),
   ReachTools.useSync((reach) => reach.extension),
-  Effect.succeed(askUserExtension(ExtensionOrder.askUser)),
+  askUserSource,
   ProviderRequestLog.useSync((log) => log.extension),
 ];
 

@@ -71,7 +71,7 @@ import { ChildWorkspaceStore } from "../workspaces/ChildWorkspaceStore.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { repairChildWorkspacesAtBoot } from "./ChildWorkspaceRepair.ts";
-import { durable } from "./Durable.ts";
+import { durable, durableRunner } from "./Durable.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
@@ -159,6 +159,7 @@ const brainAt = (
                 extension: subagentsExtension(
                   NO_SUBAGENT_FAULTS,
                   access(workspaces),
+                  yield* durableRunner,
                   DEFAULT_TOOL_OPTIONS
                 ),
               });

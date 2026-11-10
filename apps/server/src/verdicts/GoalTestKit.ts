@@ -27,9 +27,10 @@ import {
   MemoryStorage,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { Option } from "effect";
+import { Context, Option } from "effect";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
+import { runnerOf } from "../brain/Durable.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
 import type { GoalState, JudgeRunsState } from "./GoalDocs.ts";
@@ -136,7 +137,8 @@ export const openGoalKit = async (
 ): Promise<GoalKit> =>
   await openKitWith(
     options,
-    goalsExtension(options.judges, options.faults),
+    // A kit opened outside Effect: the extension runs on Effect's defaults.
+    goalsExtension(options.judges, options.faults, runnerOf(Context.empty())),
     context
   );
 

@@ -87,7 +87,12 @@ const deadlineGuard = hook(ToolTask, {
     setsOwnDeadline(call) ? { block: TIMEOUT_REFUSAL } : undefined,
 });
 
-/** Script slots: taken at once when one is free, else in the order scripts asked. */
+/**
+ * Script slots: taken at once when one is free, else in the order scripts asked. Effect's
+ * semaphore is used here as a data structure: its three runs take and give permits and nothing
+ * else, with no line, span or clock that the app's context would change, so they stay bare
+ * (`automation/no-bare-effect-run`, coding standard S43).
+ */
 export class ScriptSlots {
   readonly #semaphore: Semaphore.Semaphore;
 
@@ -97,12 +102,14 @@ export class ScriptSlots {
 
   /** Takes a slot if one is free. */
   tryTake(): boolean {
+    // oxlint-disable-next-line automation/no-bare-effect-run -- a permit, not a program (class doc)
     return Effect.runSync(Semaphore.takeIfAvailable(this.#semaphore, 1));
   }
 
   /** Resolves true holding a slot, or false when `signal` aborts first. */
   async take(signal?: AbortSignal): Promise<boolean> {
     try {
+      // oxlint-disable-next-line automation/no-bare-effect-run -- a permit, not a program (class doc)
       await Effect.runPromise(Semaphore.take(this.#semaphore, 1), { signal });
 
       return true;
@@ -113,6 +120,7 @@ export class ScriptSlots {
 
   /** Gives a slot back. */
   release(): void {
+    // oxlint-disable-next-line automation/no-bare-effect-run -- a permit, not a program (class doc)
     Effect.runSync(Semaphore.release(this.#semaphore, 1));
   }
 }

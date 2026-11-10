@@ -16,7 +16,7 @@ import type {
 import { Effect, Option, Queue, Stream } from "effect";
 
 import { documentCall, durable, handOff } from "../brain/Durable.ts";
-import type { DurableCallError } from "../brain/Durable.ts";
+import type { DurableCallError, DurableRunner } from "../brain/Durable.ts";
 
 /**
  * The first value of `token` on `conversationId` that `pick` accepts, the current one included.
@@ -64,8 +64,9 @@ export const awaitDoc = <T extends JsonObject, A>(
     Stream.runHead
   );
 
-/** Runs a wait from pi-durable code, cancelled with the call's own abort signal. */
+/** Runs a wait from pi-durable code through `run`, cancelled with the call's own abort signal. */
 export const runWait = async <A>(
+  run: DurableRunner,
   wait: Effect.Effect<A, DurableCallError>,
   context: ChordContext
-): Promise<A> => await Effect.runPromise(wait, { signal: context.abortSignal });
+): Promise<A> => await run.promise(wait, { signal: context.abortSignal });

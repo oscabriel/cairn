@@ -17,6 +17,7 @@ import {
   Schema,
 } from "effect";
 
+import { durableRunner } from "../brain/Durable.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { ModelSource } from "../brain/ModelSource.ts";
 import { ModelSpecs } from "../models/ModelSpecs.ts";
@@ -157,17 +158,29 @@ export class Goals extends Context.Service<
   /** Over the root's `ModelSpecs` and `ModelSource`, and its `SpendLedger` when it has one. */
   static readonly layer = Layer.effect(
     Goals,
-    Effect.map(judgeModels, (models) =>
-      Goals.of({ extension: goalsExtension(models, NO_JUDGE_FAULTS) })
-    )
+    Effect.gen(function* () {
+      const models = yield* judgeModels;
+
+      return Goals.of({
+        extension: goalsExtension(
+          models,
+          NO_JUDGE_FAULTS,
+          yield* durableRunner
+        ),
+      });
+    })
   );
 
   /** As `layer`, with planted faults: a judge brain's kill points. */
   static readonly layerWith = (faults: JudgeFaults) =>
     Layer.effect(
       Goals,
-      Effect.map(judgeModels, (models) =>
-        Goals.of({ extension: goalsExtension(models, faults) })
-      )
+      Effect.gen(function* () {
+        const models = yield* judgeModels;
+
+        return Goals.of({
+          extension: goalsExtension(models, faults, yield* durableRunner),
+        });
+      })
     );
 }

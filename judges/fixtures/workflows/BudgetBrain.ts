@@ -40,7 +40,7 @@ import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { NodeRuntime } from "@effect/platform-node";
-import { Duration, Effect, Layer, Option, Result } from "effect";
+import { Context, Duration, Effect, Layer, Option, Result } from "effect";
 
 import { Arms } from "../../../apps/server/src/brain/Arms.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
@@ -51,6 +51,7 @@ import {
   Approvals,
 } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { CodeMode } from "../../../apps/server/src/brain/CodeMode.ts";
+import { runnerOf } from "../../../apps/server/src/brain/Durable.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
 import type { Reactor } from "../../../apps/server/src/brain/Events.ts";
 import {
@@ -194,7 +195,9 @@ const plan: PlanAccess = {
   defaults: NO_DEFAULT_BUDGET,
 };
 
+// This script is its own entry point, with no app layer: the extension runs on Effect's defaults.
 const workflows = workflowExtension({
+  run: runnerOf(Context.empty()),
   resolveModel,
   plan,
   faults: {

@@ -1179,12 +1179,14 @@ const answersPathSearch = (
 
 const step = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    // Typing dismisses the notice shown on this draft, not one waiting on another draft.
+    // Typing dismisses the notice shown on this draft, not one waiting on another draft. Focus and
+    // keystrokes are reported to the root for the request card's typing guard.
     ChangedDraft: ({ value }) => ({
       model: modifyFields(setText(model, value), {
         notice: (current) =>
           Option.isSome(shownNotice(model)) ? Option.none() : current,
       }),
+      outMessage: OutMessage.Typed(),
     }),
     ChangedSelection: ({ end, start }) =>
       refreshTriggerMenu(
@@ -1192,9 +1194,11 @@ const step = (model: Model, message: Message): UpdateReturn =>
       ),
     FocusedEditor: () => ({
       model: modifyFields(model, { focused: () => true }),
+      outMessage: OutMessage.Focused(),
     }),
     BlurredEditor: () => ({
       model: modifyFields(model, { focused: () => false }),
+      outMessage: OutMessage.Blurred(),
     }),
     StartedHeroDrawerRoom: () => ({ model }),
     PressedSubmitKey: ({ intent }) => submit(model, intent),
@@ -1208,6 +1212,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
           selection: () => ({ start: next.length, end: next.length }),
         }),
         commands: [SetEditorValue({ value: next, cursor: next.length })],
+        outMessage: OutMessage.Typed(),
       };
     },
     ClickedSend: ({ alternate }) =>

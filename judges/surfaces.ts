@@ -8,7 +8,7 @@
 // coarse pointer, an emulated soft keyboard) and at 1,440 px. Each check prints one line; the run
 // ends with one JSON line. No model provider is called.
 //
-//   node judges/surfaces.ts [--only card-approval,card-question,brief-go,brief-go-back,brief-go-unready]
+//   node judges/surfaces.ts [--only card-approval,card-question,card-typing,brief-go,brief-go-back,brief-go-unready]
 //                           [--width 390,1440] [--broken slot|double|advance|undo|nocheck]
 //                           [--out <dir>]
 //
@@ -28,6 +28,12 @@
 //                  undo bar and Undo sends nothing; Send again sends exactly one answer after the
 //                  3 s window, and the model reads both answers, numbered; a second question
 //                  declined with a reason sends one answer and the model reads the reason.
+//   card-typing    the user types in the composer, a key every 60 ms, while a second device's
+//                  message raises an approval: the header says Approval, but the card waits while
+//                  the keys keep coming (the composer drawn, no key dropped), and shows only once
+//                  the typing pauses (the typing guard, W-1: not sooner than 1 s after the last
+//                  key); the draft holds every key typed; at 390 a key pressed once the card took
+//                  the composer's slot lands in no hidden draft.
 //
 // Checks (6B, the brief card and Go; ADR 0026, 0030, 0043):
 //   brief-go          a `subagent_spawn` brief naming `faux/scripted:medium` shows its words (Do,
@@ -42,8 +48,10 @@
 //                     no child, and the parent reads the notes once.
 //   brief-go-unready  a brief naming `opencode-go/gpt-6-luna`, a model the brain's catalog does not
 //                     list: Go is blocked with "not in the model catalog" and Check again (44 px
-//                     targets at 390); a tap on Go sends nothing; Check again asks `models.check`
-//                     once more and Go stays blocked; Decline with a reason settles it.
+//                     targets at 390), the reason on screen with the actions, outside the card's
+//                     scrolling body (U-5); a tap on Go sends nothing; Check again asks
+//                     `models.check` once more and Go stays blocked; Decline with a reason settles
+//                     it.
 //
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
 // make the check it names fail:
@@ -827,6 +835,125 @@ const cardQuestion = async (browser: Browser, url: string, width: number) => {
   }
 };
 
+/** The gap between keys while the user types: well inside the typing guard's 1.5 s pause. */
+const KEY_GAP_MS = 60;
+
+/** Keys typed after the request reached the page, so the card waits through more than one pause. */
+const KEYS_AFTER_REQUEST = 30;
+
+const TYPED_WORDS =
+  "steer the subagents toward the parser first, then the tests ";
+
+const cardTyping = async (browser: Browser, url: string, width: number) => {
+  const contextA = await newDevice(browser, width);
+  const contextB = await newDevice(browser, width);
+
+  try {
+    const a = await openThread(contextA, url);
+    const b = await openThread(contextB, url);
+    const header = a.page.locator('[data-testid="next-header-status"]');
+
+    await editor(a.page).focus();
+
+    let typed = "";
+
+    // One key, then the card must still wait and the composer still be drawn.
+    const typeKey = async () => {
+      const key = TYPED_WORDS[typed.length % TYPED_WORDS.length] ?? " ";
+
+      await a.page.keyboard.type(key);
+      typed += key;
+      await settle(KEY_GAP_MS);
+      expect(
+        !(await card(a.page).isVisible()),
+        `the card took over while the user typed (after ${typed.length} keys)`
+      );
+
+      const geometry = await slotGeometry(a.page);
+
+      expect(
+        geometry.composerVisible,
+        `the composer was hidden while the user typed (after ${typed.length} keys)`
+      );
+    };
+
+    for (let key = 0; key < 5; key += 1) {
+      await typeKey();
+    }
+
+    // A second device raises an approval on the thread while the first types on.
+    const raising = send(b.page, `open the gate while typing (${width})`);
+    const until = Date.now() + 15_000;
+
+    while (
+      !((await header.textContent()) ?? "").includes("Approval") &&
+      Date.now() < until
+    ) {
+      await typeKey();
+    }
+
+    await raising;
+    expect(
+      ((await header.textContent()) ?? "").includes("Approval"),
+      "the header never said the thread waits on an approval"
+    );
+
+    for (let key = 0; key < KEYS_AFTER_REQUEST; key += 1) {
+      await typeKey();
+    }
+
+    // The pause: the card shows, and not before the typing guard's 1.5 s.
+    const lastKeyAt = Date.now();
+
+    await card(a.page).waitFor({ state: "visible", timeout: 10_000 });
+
+    const waitedMs = Date.now() - lastKeyAt;
+
+    expect(
+      waitedMs >= 1000,
+      `the card showed ${waitedMs} ms after the last key`
+    );
+    expect(
+      (await editor(a.page).inputValue()) === typed,
+      `the draft holds ${JSON.stringify(await editor(a.page).inputValue())}, not the ${typed.length} keys typed`
+    );
+
+    if (width < 640) {
+      checkSlot(width, await slotGeometry(a.page));
+      await a.page.keyboard.type("x");
+      await settle(300);
+      expect(
+        (await editor(a.page).inputValue()) === typed,
+        "a key pressed after the card took the composer's slot went into the hidden draft"
+      );
+    }
+
+    // Approve it, so the next check starts from an empty card.
+    await action(a.page, "approve").click();
+    await card(a.page).waitFor({ state: "hidden", timeout: 10_000 });
+
+    record(
+      "card-typing",
+      width,
+      true,
+      `${typed.length} keys, none dropped; the card waited while the header said Approval and showed ${waitedMs} ms after the last key`
+    );
+  } catch (error) {
+    await keepScreens("card-typing", width, [contextA, contextB]);
+    record(
+      "card-typing",
+      width,
+      false,
+      error instanceof CheckFailedError
+        ? error.message
+        : (String(error).split("\n")[0] ?? "failed")
+    );
+  } finally {
+    await contextA.close();
+    await contextB.close();
+  }
+};
+
 // The brief checks (6B).
 
 /** Whether the card's `name` control takes a click: drawn, and neither disabled nor busy. */
@@ -1132,6 +1259,21 @@ const briefUnready = async (
     expect(!(await isLive(page, "go")), "Go takes a click on an unready model");
     checkSlot(width, await slotGeometry(page));
 
+    // Why Go is blocked stays in view with the actions, never scrolled away inside the body (U-5).
+    const pinned = await blocked.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+
+      return {
+        inBody: element.closest('[data-testid="request-card-body"]') !== null,
+        onScreen: box.top >= 0 && box.bottom <= innerHeight + 0.5,
+      };
+    });
+
+    expect(
+      !pinned.inBody && pinned.onScreen,
+      `why Go is blocked is ${pinned.inBody ? "inside the scrolling body" : "off the screen"}`
+    );
+
     const threadsBefore = app.threadCount();
     const before = device.responds.length;
 
@@ -1193,7 +1335,7 @@ const nextUrl = (app: CairnApp): string => {
   return url.href;
 };
 
-const CARD_CHECKS = ["card-approval", "card-question"];
+const CARD_CHECKS = ["card-approval", "card-question", "card-typing"];
 
 const BRIEF_CHECKS = ["brief-go", "brief-go-back", "brief-go-unready"];
 
@@ -1214,6 +1356,10 @@ try {
 
         if (wanted("card-question")) {
           await cardQuestion(browser, nextUrl(app), width);
+        }
+
+        if (wanted("card-typing")) {
+          await cardTyping(browser, nextUrl(app), width);
         }
       }
     } finally {

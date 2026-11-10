@@ -184,6 +184,13 @@ export const OutMessage = defineMessageUnion({
   ChoseDraftProject: { projectId: ProjectId },
   /** Storage holds drafts this build cannot decode, not told about yet; the root's notice says so. */
   FoundUnreadDrafts: {},
+  /**
+   * The editor gained or lost focus, or the user typed into the draft: the request card's typing
+   * guard holds a request back while the user types (W-1).
+   */
+  Focused: {},
+  Blurred: {},
+  Typed: {},
 });
 
 export type OutMessage = typeof OutMessage.Type;

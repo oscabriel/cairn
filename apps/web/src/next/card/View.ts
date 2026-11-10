@@ -1,17 +1,20 @@
 // The request card's view (plan wave 6, 6A; surfaces note S3): one pending request in the Stone
 // look, drawn with the `next` primitives (L3) in the composer's lane. At 1,440 px it sits above the
 // composer; on the phone it takes the composer's place, since the composer is hidden while a
-// request shows (`card.css`), and its body scrolls inside the card so its actions stay in
-// reach. Bodies:
+// request shows (`card.css`), and its body scrolls inside the card, its edges shaded while more lies
+// past them, so its actions stay in reach. What the card says about its answer (why Go is blocked,
+// the undo bar, a failed answer) sits with the actions, outside the scrolling body, so it is never
+// scrolled out of sight (U-5). Bodies:
 //
 // - Approval: the tool, the call's detail in a mono block (an Executor program whole), then Decline
 //   and Approve, with Allow for this thread beside them. A budget raise has a body of its own
 //   (ADR 0047): the scope by its title, what it spent against its line and the line proposed, then
 //   Decline and Approve only.
-// - Question: one question at a time with "i/N", options as buttons with their digit (1 to 9; the
-//   digits work while focus is in the options and not in a text field), "Something else" when
-//   the question takes the user's own words, then Back, Decline, and Next or Send. Send opens the
-//   undo bar.
+// - Question: one question at a time with "i/N", options as buttons led by a radio (one answer) or
+//   a check box (several), filled once picked (U-17), and ending in their digit on a fine pointer
+//   (1 to 9; the digits work while focus is in the options and not in a text field), "Something
+//   else" when the question takes the user's own words, then Back, Decline, and Next or Send. Send
+//   opens the undo bar.
 // - Brief (a subagent's brief or a workflow's launch; 6B): its fields in reading order and what the
 //   models it names run on now, then Send back (a subagent's brief or a launch), Run on 1 first (a
 //   launch of more than one node), Decline and Go. While a named model does not resolve, Go is
@@ -63,10 +66,12 @@ import type {
   Question,
   WorkflowLaunch,
 } from "@cairn/protocol/Policy";
-import { Option, Result } from "effect";
+import { Array, Option, Result } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
+import { Circle, CircleDot, Square, SquareCheck } from "lucide";
 
+import type { IconNode } from "../../composer/Icon.ts";
 import { threadRouter } from "../../Route.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { banner } from "../ui/Banner.ts";
@@ -83,7 +88,7 @@ import {
   WEIGHT_MEDIUM,
 } from "../ui/Classes.ts";
 import { fieldDefaults, inputField, textareaField } from "../ui/Field.ts";
-import { statusGlyph } from "../ui/Glyph.ts";
+import { glyph } from "../ui/Glyph.ts";
 import { kbd } from "../ui/Kbd.ts";
 import { statusChip } from "../ui/StatusChip.ts";
 import { Message } from "./Message.ts";
@@ -340,6 +345,54 @@ const approvalBody = (
   };
 };
 
+interface MarkGlyph {
+  readonly node: IconNode;
+  readonly name: string;
+}
+
+/** The lucide glyphs of an option's mark, resting and picked. */
+const OPTION_MARKS: Readonly<
+  Record<
+    "radio" | "check",
+    { readonly resting: MarkGlyph; readonly picked: MarkGlyph }
+  >
+> = {
+  radio: {
+    resting: { node: Circle, name: "circle" },
+    picked: { node: CircleDot, name: "circle-dot" },
+  },
+  check: {
+    resting: { node: Square, name: "square" },
+    picked: { node: SquareCheck, name: "square-check" },
+  },
+};
+
+/**
+ * The mark an option leads with, so it reads as a choice on a phone too, where no digit follows it
+ * (U-17): a radio for a question of one answer, a check box for one of several, filled once picked.
+ */
+const optionMark = (h: H, multiSelect: boolean, isPicked: boolean): Html => {
+  const { name, node } =
+    OPTION_MARKS[multiSelect ? "check" : "radio"][
+      isPicked ? "picked" : "resting"
+    ];
+
+  return h.span(
+    [
+      h.DataAttribute("option-mark", multiSelect ? "check" : "radio"),
+      h.DataAttribute("picked", String(isPicked)),
+      // Its top on the label's first line: the label's line is 1.25rem, the mark 1rem.
+      h.Class(
+        classNames(
+          "mt-(--space-0-5) flex shrink-0",
+          isPicked ? "text-accent-text" : "text-ink-3"
+        )
+      ),
+    ],
+    [glyph(h, node, name, "regular")]
+  );
+};
+
 const optionButton = (
   model: Model,
   h: H,
@@ -379,49 +432,58 @@ const optionButton = (
     ],
     [
       h.span(
-        [h.Class("flex min-w-0 flex-1 flex-col gap-(--space-0-5)")],
+        [h.Class("flex min-w-0 flex-1 items-start gap-(--space-2)")],
         [
+          optionMark(h, question.multiSelect, isPicked),
           h.span(
-            [h.Class("flex min-w-0 flex-wrap items-center gap-(--space-1-5)")],
+            [h.Class("flex min-w-0 flex-1 flex-col gap-(--space-0-5)")],
             [
               h.span(
                 [
                   h.Class(
-                    classNames("min-w-0 break-words", TYPE.ui, WEIGHT_MEDIUM)
+                    "flex min-w-0 flex-wrap items-center gap-(--space-1-5)"
                   ),
                 ],
-                [option.label]
+                [
+                  h.span(
+                    [
+                      h.Class(
+                        classNames(
+                          "min-w-0 break-words",
+                          TYPE.ui,
+                          WEIGHT_MEDIUM
+                        )
+                      ),
+                    ],
+                    [option.label]
+                  ),
+                  option.recommended
+                    ? chip(h, "accent", {
+                        glyph: Option.none(),
+                        label: "Recommended",
+                        count: Option.none(),
+                      })
+                    : h.empty,
+                ]
               ),
-              option.recommended
-                ? chip(h, "accent", {
-                    glyph: Option.none(),
-                    label: "Recommended",
-                    count: Option.none(),
-                  })
-                : h.empty,
+              option.description === null || option.description === option.label
+                ? h.empty
+                : h.span(
+                    [
+                      h.Class(
+                        classNames("min-w-0 break-words text-ink-2", TYPE.small)
+                      ),
+                    ],
+                    [option.description]
+                  ),
             ]
           ),
-          option.description === null || option.description === option.label
-            ? h.empty
-            : h.span(
-                [
-                  h.Class(
-                    classNames("min-w-0 break-words text-ink-2", TYPE.small)
-                  ),
-                ],
-                [option.description]
-              ),
         ]
       ),
-      isPicked
-        ? h.span(
-            [h.Class("text-accent-text")],
-            [statusGlyph(h, "done", "small")]
-          )
-        : h.span(
-            [h.Class("pointer-coarse:hidden")],
-            [kbd(h, String(optionIndex + 1))]
-          ),
+      h.span(
+        [h.Class("pointer-coarse:hidden")],
+        [kbd(h, String(optionIndex + 1))]
+      ),
     ]
   );
 };
@@ -634,47 +696,54 @@ const runsOn = (
   });
 };
 
-/** Why Go is blocked, with Check again; empty when it is not. */
-const goBlockBar = (model: Model, h: H, request: PendingRequest): Html => {
-  const state: ModelCheckState | undefined =
-    model.modelChecks[request.record.id];
+/**
+ * Why Go is blocked, with Check again; none when it is not, or when Decline or Send back took Go's
+ * place.
+ */
+const goBlockBar = (
+  model: Model,
+  h: H,
+  request: PendingRequest
+): Option.Option<Html> => {
+  const approvalId = request.record.id;
+  const state: ModelCheckState | undefined = model.modelChecks[approvalId];
 
   const block =
-    state !== undefined && ModelCheckState.guards.Checked(state)
+    RequestBody.$is("Brief")(request.body) &&
+    !Option.contains(model.declining, approvalId) &&
+    !Option.contains(model.sendingBack, approvalId) &&
+    state !== undefined &&
+    ModelCheckState.guards.Checked(state)
       ? goBlockOf(state.checks)
       : Option.none();
 
-  return Option.match(block, {
-    onNone: () => h.empty,
-    onSome: (found) =>
-      banner(
-        h,
-        {
-          tone: "failed",
-          mark: Option.none(),
-          title: found.title,
-          detail: Option.some(found.detail),
-          actions: [
-            actionButton(
-              h,
-              "check-models",
-              {
-                variant: "ghost",
-                size: "small",
-                onClick: Option.some(
-                  Message.ClickedCheckModels({ approvalId: request.record.id })
-                ),
-              },
-              "Check again"
-            ),
-          ],
-        },
-        [
-          h.DataAttribute("testid", "request-card-go-blocked"),
-          h.DataAttribute("spec", found.spec),
-        ]
-      ),
-  });
+  return Option.map(block, (found) =>
+    banner(
+      h,
+      {
+        tone: "failed",
+        mark: Option.none(),
+        title: found.title,
+        detail: Option.some(found.detail),
+        actions: [
+          actionButton(
+            h,
+            "check-models",
+            {
+              variant: "ghost",
+              size: "small",
+              onClick: Option.some(Message.ClickedCheckModels({ approvalId })),
+            },
+            "Check again"
+          ),
+        ],
+      },
+      [
+        h.DataAttribute("testid", "request-card-go-blocked"),
+        h.DataAttribute("spec", found.spec),
+      ]
+    )
+  );
 };
 
 /** A brief's or a launch's Send back: its notes field (required) and its two buttons. */
@@ -1067,11 +1136,7 @@ const briefBody = (
       ];
 
   return {
-    body: [
-      ...fields,
-      isDeclining ? h.empty : goBlockBar(model, h, request),
-      ...decline.body,
-    ],
+    body: [...fields, ...decline.body],
     actions: [...extra, ...decline.actions],
   };
 };
@@ -1123,56 +1188,71 @@ const undoTitle = (model: Model, state: "waiting" | "due"): string => {
     : "Sending your answers once Cairn is back.";
 };
 
-const undoBar = (model: Model, h: H, approvalId: ApprovalId): Html =>
-  Option.match(
+const undoBar = (
+  model: Model,
+  h: H,
+  approvalId: ApprovalId
+): Option.Option<Html> =>
+  Option.map(
     Option.filter(model.undo, (undo) => undo.approvalId === approvalId),
-    {
-      onNone: () => h.empty,
-      onSome: (undo) =>
-        banner(
-          h,
-          {
-            tone: "waiting",
-            mark: Option.none(),
-            title: undoTitle(model, undo.state),
-            detail: Option.none(),
-            actions: [
-              actionButton(
-                h,
-                "undo",
-                {
-                  variant: "secondary",
-                  size: "small",
-                  onClick: Option.some(Message.ClickedUndo()),
-                },
-                "Undo"
-              ),
-            ],
-          },
-          [h.DataAttribute("testid", "request-card-undo")]
-        ),
-    }
-  );
-
-const failureBar = (model: Model, h: H): Html =>
-  Option.match(model.failure, {
-    onNone: () => h.empty,
-    onSome: (text) =>
+    (undo) =>
       banner(
         h,
         {
-          tone: "failed",
+          tone: "waiting",
           mark: Option.none(),
-          title: text,
+          title: undoTitle(model, undo.state),
           detail: Option.none(),
-          actions: [],
+          actions: [
+            actionButton(
+              h,
+              "undo",
+              {
+                variant: "secondary",
+                size: "small",
+                onClick: Option.some(Message.ClickedUndo()),
+              },
+              "Undo"
+            ),
+          ],
         },
-        [h.DataAttribute("testid", "request-card-failure")]
-      ),
-  });
+        [h.DataAttribute("testid", "request-card-undo")]
+      )
+  );
+
+const failureBar = (model: Model, h: H): Option.Option<Html> =>
+  Option.map(model.failure, (text) =>
+    banner(
+      h,
+      {
+        tone: "failed",
+        mark: Option.none(),
+        title: text,
+        detail: Option.none(),
+        actions: [],
+      },
+      [h.DataAttribute("testid", "request-card-failure")]
+    )
+  );
+
+/**
+ * What the card says about its answer, pinned with its actions below the scrolling body so it is
+ * always in view (U-5): why Go is blocked, the undo bar, and why the last answer did not go.
+ */
+const statusOf = (
+  model: Model,
+  h: H,
+  request: PendingRequest
+): ReadonlyArray<Html> =>
+  Array.getSomes([
+    goBlockBar(model, h, request),
+    undoBar(model, h, request.record.id),
+    failureBar(model, h),
+  ]);
 
 const requestCard = (model: Model, h: H, request: PendingRequest): Html => {
   const { body, actions } = bodyOf(model, h, request);
+  const status = statusOf(model, h, request);
 
   return card(
     h,
@@ -1217,13 +1297,29 @@ const requestCard = (model: Model, h: H, request: PendingRequest): Html => {
       ],
       body: [
         h.div(
+          [h.Class("flex min-w-0 flex-col gap-(--space-3)")],
           [
-            h.DataAttribute("testid", "request-card-body"),
-            h.Class(
-              "flex max-h-[45dvh] min-w-0 flex-col gap-(--space-3) overflow-y-auto overscroll-contain sm:max-h-[50dvh]"
+            // Its edges shade while more lies past them (`card.css`), so a body that scrolls says so.
+            h.div(
+              [
+                h.DataAttribute("testid", "request-card-body"),
+                h.DataAttribute("scroll-edges", "true"),
+                h.Class(
+                  "flex max-h-[45dvh] min-w-0 flex-col gap-(--space-3) overflow-y-auto overscroll-contain sm:max-h-[50dvh]"
+                ),
+              ],
+              body
             ),
-          ],
-          [...body, undoBar(model, h, request.record.id), failureBar(model, h)]
+            status.length === 0
+              ? h.empty
+              : h.div(
+                  [
+                    h.DataAttribute("testid", "request-card-status"),
+                    h.Class("flex min-w-0 flex-col gap-(--space-2)"),
+                  ],
+                  status
+                ),
+          ]
         ),
       ],
       actions,

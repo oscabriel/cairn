@@ -808,7 +808,50 @@ const followDraftProject = (projectId: ProjectId): Step =>
 export const UNREAD_STORED_NOTICE =
   "Some drafts or unsent changes were saved by another version of Cairn and cannot be used here. They stay on this device, though writing in one of those threads replaces its old draft.";
 
-/** What the composer hands up: a turn for the outbox (and where to go), a request for the add-project picker, the draft's chosen project, or saved drafts it cannot show. */
+const toGotRequestCardMessage = (message: RequestCardMessage): Message =>
+  Message.GotRequestCardMessage({ message });
+
+const readRequestCard = (model: Model): Option.Option<RequestCardModel> =>
+  Option.some(model.requestCard);
+
+const writeRequestCard = (model: Model, requestCard: RequestCardModel): Model =>
+  modifyFields(model, { requestCard: () => requestCard });
+
+// What the composer reports, told to the request card for its typing guard (W-1).
+
+const composerFocusedCard = Update.foldChildStep({
+  update: RequestCard.composerFocused,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+const composerBlurredCard = Update.foldChildStep({
+  update: RequestCard.composerBlurred,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+const composerTypedCard = Update.foldChildStep({
+  update: RequestCard.composerTyped,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+const composerSentCard = Update.foldChildStep({
+  update: RequestCard.composerSent,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+/**
+ * What the composer hands up: a turn for the outbox (and where to go), a request for the
+ * add-project picker, the draft's chosen project, saved drafts it cannot show, or its focus and
+ * keystrokes, which the request card's typing guard reads.
+ */
 const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
@@ -837,6 +880,7 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
                 onSome: (url) => [NavigateInternal({ url })],
               }),
             }),
+            composerSentCard,
           ]
         ),
     // The shell owns the add-project picker, and its rail follows the draft's project.
@@ -847,6 +891,9 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
         notice: () => Option.some(UNREAD_STORED_NOTICE),
       }),
     }),
+    Focused: () => composerFocusedCard,
+    Blurred: () => composerBlurredCard,
+    Typed: () => composerTypedCard,
   });
 
 const foldComposerMessage = Update.foldChild({
@@ -863,15 +910,6 @@ const informComposer = Update.foldChild({
   write: writeComposer,
   toParentMessage: toGotComposerMessage,
 });
-
-const toGotRequestCardMessage = (message: RequestCardMessage): Message =>
-  Message.GotRequestCardMessage({ message });
-
-const readRequestCard = (model: Model): Option.Option<RequestCardModel> =>
-  Option.some(model.requestCard);
-
-const writeRequestCard = (model: Model, requestCard: RequestCardModel): Model =>
-  modifyFields(model, { requestCard: () => requestCard });
 
 /** Folds a request card Message through the card's update. */
 const foldRequestCardMessage = Update.foldChild({

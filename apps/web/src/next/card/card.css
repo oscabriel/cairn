@@ -9,3 +9,30 @@
     display: none;
   }
 }
+
+/*
+ * The card's body scrolls inside the card, its status and actions pinned below it (U-5). An edge
+ * with more past it shades, so a body that scrolls says so: two shades stay with the box, and two
+ * covers in the card's ground scroll with the content and hide each shade once its edge is reached.
+ */
+[data-testid="request-card-body"][data-scroll-edges] {
+  --request-card-shade: color-mix(in srgb, var(--ink-1) 18%, transparent);
+
+  background:
+    linear-gradient(var(--surface-raised) 30%, transparent) top / 100%
+      var(--space-8) no-repeat local,
+    linear-gradient(transparent, var(--surface-raised) 70%) bottom / 100%
+      var(--space-8) no-repeat local,
+    radial-gradient(
+        farthest-side at 50% 0,
+        var(--request-card-shade),
+        transparent
+      )
+      top / 100% var(--space-3) no-repeat scroll,
+    radial-gradient(
+        farthest-side at 50% 100%,
+        var(--request-card-shade),
+        transparent
+      )
+      bottom / 100% var(--space-3) no-repeat scroll;
+}

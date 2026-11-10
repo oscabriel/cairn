@@ -51,7 +51,23 @@ const pathContains = (event: Event, selector: string): boolean =>
       (target) => target instanceof Element && target.closest(selector) !== null
     );
 
-/** t3code's rule: only keys that land on nothing editable or interactive, with no popup open. */
+/**
+ * Whether the editor is drawn. On the phone the request card takes the composer's slot and the
+ * editor is hidden (`next/card/card.css`): a key then lands nowhere rather than in a draft the user
+ * cannot see (W-1).
+ */
+const editorShown = (): boolean =>
+  Option.exists(
+    Option.fromNullishOr(
+      document.querySelector(`[data-testid="${EDITOR_TEST_ID}"]`)
+    ),
+    (editor) => editor.getClientRects().length > 0
+  );
+
+/**
+ * t3code's rule: only keys that land on nothing editable or interactive, with no popup open, and
+ * only while the editor is drawn.
+ */
 const shouldRedirect = (event: KeyboardEvent): boolean =>
   !event.defaultPrevented &&
   isTypeToFocusKey({
@@ -68,7 +84,7 @@ const shouldRedirect = (event: KeyboardEvent): boolean =>
   !pathContains(event, EDITABLE) &&
   !pathContains(event, INTERACTIVE) &&
   document.querySelector(FLOATING_LAYER) === null &&
-  document.querySelector(`[data-testid="${EDITOR_TEST_ID}"]`) !== null;
+  editorShown();
 
 const typeToFocus = streamFromEventFilterMapPreventDefault({
   target: document,

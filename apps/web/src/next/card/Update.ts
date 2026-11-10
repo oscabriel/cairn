@@ -30,6 +30,11 @@
 //   notice, and hands them to the root (`CarriedTypedWords`), which puts them in the thread's
 //   composer draft (t3code's `carryDisplacedCustomAnswerIntoPrompt`; look track L7), so nothing
 //   typed is lost.
+// - A request that arrives while the user is typing in the focused composer waits (t3code's
+//   composer typing guard, `ComposerTypingGuard.ts`; W-1): the card shows it once the user pauses
+//   for `COMPOSER_TYPING_IDLE_MS` (1.5 s), sends or leaves the composer, so it never takes the
+//   composer's slot mid-word on the phone. Only the card waits: the thread's row and header show
+//   the request from the stream at once. A request that showed once is never held again.
 
 import {
   goBlockOf,
@@ -39,6 +44,11 @@ import {
   takesRunOnOne,
   takesSendBack,
 } from "@cairn/client-logic/BriefGo";
+import {
+  COMPOSER_TYPING_IDLE_MS,
+  TypingGuardEvent,
+  updateTypingGuard,
+} from "@cairn/client-logic/ComposerTypingGuard";
 import { budgetDraftOf, budgetEditOf } from "@cairn/client-logic/Meters";
 import type { BudgetDraft } from "@cairn/client-logic/Meters";
 import {
@@ -132,12 +142,17 @@ export const recordsOf = (
   return records;
 };
 
-/** The requests the card can show, in card order, numbered among themselves. */
+/**
+ * The requests the card can show, in card order, numbered among themselves: not one this device
+ * answered, nor one the typing guard holds back while the user types.
+ */
 export const visibleRequests = (
-  model: Pick<Model, "approvals" | "answered">
+  model: Pick<Model, "approvals" | "answered" | "typing">
 ): ReadonlyArray<PendingRequest> => {
   const open = pendingRequests(recordsOf(model.approvals)).filter(
-    (request) => !model.answered.includes(request.record.id)
+    (request) =>
+      !model.answered.includes(request.record.id) &&
+      !model.typing.held.includes(request.record.id)
   );
 
   return open.map((request, index) => ({
@@ -149,7 +164,7 @@ export const visibleRequests = (
 
 /** The request the card shows: the first one the user can answer. */
 export const shownRequest = (
-  model: Pick<Model, "approvals" | "answered">
+  model: Pick<Model, "approvals" | "answered" | "typing">
 ): Option.Option<PendingRequest> =>
   Option.fromUndefinedOr(visibleRequests(model)[0]);
 
@@ -312,6 +327,27 @@ export const WaitToSend = Command.define("WaitToSend", {
       Message.ElapsedUndo(input)
     ),
 });
+
+/** Waits out the pause after a keystroke in the composer. */
+export const WaitTypingPause = Command.define("WaitTypingPause", {
+  args: { timer: Schema.Int },
+  messages: [Message.ElapsedTypingPause],
+  // A later keystroke makes this pause stale (`typingTimer`); keyed as `WaitToAdvance` is.
+  interrupt: true,
+  execute: (input) =>
+    Effect.as(
+      Effect.sleep(Duration.millis(COMPOSER_TYPING_IDLE_MS)),
+      Message.ElapsedTypingPause(input)
+    ),
+});
+
+/**
+ * The time the card hands the typing guard. The card times the pause itself (`WaitTypingPause`
+ * after every keystroke, of which only the last one's end counts), so the guard needs no clock: in
+ * its terms every event happens at one instant, and typing lasts from a keystroke until the pause,
+ * a send or a blur releases it.
+ */
+const GUARD_NOW = 0;
 
 interface Answer {
   readonly approvalId: ApprovalId;
@@ -735,6 +771,58 @@ const sendBack = (model: Model, approvalId: ApprovalId): UpdateReturn => {
   });
 };
 
+/**
+ * The card after the composer's `event`. A request the guard lets go of shows now: the card notes it
+ * as shown and asks about its models, as it does for a request that shows on arrival.
+ */
+const guard = (model: Model, event: TypingGuardEvent): UpdateReturn => {
+  const typing = updateTypingGuard(model.typing, event);
+  const next = modifyFields(model, { typing: () => typing });
+
+  if (typing.held.length === model.typing.held.length) {
+    return { model: next };
+  }
+
+  return checkShown(
+    {
+      model: modifyFields(next, {
+        shown: () =>
+          Option.map(shownRequest(next), (request) => request.record.id),
+      }),
+    },
+    false
+  );
+};
+
+/** The composer's editor gained focus (the root hands on the composer's report). */
+export const composerFocused = (model: Model): UpdateReturn =>
+  guard(model, TypingGuardEvent.cases.Focused.make({}));
+
+/** The composer's editor lost focus: a request held back shows now. */
+export const composerBlurred = (model: Model): UpdateReturn =>
+  guard(model, TypingGuardEvent.cases.Blurred.make({}));
+
+/** The composer sent a turn: a request held back shows now. */
+export const composerSent = (model: Model): UpdateReturn =>
+  guard(model, TypingGuardEvent.cases.Sent.make({}));
+
+/** The user typed in the composer: typing counts until the pause after this keystroke. */
+export const composerTyped = (model: Model): UpdateReturn => {
+  const timer = model.typingTimer + 1;
+
+  return {
+    model: modifyFields(model, {
+      typing: (typing) =>
+        updateTypingGuard(
+          typing,
+          TypingGuardEvent.cases.Typed.make({ now: GUARD_NOW })
+        ),
+      typingTimer: () => timer,
+    }),
+    commands: [WaitTypingPause({ timer })],
+  };
+};
+
 /** The card's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -945,6 +1033,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
                     answered: stillPending
                       ? [...model.answered, approvalId]
                       : model.answered,
+                    typing: model.typing,
                   }),
                   (request) => request.record.id
                 ),
@@ -967,6 +1056,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     DismissedClosed: () => ({
       model: modifyFields(model, { closed: () => Option.none() }),
     }),
+    ElapsedTypingPause: ({ timer }) =>
+      timer === model.typingTimer
+        ? guard(model, TypingGuardEvent.cases.Idled.make({}))
+        : { model },
   });
 
 const sameThreadId = Option.makeEquivalence<ThreadId>(Equal.equals);
@@ -989,13 +1082,15 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
 
   // The check generation and the timer carry over, so an answer to another thread's check is never
   // taken, and a pause or an undo window's wait from before the switch, which keeps running, never
-  // ends a later one.
+  // ends a later one. The typing guard carries over too: the composer is where it was.
   const base = sameThread
     ? model
     : {
         ...initial,
         checkGeneration: model.checkGeneration,
         timer: model.timer,
+        typing: model.typing,
+        typingTimer: model.typingTimer,
       };
 
   const reconnected = sameThread && !model.hasClient && context.hasClient;
@@ -1040,6 +1135,15 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
 
   const answered = base.answered.filter(isPending);
 
+  // A request new to the card while the user types waits for the pause.
+  const typing = updateTypingGuard(
+    base.typing,
+    TypingGuardEvent.cases.Requests.make({
+      requestIds: pendingIds,
+      now: GUARD_NOW,
+    })
+  );
+
   const next: Model = modifyFields(base, {
     threadId: () => context.threadId,
     hasClient: () => context.hasClient,
@@ -1059,9 +1163,10 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
     sendingBack: (sendingBack) => Option.filter(sendingBack, isPending),
     undo: (undo) => Option.filter(undo, (found) => isPending(found.approvalId)),
     answered: () => answered,
+    typing: () => typing,
     shown: () =>
       Option.map(
-        shownRequest({ approvals: context.approvals, answered }),
+        shownRequest({ approvals: context.approvals, answered, typing }),
         (request) => request.record.id
       ),
     closed: () => closed,
@@ -1091,4 +1196,12 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
 };
 
 /** The card's update and its root hooks. */
-export const requestCard = { update, inform, sameContext } as const;
+export const requestCard = {
+  update,
+  inform,
+  sameContext,
+  composerFocused,
+  composerBlurred,
+  composerTyped,
+  composerSent,
+} as const;

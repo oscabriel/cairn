@@ -46,12 +46,15 @@ import {
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import { makeFakePorch, PorchClient } from "./PorchClient.ts";
 import { isPortalName, PortalFaults, Portals } from "./Portals.ts";
 import type { PortalFaultHooks } from "./Portals.ts";
 import { PortalTools } from "./PortalTools.ts";
 import { makeFakeUnits, PortalUnits } from "./PortalUnits.ts";
+
+isolateGitEnvironment();
 
 const context = BACKGROUND_CONTEXT;
 

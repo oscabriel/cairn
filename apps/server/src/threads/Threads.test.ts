@@ -27,6 +27,7 @@ import type { Layer } from "effect";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
@@ -47,6 +48,8 @@ import {
 } from "./ThreadsTestKit.ts";
 import { TitleModel } from "./TitleModel.ts";
 import { TurnContent, textStage } from "./TurnContent.ts";
+
+isolateGitEnvironment();
 
 const stopped = Ref.makeUnsafe<ReadonlyArray<ThreadId>>([]);
 

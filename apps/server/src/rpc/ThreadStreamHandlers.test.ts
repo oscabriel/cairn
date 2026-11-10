@@ -34,6 +34,7 @@ import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
 import { Database } from "../db/Database.ts";
 import { Launches0002 } from "../db/migrations/0002Launches.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ShellProjector } from "../shell/ShellProjector.ts";
 import { LaunchStore } from "../threads/LaunchStore.ts";
 import { ThreadLaunch } from "../threads/ThreadLaunch.ts";
@@ -52,6 +53,8 @@ import {
   ThreadStreamHandlers,
   threadStreamHandlers,
 } from "./ThreadStreamHandlers.ts";
+
+isolateGitEnvironment();
 
 const isNotFound = Predicate.isTagged("NotFound");
 

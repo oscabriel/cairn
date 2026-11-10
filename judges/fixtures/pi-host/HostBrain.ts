@@ -157,7 +157,7 @@ const prepareAgentDir = (userAgent: string) => {
 
 const counterPolicy: PiPackagePolicy = {
   name: "pi-host-counter",
-  versions: "1.0.x",
+  versions: ["1.0.x"],
   scope: "brain",
   flags: () => new Map([["counter-dir", dir]]),
   env: () => new Map(),

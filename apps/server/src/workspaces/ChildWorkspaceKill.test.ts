@@ -20,6 +20,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Layer, Option, Schema } from "effect";
 
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { childBranchName, ChildWorkspaces } from "./ChildWorkspaces.ts";
 import {
   cairnWorktrees,
@@ -30,6 +31,8 @@ import {
   thread,
   workspacesAt,
 } from "./ChildWorkspacesTestKit.ts";
+
+isolateGitEnvironment();
 
 const fixture = path.join(
   import.meta.dirname,

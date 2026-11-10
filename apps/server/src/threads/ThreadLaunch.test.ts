@@ -26,6 +26,7 @@ import type { SqlClient } from "effect/sql";
 
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
 import {
@@ -52,6 +53,8 @@ import {
 } from "./ThreadsTestKit.ts";
 import { TurnContent, TurnContentError, textStage } from "./TurnContent.ts";
 import { TurnContentLive } from "./TurnContentStages.ts";
+
+isolateGitEnvironment();
 
 const rootWorkspace = RootWorkspace.make({ branch: Option.none() });
 

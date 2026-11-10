@@ -41,6 +41,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result, Schema } from "effect";
 
 import { answerApproval, Approvals } from "../brain/CairnDocs.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { taskOf } from "../subagents/Delivery.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { JudgeRunsDoc } from "./GoalDocs.ts";
@@ -60,6 +61,8 @@ import type { GoalKit, KitModel } from "./GoalTestKit.ts";
 import { NO_JUDGE_FAULTS } from "./JudgeRun.ts";
 import type { JudgeModels } from "./JudgeRun.ts";
 import { bindCriteria, criteriaAnswered } from "./Verdicts.ts";
+
+isolateGitEnvironment();
 
 const context = BACKGROUND_CONTEXT;
 

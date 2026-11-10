@@ -18,6 +18,7 @@ import {
   SAVED_ATTACHMENTS_KEY,
   saveSaved,
 } from "./Saved.ts";
+import type { SavedAttachments } from "./Saved.ts";
 import { clearSent, readyIds, restore, update } from "./Update.ts";
 import { isRetryableAnswer } from "./UploadQueue.ts";
 
@@ -30,6 +31,18 @@ const ref = (id: string) => ({
   sha256: "a".repeat(64),
 });
 
+/** The saved attachments as a tab reads them. */
+const storedSaved = Effect.map(loadSaved, ({ value }) => value);
+
+/** A save of `saved` over `base` by a tab that read storage just now; what storage holds after. */
+const save = (base: SavedAttachments, saved: SavedAttachments) =>
+  Effect.flatMap(loadSaved, ({ read }) =>
+    Effect.map(
+      saveSaved(base, read, saved),
+      Option.map(({ value }) => value)
+    )
+  );
+
 describe("saved attachments", () => {
   it.effect(
     "keep one this build cannot read, write it back, and let this build remove it by its id",
@@ -37,7 +50,7 @@ describe("saved attachments", () => {
       Effect.gen(function* () {
         const store = yield* KeyValueStore.KeyValueStore;
 
-        yield* saveSaved({}, { "thread:t1": [ref("att_a"), ref("att_b")] });
+        yield* save({}, { "thread:t1": [ref("att_a"), ref("att_b")] });
 
         // `att_b` as a build with another kind of attachment saved it.
         const text = (yield* store.get(SAVED_ATTACHMENTS_KEY)) ?? "";
@@ -49,14 +62,14 @@ describe("saved attachments", () => {
 
         yield* store.set(SAVED_ATTACHMENTS_KEY, newer);
 
-        const read = yield* loadSaved;
+        const read = yield* storedSaved;
 
-        yield* saveSaved(read, { ...read, "thread:t2": [ref("att_c")] });
+        yield* save(read, { ...read, "thread:t2": [ref("att_c")] });
 
         const kept = yield* store.get(SAVED_ATTACHMENTS_KEY);
 
         // A removal by id takes it out, though this build cannot decode it.
-        yield* saveSaved(
+        yield* save(
           { ...read, "thread:t1": [ref("att_a"), ref("att_b")] },
           read
         );
@@ -82,21 +95,21 @@ describe("saved attachments", () => {
   it.effect("are not restored once the brain's sweep has passed", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(1_760_000_000_000);
-      yield* saveSaved({}, { "thread:t1": [ref("att_old")] });
+      yield* save({}, { "thread:t1": [ref("att_old")] });
       yield* TestClock.adjust(Duration.hours(2));
-      yield* saveSaved(
+      yield* save(
         { "thread:t1": [ref("att_old")] },
         { "thread:t1": [ref("att_old"), ref("att_new")] }
       );
 
       expect(
-        (yield* loadSaved)["thread:t1"]?.map(({ id }) => id)
+        (yield* storedSaved)["thread:t1"]?.map(({ id }) => id)
       ).toStrictEqual(["att_old", "att_new"]);
 
       yield* TestClock.adjust(Duration.millis(RESTORE_WINDOW_MS - 1000));
 
       expect(
-        (yield* loadSaved)["thread:t1"]?.map(({ id }) => id)
+        (yield* storedSaved)["thread:t1"]?.map(({ id }) => id)
       ).toStrictEqual(["att_new"]);
 
       // A tab still holding the swept one does not write it back.
@@ -104,7 +117,7 @@ describe("saved attachments", () => {
         "thread:t1": [ref("att_old"), ref("att_new")],
       };
 
-      const stored = yield* saveSaved(held, held);
+      const stored = yield* save(held, held);
 
       expect(
         Option.map(stored, (saved) => saved["thread:t1"]?.map(({ id }) => id))
@@ -135,7 +148,7 @@ describe("saved attachments in two tabs", () => {
       yield* runSaves(restore(tabA, "thread:a", [ref("att_a")]));
       yield* runSaves(restore(tabB, "thread:b", [ref("att_b")]));
 
-      const stored = yield* loadSaved;
+      const stored = yield* storedSaved;
 
       expect({
         a: stored["thread:a"]?.map(({ id }) => id),
@@ -221,7 +234,7 @@ describe("saved attachments in two tabs", () => {
             : update(told.model, heardAnswer, { draftKey: Option.none() })
                 .model;
 
-        const stored = yield* loadSaved;
+        const stored = yield* storedSaved;
 
         expect({
           tray: readyIds(heard, "thread:a"),
@@ -266,7 +279,7 @@ describe("saved attachments in one tab", () => {
         const sentAnswers = yield* runSaves(sent);
 
         const tab = answered(sent.model, [...secondAnswers, ...sentAnswers]);
-        const stored = yield* loadSaved;
+        const stored = yield* storedSaved;
 
         expect({
           tray: readyIds(tab, "thread:a"),
@@ -337,7 +350,7 @@ describe("saved attachments in one tab", () => {
         // Any later save, here one asked because another tab wrote, writes the removal again.
         const told = update(refused, Message.ChangedStoredAttachments(), inA);
         const tab = answered(told.model, yield* runSaves(told));
-        const stored = yield* loadSaved;
+        const stored = yield* storedSaved;
 
         expect({
           tray: readyIds(tab, "thread:a"),
@@ -400,7 +413,7 @@ describe("saved attachments in one tab", () => {
         // Any later save writes the removal again.
         const told = update(tab, Message.ChangedStoredAttachments(), inA);
         const later = answered(told.model, yield* runSaves(told));
-        const stored = yield* loadSaved;
+        const stored = yield* storedSaved;
 
         expect({
           tray: readyIds(tab, "thread:a"),
@@ -477,7 +490,7 @@ describe("saved attachments in one tab", () => {
         // A later save keeps it too.
         const told = update(tab, Message.ChangedStoredAttachments(), inA);
         const later = answered(told.model, yield* runSaves(told));
-        const stored = yield* loadSaved;
+        const stored = yield* storedSaved;
 
         expect({
           tray: readyIds(tab, "thread:a"),

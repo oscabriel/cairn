@@ -47,10 +47,12 @@ import {
   enqueue,
   enqueueDispatch,
   OutboxItem,
+  outboxAttachments,
   outboxKey,
   readyToSend,
   rebaseOutbox,
   remove,
+  withAttachments,
 } from "./connection/Outbox.ts";
 import {
   acquired,
@@ -104,6 +106,7 @@ import type {
 } from "./shell/Model.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
 import * as NextShell from "./shell/Update.ts";
+import { laterRead } from "./storage/TabChanges.ts";
 import { threadRowOf } from "./ThreadRow.ts";
 import type { QueuedSend } from "./timeline/Model.ts";
 import { promptKey, sameSends } from "./timeline/Model.ts";
@@ -193,7 +196,7 @@ const queuedSendOf = (
   turn: TurnInput,
   sent: boolean
 ): QueuedSend => {
-  const refs = model.sentTurns[outboxKey(item)]?.attachments ?? [];
+  const refs = outboxAttachments(item);
 
   return {
     requestId: outboxKey(item),
@@ -437,7 +440,13 @@ const syncThread: Step = (current) => {
 /** Saves what this tab changed in the outbox since it last read or wrote it. */
 const persist: Step = (model) => ({
   model,
-  commands: [SaveOutbox({ base: model.outboxStored, outbox: model.outbox })],
+  commands: [
+    SaveOutbox({
+      base: model.outboxStored,
+      read: model.outboxRead,
+      outbox: model.outbox,
+    }),
+  ],
 });
 
 /**
@@ -842,12 +851,15 @@ const adoptScratchLaunch =
 const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
-      ({ attachments, draftKey, item, navigateTo }) =>
+      ({ attachments, draftKey, item: turn, navigateTo }) =>
       (model) => {
         // The scratch overlay's turn, by the draft it was sent from, whether the overlay still
         // shows or not: a refusal puts it back in the overlay, and the thread its first message
         // launches is the overlay's from now on (U-16).
         const fromScratch = draftKey === SCRATCH_DRAFT_KEY;
+
+        // Its attachments' refs are saved with it, so a refusal after a reload puts them back too.
+        const item = withAttachments(turn, attachments);
 
         return Update.combine(
           modifyFields(model, {
@@ -857,7 +869,6 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
                 ? sent
                 : Record.set(sent, outboxKey(item), {
                     item,
-                    attachments,
                     acknowledged: false,
                     fromScratch,
                   }),
@@ -1017,7 +1028,7 @@ const isCurrentEpoch = (model: Model, epoch: number): boolean =>
 /** Puts a turn the brain refused, or a launch that failed, back in the composer. */
 const restoreComposerTurn = Update.foldChild({
   update: (composer: Model["composer"], sent: SentTurn) =>
-    Composer.restoreTurn(composer, sent.item, sent.attachments),
+    Composer.restoreTurn(composer, sent.item, outboxAttachments(sent.item)),
   read: readComposer,
   write: writeComposer,
   toParentMessage: toGotComposerMessage,
@@ -1044,7 +1055,11 @@ const isScratchThread = (model: Model, threadId: ThreadId): boolean =>
 /** Puts a refused scratch turn back in the scratch overlay's composer draft (U-16). */
 const restoreComposerScratchTurn = Update.foldChild({
   update: (composer: Model["composer"], sent: SentTurn) =>
-    Composer.restoreScratchTurn(composer, sent.item, sent.attachments),
+    Composer.restoreScratchTurn(
+      composer,
+      sent.item,
+      outboxAttachments(sent.item)
+    ),
   read: readComposer,
   write: writeComposer,
   toParentMessage: toGotComposerMessage,
@@ -1066,8 +1081,8 @@ const UNSAVED_NOTICE =
 /**
  * Restores the turn `key` names and forgets it. A refused launch the user is waiting on, on its
  * thread's page, opens its draft again. A turn with no record (the page reloaded since it was
- * queued, and records live in memory) comes back from `refused`, the outbox item itself: its words
- * and settings, but not its attachments, whose refs only the record kept.
+ * queued, and records live in memory) comes back from `refused`, the outbox item itself, which
+ * keeps its words, settings and attachments' refs.
  */
 const restoreSent =
   (key: string, refused: Option.Option<SentTurn["item"]>): Step =>
@@ -1076,7 +1091,6 @@ const restoreSent =
       Option.orElse(Record.get(model.sentTurns, key), () =>
         Option.map(refused, (item): SentTurn => ({
           item,
-          attachments: [],
           acknowledged: false,
           // With no record the origin is unknown; the scratch thread's turns go back to the overlay.
           fromScratch: Option.exists(turnThread(item), (threadId) =>
@@ -1547,7 +1561,7 @@ const step = (received: Message): Step =>
     // Saving merges into what the other tab wrote, and its answer brings those items here.
     ChangedStoredOutbox: () => persist,
     CompletedSaveOutbox:
-      ({ stored, written }) =>
+      ({ read, stored, written }) =>
       (model) =>
         Option.match(stored, {
           onNone: () => ({
@@ -1566,6 +1580,7 @@ const step = (received: Message): Step =>
               modifyFields(model, {
                 outbox: () => outbox,
                 outboxStored: () => saved,
+                outboxRead: (last) => laterRead(read, last),
                 outboxAdopted: (adopted) => [
                   ...Array.filter(adopted, (key) => keys.includes(key)),
                   ...adopting,
@@ -1660,6 +1675,7 @@ export const init: Runtime.RoutingApplicationInit<
       shell: Option.map(flags.boot, (boot) => boot.shell),
       outbox: flags.outbox,
       outboxStored: flags.outbox,
+      outboxRead: flags.outboxRead,
       outboxInFlight: [],
       outboxAttempt: {},
       outboxResend: [],

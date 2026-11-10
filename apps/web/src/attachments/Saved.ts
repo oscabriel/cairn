@@ -18,7 +18,13 @@ import {
   mergeStored,
   unreadId,
 } from "../storage/TabChanges.ts";
-import type { ListChanges, Persisted } from "../storage/TabChanges.ts";
+import type {
+  LastRead,
+  ListChanges,
+  Persisted,
+  Stored,
+  Synced,
+} from "../storage/TabChanges.ts";
 
 /**
  * The localStorage key of the saved ready attachments, one JSON object of `AttachmentRef` lists by
@@ -272,30 +278,29 @@ const persistedSaved: Persisted<
 };
 
 /**
- * Reads the saved attachments. Missing storage is none: attaching never waits on it. One this build
- * cannot decode, or a value it cannot read at all, is left as stored.
+ * Reads the saved attachments, and when (`Stored.read`). Missing storage is none: attaching never
+ * waits on it. One this build cannot decode, or a value it cannot read at all, is left as stored.
  */
 export const loadSaved: Effect.Effect<
-  SavedAttachments,
+  Stored<SavedAttachments>,
   never,
   KeyValueStore.KeyValueStore
-> = Effect.map(
-  loadShared(SAVED_ATTACHMENTS_KEY, persistedSaved),
-  ({ value }) => value
-);
+> = loadShared(SAVED_ATTACHMENTS_KEY, persistedSaved);
 
 /**
  * Writes the attachments this tab added or removed since `base` (the saved attachments as it last
- * asked for them to be written, or read them) into what storage holds now, so another tab's are kept, and writes back one of
- * this tab's that another tab's write dropped without removing it. One past the brain's sweep is
- * left out, as a read leaves it out, so it is never written back. Answers what storage holds
- * afterwards, or none when storage refused.
+ * asked for them to be written, or read them; it last read storage at `read`) into what storage
+ * holds now, so another tab's are kept, and writes back one of this tab's that another tab's write
+ * dropped without removing it, unless storage was cleared or the read is too old to tell
+ * (`mergeStored`). One past the brain's sweep is left out, as a read leaves it out, so it is never
+ * written back. Answers what storage holds afterwards, or none when storage refused.
  */
 export const saveSaved = (
   base: SavedAttachments,
+  read: Option.Option<LastRead>,
   saved: SavedAttachments
 ): Effect.Effect<
-  Option.Option<SavedAttachments>,
+  Option.Option<Synced<SavedAttachments>>,
   never,
   KeyValueStore.KeyValueStore
 > =>
@@ -306,11 +311,12 @@ export const saveSaved = (
     return yield* mergeStored(
       SAVED_ATTACHMENTS_KEY,
       persistedSaved,
-      (stored, removals, held) =>
+      read,
+      (stored, removed, held) =>
         Option.map(
           mergeList(entryKey)(entriesOf(freshBase), entriesOf(fresh))(
             entriesOf(stored),
-            removals,
+            removed,
             held
           ),
           (merged) => ({ ...merged, value: savedOf(merged.value) })

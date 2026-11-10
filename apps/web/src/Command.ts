@@ -2,7 +2,7 @@
 // save. Each reads what it needs from the resources the runtime provides (the connection, the
 // browser's key-value store) and answers with one Message.
 
-import { Clock, Duration, Effect, Random, Schema } from "effect";
+import { Clock, Duration, Effect, Option, Random, Schema } from "effect";
 import type { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { load, pushUrl } from "foldkit/navigation";
@@ -26,6 +26,7 @@ import {
 import { backoffDelayMs } from "./connection/Reconnect.ts";
 import { checkServerBuild, reloadIfStale } from "./load/StaleBuild.ts";
 import { Message } from "./Message.ts";
+import { LastRead } from "./storage/TabChanges.ts";
 
 /** Every service a root Command or Subscription may read. */
 export type Services = CairnConnectionService | KeyValueStore.KeyValueStore;
@@ -191,12 +192,23 @@ export const SendOutboxItem = Command.define("SendOutboxItem", {
     ),
 });
 
-/** Saves to localStorage what this tab changed in the outbox since `base`, as it last read or wrote it. */
+/**
+ * Saves to localStorage what this tab changed in the outbox since `base`, as it last read or wrote
+ * it (it last read storage at `read`).
+ */
 export const SaveOutbox = Command.define("SaveOutbox", {
-  args: { base: Schema.Array(OutboxItem), outbox: Schema.Array(OutboxItem) },
+  args: {
+    base: Schema.Array(OutboxItem),
+    read: Schema.Option(LastRead),
+    outbox: Schema.Array(OutboxItem),
+  },
   messages: [Message.CompletedSaveOutbox],
-  execute: ({ base, outbox }) =>
-    Effect.map(saveOutbox(base, outbox), (stored) =>
-      Message.CompletedSaveOutbox({ written: outbox, stored })
+  execute: ({ base, outbox, read }) =>
+    Effect.map(saveOutbox(base, read, outbox), (synced) =>
+      Message.CompletedSaveOutbox({
+        written: outbox,
+        stored: Option.map(synced, ({ value }) => value),
+        read: Option.map(synced, (answer) => answer.read),
+      })
     ),
 });

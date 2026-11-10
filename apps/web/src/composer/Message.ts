@@ -16,6 +16,7 @@ import { defineMessageUnion } from "foldkit/message";
 import { Message as AttachmentsMessage } from "../attachments/Message.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { EnvMode } from "../hero/ContextStrip.ts";
+import { LastRead } from "../storage/TabChanges.ts";
 import { ComposerSettings, Draft, Popover } from "./Model.ts";
 
 /** What a send key or button asks for. */
@@ -90,11 +91,12 @@ export const Message = defineMessageUnion({
   DetectedPlatform: { isMac: Schema.Boolean },
   /**
    * `tell`: storage also holds drafts this build cannot decode, kept as they are, that no load told
-   * the user about.
+   * the user about. `read`: when, none when storage refused.
    */
   LoadedDrafts: {
     drafts: Schema.Record(Schema.String, Draft),
     tell: Schema.Boolean,
+    read: Schema.Option(LastRead),
   },
   LoadedSettings: { settings: ComposerSettings },
   MintedHomeDraft: { draftId: ThreadId },
@@ -104,12 +106,13 @@ export const Message = defineMessageUnion({
   HidPage: {},
   /**
    * Drafts up to `version` were written as `written`; `stored` is what storage held afterwards, with
-   * other tabs' drafts, or none when storage refused.
+   * other tabs' drafts, read at `read`, or none when storage refused.
    */
   CompletedSaveDrafts: {
     version: Schema.Int,
     written: Schema.Record(Schema.String, Draft),
     stored: Schema.Option(Schema.Record(Schema.String, Draft)),
+    read: Schema.Option(LastRead),
   },
   /** Another tab wrote the drafts. */
   ChangedStoredDrafts: {},

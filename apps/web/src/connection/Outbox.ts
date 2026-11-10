@@ -17,8 +17,10 @@
 // Every tab of the browser shares the saved outbox: a save writes only the items this tab queued or
 // dropped, and another tab's write is folded in (`TabChanges.ts`). Items are read one by one: an
 // item this build cannot decode is kept as stored and sent by a build that can, and the page says
-// it holds sends it cannot show.
+// it holds sends it cannot show. A turn's item keeps the refs of its attachments beside its input,
+// so a turn the brain refuses after a reload goes back to the composer whole.
 
+import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { commandMintedAtMillis } from "@cairn/protocol/Ids";
 import { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import {
@@ -39,7 +41,7 @@ import {
   mergeStored,
   readShared,
 } from "../storage/TabChanges.ts";
-import type { Loaded } from "../storage/TabChanges.ts";
+import type { LastRead, Loaded, Synced } from "../storage/TabChanges.ts";
 
 // The saved outbox is this union as it stands, with the protocol's inputs as they are, so a change to
 // `SendInput`, `ShellCommand` or `ThreadLaunchInput` is a change to it. Add a field as optional, or a
@@ -47,15 +49,47 @@ import type { Loaded } from "../storage/TabChanges.ts";
 // what a stored field means, or the list's outer shape, and bump `OUTBOX_STORAGE_KEY`'s version.
 /** One mutation waiting for the brain's acknowledgement. */
 export const OutboxItem = defineTaggedUnion({
-  /** `thread.send`, idempotent by its input's `requestId`. */
-  Send: { input: SendInput },
+  /**
+   * `thread.send`, idempotent by its input's `requestId`. `attachments` are the refs of the
+   * attachments it carries (its input names only their ids), which never go to the brain.
+   */
+  Send: {
+    input: SendInput,
+    attachments: Schema.optionalKey(Schema.Array(AttachmentRef)),
+  },
   /** `shell.dispatch`, idempotent by the command's `commandId`. */
   Dispatch: { command: ShellCommand },
-  /** `thread.launch`, idempotent by its `commandId`. */
-  Launch: { input: ThreadLaunchInput },
+  /** `thread.launch`, idempotent by its `commandId`; `attachments` as for a send. */
+  Launch: {
+    input: ThreadLaunchInput,
+    attachments: Schema.optionalKey(Schema.Array(AttachmentRef)),
+  },
 });
 
 export type OutboxItem = typeof OutboxItem.Type;
+
+/** The refs of the attachments a turn carries; none for a shell command. */
+export const outboxAttachments = (
+  item: OutboxItem
+): ReadonlyArray<AttachmentRef> =>
+  OutboxItem.match(item, {
+    Send: ({ attachments }) => attachments ?? [],
+    Launch: ({ attachments }) => attachments ?? [],
+    Dispatch: () => [],
+  });
+
+/** `item` carrying the refs of its attachments, so they come back with it if the brain refuses it. */
+export const withAttachments = (
+  item: OutboxItem,
+  attachments: ReadonlyArray<AttachmentRef>
+): OutboxItem =>
+  attachments.length === 0
+    ? item
+    : OutboxItem.match(item, {
+        Send: ({ input }) => OutboxItem.Send({ input, attachments }),
+        Launch: ({ input }) => OutboxItem.Launch({ input, attachments }),
+        Dispatch: () => item,
+      });
 
 /** The localStorage key the outbox is saved under. */
 export const OUTBOX_STORAGE_KEY = "cairn:outbox:v1";
@@ -253,22 +287,25 @@ const outboxChanges = listChanges(outboxKey);
 const applyOutboxChanges = applyListChanges(outboxKey);
 
 /**
- * Saves the items this tab queued or dropped since `base` (the outbox as it last read or wrote it)
- * into what storage holds now, so another tab's waiting items are kept, and writes back an item of
- * this tab's that another tab's write dropped without removing it. Answers what storage holds
- * afterwards, or none when storage was full or refused.
+ * Saves the items this tab queued or dropped since `base` (the outbox as it last read or wrote it,
+ * at `read`) into what storage holds now, so another tab's waiting items are kept, and writes back
+ * an item of this tab's that another tab's write dropped without removing it, unless storage was
+ * cleared or the read is too old to tell (`mergeStored`). Answers what storage holds afterwards, or
+ * none when storage was full or refused.
  */
 export const saveOutbox = (
   base: ReadonlyArray<OutboxItem>,
+  read: Option.Option<LastRead>,
   outbox: ReadonlyArray<OutboxItem>
 ): Effect.Effect<
-  Option.Option<ReadonlyArray<OutboxItem>>,
+  Option.Option<Synced<ReadonlyArray<OutboxItem>>>,
   never,
   KeyValueStore.KeyValueStore
 > =>
   mergeStored(
     OUTBOX_STORAGE_KEY,
     persistedOutbox,
+    read,
     mergeList(outboxKey)(base, outbox)
   );
 

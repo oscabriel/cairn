@@ -28,6 +28,7 @@ import type { Message as TrayMessage } from "../attachments/Message.ts";
 import * as Tray from "../attachments/Update.ts";
 import type { Services } from "../Command.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
+import { laterRead } from "../storage/TabChanges.ts";
 import {
   ConfigureThread,
   DetectPlatform,
@@ -687,20 +688,24 @@ const saveDraftsCommand = (model: Model) =>
   SaveDrafts({
     version: model.draftsVersion,
     base: model.storedDrafts,
+    read: model.storedDraftsRead,
     drafts: { ...model.sending, ...model.drafts },
   });
 
 /**
- * The composer once storage holds `stored`: it becomes the base of the next save, and the drafts
- * take every draft this tab did not change since `written`, so other tabs' drafts show here.
+ * The composer once storage holds `stored`, read at `read`: it becomes the base of the next save,
+ * and the drafts take every draft this tab did not change since `written`, so other tabs' drafts
+ * show here, and one storage no longer holds goes.
  */
 const syncDrafts = (
   model: Model,
   written: Model["drafts"],
-  stored: Model["drafts"]
+  stored: Model["drafts"],
+  read: Model["storedDraftsRead"]
 ): Model =>
   modifyFields(model, {
     storedDrafts: () => stored,
+    storedDraftsRead: (last) => laterRead(read, last),
     drafts: (drafts) => rebaseDrafts(written, drafts, stored),
   });
 
@@ -1505,10 +1510,10 @@ const step = (model: Model, message: Message): UpdateReturn =>
     DetectedPlatform: ({ isMac }) => ({
       model: modifyFields(model, { isMac: () => isMac }),
     }),
-    LoadedDrafts: ({ drafts, tell }) => {
+    LoadedDrafts: ({ drafts, read, tell }) => {
       // Edits made before storage answered win over what was saved.
       const loaded = modifyFields(
-        syncDrafts(model, model.storedDrafts, drafts),
+        syncDrafts(model, model.storedDrafts, drafts, read),
         { draftsLoaded: () => true }
       );
 
@@ -1548,7 +1553,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
       model,
       commands: [saveDraftsCommand(model)],
     }),
-    CompletedSaveDrafts: ({ stored, version, written }) =>
+    CompletedSaveDrafts: ({ read, stored, version, written }) =>
       Option.match(stored, {
         onNone: () =>
           notice(
@@ -1556,7 +1561,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
             "Drafts could not be saved on this device. Keep this page open until you send."
           ),
         onSome: (drafts) => ({
-          model: modifyFields(syncDrafts(model, written, drafts), {
+          model: modifyFields(syncDrafts(model, written, drafts, read), {
             savedVersion: (current) => Math.max(current, version),
           }),
         }),

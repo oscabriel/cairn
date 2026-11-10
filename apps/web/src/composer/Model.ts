@@ -28,6 +28,7 @@ import { defineTaggedUnion } from "foldkit/schema";
 
 import * as Attachments from "../attachments/Model.ts";
 import { EnvMode } from "../hero/ContextStrip.ts";
+import { LastRead } from "../storage/TabChanges.ts";
 
 /** What the composer writes into: nothing, the home draft, a named draft, or an open thread. */
 export const ComposerTarget = defineTaggedUnion({
@@ -210,6 +211,8 @@ export const Model = Schema.Struct({
   draftsLoaded: Schema.Boolean,
   /** The drafts as this tab last read or wrote them in storage; a save writes what changed since. */
   storedDrafts: Schema.Record(Schema.String, Draft),
+  /** When this tab last read the drafts in storage; none before the first read answers. */
+  storedDraftsRead: Schema.Option(LastRead),
   /**
    * Drafts sent and emptied whose turn the outbox does not hold yet (its ids are being minted, or a
    * launch's scratch project made), by draft key. They are saved in place of the emptied draft until
@@ -262,6 +265,7 @@ export const initial: Model = {
   drafts: {},
   draftsLoaded: false,
   storedDrafts: {},
+  storedDraftsRead: Option.none(),
   sending: {},
   draftsVersion: 0,
   savedVersion: 0,

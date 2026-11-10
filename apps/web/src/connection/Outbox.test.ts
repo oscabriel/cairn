@@ -8,6 +8,7 @@ import {
   DateTime,
   Duration,
   Effect,
+  Layer,
   Option,
   Predicate,
   Ref,
@@ -35,6 +36,7 @@ import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
 import { AppRoute } from "../Route.ts";
 import { Message as NextShellMessage } from "../shell/Message.ts";
+import { REMOVAL_MEMORY_MS } from "../storage/TabChanges.ts";
 import {
   connectingModel,
   hello,
@@ -57,6 +59,9 @@ import {
 /** The saved outbox's items this build can decode. */
 const storedOutbox = Effect.map(readOutbox, ({ value }) => value);
 
+/** A read of the saved outbox: its items, and whether it tells the user storage holds more. */
+const readTold = Effect.map(readOutbox, ({ tell, value }) => ({ value, tell }));
+
 const first = sendItem("request-1");
 
 const second = sendItem("request-2");
@@ -69,7 +74,11 @@ const names = (result: ReturnType<typeof update>) =>
 
 /** The answer to a save of `outbox`, when no other tab wrote meanwhile. */
 const savedAs = (outbox: ReadonlyArray<OutboxItem>) =>
-  Message.CompletedSaveOutbox({ written: outbox, stored: Option.some(outbox) });
+  Message.CompletedSaveOutbox({
+    written: outbox,
+    stored: Option.some(outbox),
+    read: Option.none(),
+  });
 
 /** What a failed send reports, or none for any other answer. */
 const failure = (answer: Message) =>
@@ -267,7 +276,7 @@ describe("the outbox", () => {
         expect(current.outboxInFlight).toStrictEqual(["request-1"]);
       }),
       Command.expectExact(
-        SaveOutbox({ base: [], outbox: [first] }),
+        SaveOutbox({ base: [], read: Option.none(), outbox: [first] }),
         SendOutboxItem({ epoch: 0, item: first })
       ),
       Command.resolve(SaveOutbox, savedAs([first])),
@@ -279,7 +288,9 @@ describe("the outbox", () => {
         expect(current.outbox).toStrictEqual([]);
         expect(current.outboxInFlight).toStrictEqual([]);
       }),
-      Command.expectExact(SaveOutbox({ base: [first], outbox: [] })),
+      Command.expectExact(
+        SaveOutbox({ base: [first], read: Option.none(), outbox: [] })
+      ),
       Command.resolve(SaveOutbox, savedAs([]))
     );
   });
@@ -295,12 +306,20 @@ describe("the outbox", () => {
       }),
       message(Message.QueuedOutboxItem({ item: second })),
       Command.expectExact(
-        SaveOutbox({ base: [first], outbox: [first, second] })
+        SaveOutbox({
+          base: [first],
+          read: Option.none(),
+          outbox: [first, second],
+        })
       ),
       Command.resolve(SaveOutbox, savedAs([first, second])),
       message(Message.AcknowledgedOutboxItem({ epoch: 0, key: "request-1" })),
       Command.expectExact(
-        SaveOutbox({ base: [first, second], outbox: [second] }),
+        SaveOutbox({
+          base: [first, second],
+          read: Option.none(),
+          outbox: [second],
+        }),
         SendOutboxItem({ epoch: 0, item: second })
       ),
       Command.resolve(SaveOutbox, savedAs([second])),
@@ -320,7 +339,9 @@ describe("the outbox", () => {
       update,
       given(connectingModel),
       message(Message.QueuedOutboxItem({ item: first })),
-      Command.expectExact(SaveOutbox({ base: [], outbox: [first] })),
+      Command.expectExact(
+        SaveOutbox({ base: [], read: Option.none(), outbox: [first] })
+      ),
       Command.resolve(SaveOutbox, savedAs([first])),
       message(Message.AcquiredConnection()),
       Command.resolve(SayHello, Message.SucceededHello({ epoch: 0, hello })),
@@ -398,7 +419,11 @@ describe("the outbox", () => {
         );
       }),
       Command.expectExact(
-        SaveOutbox({ base: [first, second], outbox: [second] }),
+        SaveOutbox({
+          base: [first, second],
+          read: Option.none(),
+          outbox: [second],
+        }),
         SendOutboxItem({ epoch: 0, item: second })
       ),
       Command.resolve(SaveOutbox, savedAs([second])),
@@ -594,7 +619,7 @@ describe("the outbox", () => {
 
   it("survives a reload through storage, and reads unreadable storage as empty", async () => {
     const roundTrip = Effect.gen(function* () {
-      const saved = yield* saveOutbox([], [first, second]);
+      const saved = yield* saveOutbox([], Option.none(), [first, second]);
       const loaded = yield* storedOutbox;
       const store = yield* KeyValueStore.KeyValueStore;
 
@@ -617,7 +642,7 @@ describe("the outbox", () => {
       Effect.gen(function* () {
         const store = yield* KeyValueStore.KeyValueStore;
 
-        yield* saveOutbox([], [first]);
+        yield* saveOutbox([], Option.none(), [first]);
 
         // A send from a build whose `whenBusy` has a value this build does not know.
         const newer = JSON.stringify(
@@ -634,10 +659,10 @@ describe("the outbox", () => {
         const read = yield* readOutbox;
         const third = sendItem("request-3");
 
-        yield* saveOutbox(read.value, [...read.value, third]);
+        yield* saveOutbox(read.value, read.read, [...read.value, third]);
 
         return {
-          loaded: read,
+          loaded: { value: read.value, tell: read.tell },
           after: yield* storedOutbox,
           stored: yield* store.get(OUTBOX_STORAGE_KEY),
         };
@@ -664,23 +689,23 @@ describe("the outbox", () => {
             )
           );
 
-        yield* saveOutbox([], [first]);
+        yield* saveOutbox([], Option.none(), [first]);
         yield* append(yield* fromNewerBuild(second));
 
         const told = yield* readOutbox;
         const third = sendItem("request-3");
 
         // This tab queues a send and the brain settles it: storage is written twice.
-        yield* saveOutbox(told.value, [...told.value, third]);
-        yield* saveOutbox([...told.value, third], told.value);
+        yield* saveOutbox(told.value, told.read, [...told.value, third]);
+        yield* saveOutbox([...told.value, third], told.read, told.value);
 
-        const again = yield* readOutbox;
+        const again = yield* readTold;
 
         yield* append(yield* fromNewerBuild(sendItem("request-4")));
 
-        const another = yield* readOutbox;
+        const another = yield* readTold;
 
-        return { told, again, another };
+        return { told: { value: told.value, tell: told.tell }, again, another };
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
@@ -698,12 +723,12 @@ describe("the outbox", () => {
 
         // Storage is unreadable as a whole, so the send goes to the recovery copy.
         yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
-        yield* saveOutbox([], [first]);
+        yield* saveOutbox([], Option.none(), [first]);
 
         // A newer build writes a value this build reads, without the send.
         yield* store.set(OUTBOX_STORAGE_KEY, "[]");
 
-        return yield* readOutbox;
+        return yield* readTold;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
@@ -714,8 +739,15 @@ describe("the outbox", () => {
     const url = Option.getOrThrow(Url.fromString("https://code.gneiss.run/"));
 
     const notice = (outboxUnread: boolean) =>
-      init({ boot: Option.none(), outbox: [first], outboxUnread }, url).model
-        .notice;
+      init(
+        {
+          boot: Option.none(),
+          outbox: [first],
+          outboxRead: Option.none(),
+          outboxUnread,
+        },
+        url
+      ).model.notice;
 
     expect(notice(true)).toStrictEqual(Option.some(UNREAD_STORED_NOTICE));
     expect(notice(false)).toStrictEqual(Option.none());
@@ -729,11 +761,14 @@ describe("the outbox", () => {
         yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
 
         const read = yield* readOutbox;
-        const stored = yield* saveOutbox(read.value, [first]);
+        const stored = yield* saveOutbox(read.value, read.read, [first]);
 
         return {
-          loaded: read,
-          saved: { stored, reread: yield* storedOutbox },
+          loaded: { value: read.value, tell: read.tell },
+          saved: {
+            stored: Option.map(stored, ({ value }) => value),
+            reread: yield* storedOutbox,
+          },
           kept: yield* store.get(OUTBOX_STORAGE_KEY),
         };
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
@@ -757,6 +792,17 @@ const runSaves = (result: ReturnType<typeof update>) =>
       (result.commands ?? []).filter(({ name }) => name === SaveOutbox.name),
       (command) => command.effect
     ).pipe(Effect.provideService(CairnConnection._tag, disconnected));
+  });
+
+/** `tab` told another tab wrote, after its save (which reads storage) answered. */
+const hearOutbox = (tab: Model) =>
+  Effect.gen(function* () {
+    const told = update(tab, Message.ChangedStoredOutbox());
+    const [answer] = yield* runSaves(told);
+
+    return answer === undefined
+      ? { model: told.model, commands: told.commands ?? [] }
+      : update(told.model, answer);
   });
 
 describe("the outbox in two tabs", () => {
@@ -875,18 +921,97 @@ describe("the outbox in two tabs", () => {
       stored: ["request-2", "request-1"],
     });
   });
-});
 
-/** `tab` told another tab wrote, after its save (which reads storage) answered. */
-const hearOutbox = (tab: Model) =>
-  Effect.gen(function* () {
-    const told = update(tab, Message.ChangedStoredOutbox());
-    const [answer] = yield* runSaves(told);
+  it("drops what it held once site data was cleared under it, instead of writing it back", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
 
-    return answer === undefined
-      ? { model: told.model, commands: told.commands ?? [] }
-      : update(told.model, answer);
+        const queued = update(
+          connectingModel,
+          Message.QueuedOutboxItem({ item: first })
+        );
+
+        const [saved] = yield* runSaves(queued);
+
+        const tab =
+          saved === undefined
+            ? queued.model
+            : update(queued.model, saved).model;
+
+        // Another tab clears the site's data; the browser tells this one with a `storage` event.
+        yield* store.clear;
+
+        const heard = yield* hearOutbox(tab);
+
+        return {
+          outbox: heard.model.outbox.map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(result).toStrictEqual({ outbox: [], stored: [] });
   });
+
+  it("never writes back an item another tab removed while it slept longer than removals are kept", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(1_760_000_000_000);
+
+        const queued = update(
+          connectingModel,
+          Message.QueuedOutboxItem({ item: first })
+        );
+
+        const [saved] = yield* runSaves(queued);
+
+        const tabA =
+          saved === undefined
+            ? queued.model
+            : update(queued.model, saved).model;
+
+        // Tab B reads the item, then sleeps.
+        const tabB = (yield* hearOutbox(connectingModel)).model;
+
+        // Tab A hears the brain acknowledge the item, and saves the outbox without it.
+        yield* runSaves(
+          update(
+            tabA,
+            Message.AcknowledgedOutboxItem({ epoch: 0, key: "request-1" })
+          )
+        );
+
+        // Tab B wakes a day and an hour later, and queues an item of its own.
+        yield* TestClock.adjust(
+          Duration.millis(REMOVAL_MEMORY_MS + 60 * 60 * 1000)
+        );
+
+        const woke = update(tabB, Message.QueuedOutboxItem({ item: second }));
+        const [answer] = yield* runSaves(woke);
+
+        const after =
+          answer === undefined ? woke.model : update(woke.model, answer).model;
+
+        return {
+          held: tabB.outbox.map(outboxKey),
+          outbox: after.outbox.map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
+        };
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(KeyValueStore.layerMemory, TestClock.layer())
+        )
+      )
+    );
+
+    expect(result).toStrictEqual({
+      held: ["request-1"],
+      outbox: ["request-2"],
+      stored: ["request-2"],
+    });
+  });
+});
 
 describe("this tab's turns in two tabs", () => {
   const launch = launchItem("01890a5d-ac96-774b-bcce-b302099a80a1");
@@ -895,7 +1020,7 @@ describe("this tab's turns in two tabs", () => {
   it("are settled here when another tab's answer removes them: a launch is followed, a send forgotten", async () => {
     const sentTurns = await Effect.runPromise(
       Effect.gen(function* () {
-        yield* saveOutbox([], [first, launch]);
+        yield* saveOutbox([], Option.none(), [first, launch]);
 
         const tabA: Model = {
           ...connectingModel,
@@ -904,13 +1029,11 @@ describe("this tab's turns in two tabs", () => {
           sentTurns: {
             "request-1": {
               item: first,
-              attachments: [],
               acknowledged: false,
               fromScratch: false,
             },
             [launchKey]: {
               item: launch,
-              attachments: [],
               acknowledged: false,
               fromScratch: false,
             },
@@ -918,7 +1041,7 @@ describe("this tab's turns in two tabs", () => {
         };
 
         // Tab B was acknowledged both and saved the outbox without them.
-        yield* saveOutbox([first, launch], []);
+        yield* saveOutbox([first, launch], Option.none(), []);
 
         return (yield* hearOutbox(tabA)).model.sentTurns;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
@@ -927,7 +1050,6 @@ describe("this tab's turns in two tabs", () => {
     expect(sentTurns).toStrictEqual({
       [launchKey]: {
         item: launch,
-        attachments: [],
         acknowledged: true,
         fromScratch: false,
       },
@@ -938,7 +1060,7 @@ describe("this tab's turns in two tabs", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         // Tab A queued the turn; tab B hears of it and sends it.
-        yield* saveOutbox([], [first]);
+        yield* saveOutbox([], Option.none(), [first]);
 
         const heard = yield* hearOutbox(liveModel(0));
 
@@ -981,7 +1103,7 @@ describe("this tab's turns in two tabs", () => {
     const queued = await Effect.runPromise(
       Effect.gen(function* () {
         // Tab A queued the turn and closed; tab B, on that thread's page, is refused it.
-        yield* saveOutbox([], [first]);
+        yield* saveOutbox([], Option.none(), [first]);
 
         const onThread: Model = {
           ...liveModel(0),
@@ -1045,6 +1167,7 @@ describe("a turn the brain refuses", () => {
             version: 1,
             written: {},
             stored: Option.some({}),
+            read: Option.none(),
           }),
         ]
       ),
@@ -1066,6 +1189,7 @@ describe("a turn the brain refuses", () => {
             base: {},
             written: { [threadKey]: [ref] },
             stored: Option.some({ [threadKey]: [ref] }),
+            read: Option.none(),
           }),
         ]
       ),
@@ -1124,6 +1248,7 @@ describe("a turn the brain refuses", () => {
             version: 1,
             written: {},
             stored: Option.some({}),
+            read: Option.none(),
           }),
         ]
       ),
@@ -1145,6 +1270,7 @@ describe("a turn the brain refuses", () => {
             base: {},
             written: { [threadKey]: [ref] },
             stored: Option.some({ [threadKey]: [ref] }),
+            read: Option.none(),
           }),
         ]
       ),
@@ -1256,5 +1382,76 @@ describe("a turn the brain refuses", () => {
       }),
       Command.resolve(SaveOutbox, savedAs([]))
     );
+  });
+
+  it("goes back into its thread's draft with its attachments after a reload, when only the outbox kept it", async () => {
+    const threadKey = "thread:01890a5d-ac96-774b-bcce-b302099a8057";
+
+    // A turn with an attachment and a skill, which its words name.
+    const turn = OutboxItem.match(first, {
+      Send: ({ input }) =>
+        OutboxItem.Send({
+          input: {
+            ...input,
+            input: {
+              ...input.input,
+              text: "message request-1 $review",
+              attachments: [ref.id],
+              skillRefs: ["review"],
+            },
+          },
+        }),
+      Dispatch: (item) => OutboxItem.Dispatch(item),
+      Launch: (item) => OutboxItem.Launch(item),
+    });
+
+    const restored = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sent = update(
+          liveModel(0),
+          Message.GotComposerMessage({
+            message: ComposerMessage.PreparedTurn({
+              draftKey: threadKey,
+              item: turn,
+              navigateTo: Option.none(),
+              attachments: [ref],
+            }),
+          })
+        );
+
+        yield* runSaves(sent);
+
+        // The page reloads: the turn is in the saved outbox, and its sent-turn record is gone.
+        const saved = yield* storedOutbox;
+
+        const refused = update(
+          {
+            ...liveModel(0),
+            outbox: saved,
+            outboxStored: saved,
+            outboxInFlight: ["request-1"],
+          },
+          Message.FailedOutboxItem({
+            epoch: 0,
+            key: "request-1",
+            retryable: false,
+            transport: false,
+            message: "Thread 01890a5d is archived.",
+          })
+        ).model;
+
+        return {
+          text: refused.composer.drafts[threadKey]?.text,
+          attachments: refused.composer.drafts[threadKey]?.attachments,
+          tray: readyIds(refused.composer.attachments, threadKey),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(restored).toStrictEqual({
+      text: "message request-1 $review",
+      attachments: [ref.id],
+      tray: [ref.id],
+    });
   });
 });

@@ -49,8 +49,15 @@ const at = (path: string) =>
 const loadAt = (path: string, messages: ReadonlyArray<RootMessage>) =>
   Array.reduce(
     messages,
-    rootInit({ boot: Option.none(), outbox: [], outboxUnread: false }, at(path))
-      .model,
+    rootInit(
+      {
+        boot: Option.none(),
+        outbox: [],
+        outboxRead: Option.none(),
+        outboxUnread: false,
+      },
+      at(path)
+    ).model,
     (model, message) => rootUpdate(model, message).model
   );
 
@@ -60,7 +67,7 @@ const shown = (model: RootModel) =>
 
 const loadedDrafts = (tell: boolean) =>
   RootMessage.GotComposerMessage({
-    message: Message.LoadedDrafts({ drafts: {}, tell }),
+    message: Message.LoadedDrafts({ drafts: {}, tell, read: Option.none() }),
   });
 
 describe("the saved drafts", () => {
@@ -80,16 +87,19 @@ describe("the saved drafts", () => {
 
         const read = yield* readDrafts;
 
-        yield* saveDrafts(read.value, { ...read.value, "thread:c": three });
+        yield* saveDrafts(read.value, read.read, {
+          ...read.value,
+          "thread:c": three,
+        });
 
         const after = yield* store.get(DRAFTS_STORAGE_KEY);
         const reread = yield* readDrafts;
 
         assert.notInclude(older, "envMode");
-        assert.deepStrictEqual(read, {
-          value: { "thread:a": one },
-          tell: true,
-        });
+        assert.deepStrictEqual(
+          { value: read.value, tell: read.tell },
+          { value: { "thread:a": one }, tell: true }
+        );
         assert.deepStrictEqual(storedKeys(after), [
           "thread:a",
           "thread:b",
@@ -97,10 +107,10 @@ describe("the saved drafts", () => {
         ]);
         assert.include(after, `"thread:b":${older}`);
         // The next load does not tell again about the draft the last one told about.
-        assert.deepStrictEqual(reread, {
-          value: { "thread:a": one, "thread:c": three },
-          tell: false,
-        });
+        assert.deepStrictEqual(
+          { value: reread.value, tell: reread.tell },
+          { value: { "thread:a": one, "thread:c": three }, tell: false }
+        );
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
@@ -111,14 +121,25 @@ describe("the saved drafts", () => {
       yield* store.set(DRAFTS_STORAGE_KEY, "[1, 2");
 
       const read = yield* readDrafts;
-      const saved = yield* saveDrafts(read.value, { "thread:a": one });
 
-      assert.deepStrictEqual(read, { value: {}, tell: true });
-      assert.deepStrictEqual(saved, Option.some({ "thread:a": one }));
-      assert.deepStrictEqual(yield* readDrafts, {
-        value: { "thread:a": one },
-        tell: false,
+      const saved = yield* saveDrafts(read.value, read.read, {
+        "thread:a": one,
       });
+
+      const reread = yield* readDrafts;
+
+      assert.deepStrictEqual(
+        { value: read.value, tell: read.tell },
+        { value: {}, tell: true }
+      );
+      assert.deepStrictEqual(
+        Option.map(saved, ({ value }) => value),
+        Option.some({ "thread:a": one })
+      );
+      assert.deepStrictEqual(
+        { value: reread.value, tell: reread.tell },
+        { value: { "thread:a": one }, tell: false }
+      );
       assert.strictEqual(yield* store.get(DRAFTS_STORAGE_KEY), "[1, 2");
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );

@@ -17,6 +17,7 @@ import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
 import { Message as SettingsMessage } from "./settings/Message.ts";
 import { Message as NextShellMessage } from "./shell/Message.ts";
+import { LastRead } from "./storage/TabChanges.ts";
 
 /** Everything the root reacts to. */
 export const Message = defineMessageUnion({
@@ -62,11 +63,12 @@ export const Message = defineMessageUnion({
   ElapsedResend: { epoch: Schema.Int, key: Schema.String },
   /**
    * The outbox was written as `written`; `stored` is what storage held afterwards, with other tabs'
-   * items, or none when storage was full or refused.
+   * items, read at `read`, or none when storage was full or refused.
    */
   CompletedSaveOutbox: {
     written: Schema.Array(OutboxItem),
     stored: Schema.Option(Schema.Array(OutboxItem)),
+    read: Schema.Option(LastRead),
   },
   /** Another tab wrote the saved outbox. */
   ChangedStoredOutbox: {},

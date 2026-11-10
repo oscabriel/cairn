@@ -40,7 +40,7 @@ import {
   recordChanges,
   persistedRecord,
 } from "../storage/TabChanges.ts";
-import type { Loaded } from "../storage/TabChanges.ts";
+import type { LastRead, Loaded, Synced } from "../storage/TabChanges.ts";
 import {
   ComposerSettings,
   ComposerTarget,
@@ -245,21 +245,24 @@ const draftChanges = recordChanges(draftEquivalence);
 
 /**
  * Writes the drafts this tab changed or removed since `base` (the drafts as it last read or wrote
- * them) into what storage holds now, so another tab's drafts are kept, and writes back a draft of
- * this tab's that another tab's write dropped without removing it. Answers what storage holds
- * afterwards, or none when storage refused.
+ * them, at `read`) into what storage holds now, so another tab's drafts are kept, and writes back a
+ * draft of this tab's that another tab's write dropped without removing it, unless storage was
+ * cleared or the read is too old to tell (`mergeStored`). Answers what storage holds afterwards, or
+ * none when storage refused.
  */
 export const saveDrafts = (
   base: Record<string, Draft>,
+  read: Option.Option<LastRead>,
   drafts: Record<string, Draft>
 ): Effect.Effect<
-  Option.Option<Record<string, Draft>>,
+  Option.Option<Synced<Record<string, Draft>>>,
   never,
   KeyValueStore.KeyValueStore
 > =>
   mergeStored(
     DRAFTS_STORAGE_KEY,
     persistedDrafts,
+    read,
     mergeRecord(draftEquivalence)(base, drafts)
   );
 

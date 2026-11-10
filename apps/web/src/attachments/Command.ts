@@ -8,6 +8,7 @@ import { Command } from "foldkit";
 import { File } from "foldkit/file";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
+import { LastRead } from "../storage/TabChanges.ts";
 import { createPreview, fitImage, revokePreview } from "./FitImage.ts";
 import { Message } from "./Message.ts";
 import { loadSaved, saveSaved, SavedAttachments } from "./Saved.ts";
@@ -118,18 +119,30 @@ export const RevokePreview = Command.define("RevokePreview", {
 /** Reads the ready attachments saved on this device. */
 export const LoadSaved = Command.define("LoadSaved", {
   messages: [Message.LoadedSaved],
-  execute: Effect.map(loadSaved, (drafts) => Message.LoadedSaved({ drafts })),
+  execute: Effect.map(loadSaved, ({ read, value }) =>
+    Message.LoadedSaved({ drafts: value, read })
+  ),
 });
 
 /**
  * Writes the ready attachments this tab added or removed since `base`, the saved attachments as it
- * last asked for them to be written (or read them, when it asked for no save since).
+ * last asked for them to be written (or read them, when it asked for no save since); it last read
+ * storage at `read`.
  */
 export const SaveReady = Command.define("SaveReady", {
-  args: { base: SavedAttachments, drafts: SavedAttachments },
+  args: {
+    base: SavedAttachments,
+    read: Schema.Option(LastRead),
+    drafts: SavedAttachments,
+  },
   messages: [Message.CompletedSave],
-  execute: ({ base, drafts }) =>
-    Effect.map(saveSaved(base, drafts), (stored) =>
-      Message.CompletedSave({ base, written: drafts, stored })
+  execute: ({ base, drafts, read }) =>
+    Effect.map(saveSaved(base, read, drafts), (synced) =>
+      Message.CompletedSave({
+        base,
+        written: drafts,
+        stored: Option.map(synced, ({ value }) => value),
+        read: Option.map(synced, (answer) => answer.read),
+      })
     ),
 });

@@ -11,7 +11,10 @@
 //   recordOnExit(import.meta);
 //
 // A shell judge sources `record.sh` beside this file, and `append-record.ts` writes its line.
-// `CAIRN_JUDGE_RUN` (set by `judges/run-set.ts`) tags the lines of one set run.
+// `CAIRN_JUDGE_RUN` (set by `judges/run-set.ts`) tags the lines of one set run. A judge another judge
+// starts (`shutdown.sh` runs `durability.ts` for its windows) records as `within` that judge, which
+// it learns from `CAIRN_JUDGE_OUTER` (the outer judge's file, set by the first judge that records),
+// so `status.ts` never shows an inner run as the judge's own.
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -38,6 +41,8 @@ export const JudgeRecord = Schema.Struct({
   cost: Schema.String,
   /** The set run this line belongs to (`CAIRN_JUDGE_RUN`), or null. */
   run: Schema.NullOr(Schema.String),
+  /** The judge that started this run, when another judge did; null for a judge's own run. */
+  within: Schema.NullOr(Schema.String),
 });
 
 export type JudgeRecord = typeof JudgeRecord.Type;
@@ -140,6 +145,8 @@ export interface RunEnd {
   readonly endedAt: Date;
   /** The set run it belongs to, or null. */
   readonly run: string | null;
+  /** The judge that started it (its record name), or null for a judge's own run. */
+  readonly within: string | null;
 }
 
 /** The record of a run that ended as `end` says. */
@@ -157,10 +164,18 @@ export const recordOf = (end: RunEnd): JudgeRecord => ({
     Math.round((end.endedAt.getTime() - end.startedAt.getTime()) / 100) / 10,
   cost: costLine(end.file, end.args),
   run: end.run,
+  within: end.within,
 });
 
 /** The set run this process belongs to: `CAIRN_JUDGE_RUN`, or null. */
 export const setRunOfEnv = () => process.env.CAIRN_JUDGE_RUN ?? null;
+
+/** The judge that started this process (`CAIRN_JUDGE_OUTER`, its file), by record name, or null. */
+export const outerOfEnv = () => {
+  const outer = process.env.CAIRN_JUDGE_OUTER ?? "";
+
+  return outer === "" ? null : nameOf(outer);
+};
 
 /** How much of the judge's stdout is kept to find its last JSON line. */
 const TAIL_BYTES = 256 * 1024;
@@ -180,7 +195,13 @@ export const recordOnExit = (meta: ImportMeta) => {
   const args = process.argv.slice(2);
   const { commit, tree } = treeState(judgesDir);
   const startedAt = new Date();
+  const within = outerOfEnv();
   let tail = "";
+
+  // A judge this one starts records as within it.
+  if (within === null) {
+    process.env.CAIRN_JUDGE_OUTER = file;
+  }
 
   const write = process.stdout.write.bind(process.stdout);
 
@@ -215,6 +236,7 @@ export const recordOnExit = (meta: ImportMeta) => {
           startedAt,
           endedAt: new Date(),
           run: setRunOfEnv(),
+          within,
         })
       );
     } catch (error) {
@@ -225,28 +247,49 @@ export const recordOnExit = (meta: ImportMeta) => {
   });
 };
 
-/** The newest record of each judge on `commit`, by judge name. */
+/** Whether `record` is a judge's own run, not one another judge started. */
+export const isOwnRun = (record: JudgeRecord) => record.within === null;
+
+/**
+ * Each judge's own records on `commit`, by judge name: the newest for each distinct argument list,
+ * so a later run with other arguments (`push --fake` after `push --pwa`) never hides a failure.
+ */
 export const lastOnCommit = (
   records: ReadonlyArray<JudgeRecord>,
   commit: string
 ) => {
-  const last = new Map<string, JudgeRecord>();
+  const byArgs = new Map<string, Map<string, JudgeRecord>>();
 
   for (const record of records) {
-    if (record.commit === commit) {
-      last.set(record.judge, record);
+    if (record.commit === commit && isOwnRun(record)) {
+      const runs = byArgs.get(record.judge) ?? new Map<string, JudgeRecord>();
+
+      runs.delete(record.args.join(" "));
+      runs.set(record.args.join(" "), record);
+      byArgs.set(record.judge, runs);
     }
   }
 
-  return last;
+  return new Map(
+    [...byArgs].map(([judge, runs]) => [judge, [...runs.values()]] as const)
+  );
 };
 
-/** The newest record of each judge on any commit, by judge name. */
+/** Of a judge's newest runs per argument list, the newest that failed, else the newest. */
+export const worstOf = (runs: ReadonlyArray<JudgeRecord>) =>
+  Option.orElse(
+    Option.fromUndefinedOr(runs.findLast((record) => !record.pass)),
+    () => Option.fromUndefinedOr(runs.at(-1))
+  );
+
+/** The newest own record of each judge on any commit, by judge name. */
 export const lastAnywhere = (records: ReadonlyArray<JudgeRecord>) => {
   const last = new Map<string, JudgeRecord>();
 
   for (const record of records) {
-    last.set(record.judge, record);
+    if (isOwnRun(record)) {
+      last.set(record.judge, record);
+    }
   }
 
   return last;

@@ -6,8 +6,11 @@
 //   node judges/status.ts --require-set <rev>
 //
 // One line per judge: its name, how it runs, its cost, what it needs, its last record on the commit
-// (default HEAD), else its newest record on another commit, else "no record". In-gate judges have
-// no records: `pnpm check` is their record. `--json` prints the same as one JSON object.
+// (default HEAD), else its newest record on another commit, else "no record". A judge run with
+// several argument lists on the commit shows the newest failure among each list's newest run, so a
+// later pass with other arguments never hides one; a run another judge started (`shutdown.sh`'s
+// durability windows) is not the judge's own and is left out. In-gate judges have no records:
+// `pnpm check` is their record. `--json` prints the same as one JSON object.
 //
 // `--require-set` is `ops/cairn/deploy.sh`'s check: exit 0 and one line when the pre-deploy set
 // (`judges/run-set.ts`) passed on that commit with a clean tree, else exit 1 and say what is
@@ -27,6 +30,7 @@ import {
   readRecords,
   recordsFile,
   SET_RECORD,
+  worstOf,
 } from "./lib/Record.ts";
 import type { JudgeRecord } from "./lib/Record.ts";
 
@@ -71,10 +75,10 @@ if (values["require-set"] !== undefined) {
     process.exit(0);
   }
 
-  const latest = lastOnCommit(records, commit).get(SET_RECORD);
+  const latest = worstOf(lastOnCommit(records, commit).get(SET_RECORD) ?? []);
 
   process.stderr.write(
-    `no passing judge set is recorded for ${short(commit)} on a clean tree in ${recordsFile()}${latest === undefined ? "" : ` (its last set run: ${verdictOf(latest)})`}; run node judges/run-set.ts on that commit first\n`
+    `no passing judge set is recorded for ${short(commit)} on a clean tree in ${recordsFile()}${Option.isNone(latest) ? "" : ` (its last set run: ${verdictOf(latest.value)})`}; run node judges/run-set.ts on that commit first\n`
   );
   process.exit(1);
 }
@@ -90,10 +94,23 @@ const lastOf = (judge: Judge) => {
     return "in pnpm check";
   }
 
-  const onCommit = here.get(judge.name);
+  const runs = here.get(judge.name) ?? [];
+  const worst = worstOf(runs);
 
-  if (onCommit !== undefined) {
-    return verdictOf(onCommit);
+  if (Option.isSome(worst)) {
+    const failed = runs.filter((record) => !record.pass).length;
+
+    const args =
+      runs.length > 1 || worst.value.args.length > 0
+        ? ` (${[judge.name, ...worst.value.args].join(" ")})`
+        : "";
+
+    const of =
+      runs.length > 1
+        ? `; ${String(failed)} of ${String(runs.length)} argument lists failed`
+        : "";
+
+    return `${verdictOf(worst.value)}${args}${of}`;
   }
 
   const elsewhere = anywhere.get(judge.name);

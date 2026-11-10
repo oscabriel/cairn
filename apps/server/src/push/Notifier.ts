@@ -293,7 +293,7 @@ export const NIGHTLY_FAILED_TAG = "nightly-failed";
 /** The nightly's failure push: fixed words, since nothing in it comes from the caller. */
 export const nightlyFailedMessage = (badge: number): PushMessage => ({
   title: "The nightly judges failed",
-  body: "The durability nightly failed. Its log is ~/cairn-judges/durability-<date>.jsonl, and journalctl --user -u cairn-nightly has the run.",
+  body: "The durability nightly failed. Its log is today's durability file in ~/cairn-judges/, and journalctl --user -u cairn-nightly has the run.",
   tag: NIGHTLY_FAILED_TAG,
   url: "/",
   badge,

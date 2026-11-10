@@ -4,7 +4,8 @@
 //   node judges/lib/append-record.ts --file <path under judges/> --exit <code> --started <unix s>
 //     [--commit <sha> --tree clean|dirty] [--counts <json object>] [-- <the judge's arguments>]
 //
-// Without --commit, the commit and tree are read now. Prints nothing on success.
+// Without --commit, the commit and tree are read now. The record is within the judge that
+// `CAIRN_JUDGE_OUTER` names, if any (as this process's caller had it). Prints nothing on success.
 
 import { parseArgs } from "node:util";
 
@@ -13,6 +14,7 @@ import { Option, Schema } from "effect";
 import {
   appendRecord,
   countsOf,
+  outerOfEnv,
   recordOf,
   setRunOfEnv,
   treeState,
@@ -62,5 +64,6 @@ appendRecord(
     startedAt: new Date(started.value * 1000),
     endedAt: new Date(),
     run: setRunOfEnv(),
+    within: outerOfEnv(),
   })
 );

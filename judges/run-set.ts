@@ -6,9 +6,11 @@
 //
 // Every judge in the set is free and needs no model, no deployed brain, no Docker and no porch;
 // browser judges drive system Chromium. The whole set takes a few hours, so run it on a quiet
-// machine. The lock is `flock` on `CAIRN_JUDGE_LOCK` (default /tmp/cairn-judge.lock), the lock
-// every judge run on this machine takes, so the set waits for a judge already running and none
-// starts beside it.
+// machine. The lock is `flock` on `CAIRN_JUDGE_LOCK` (default /tmp/cairn-judge.lock), held here
+// for the whole set. The nightly (`judges/fixtures/durability/nightly.sh`) takes it too, so the set
+// waits for a running nightly and a nightly waits for the set (skipping the night if it waits too
+// long). A judge run by hand takes it only when its caller does (`flock /tmp/cairn-judge.lock node
+// judges/<judge>.ts`): the judges themselves do not.
 //
 // Each judge records itself when it ends (`judges/lib/Record.ts`), tagged with this run's id in
 // `CAIRN_JUDGE_RUN`; a judge that died without writing its line gets one here, from its exit code.
@@ -120,6 +122,7 @@ for (const [index, run] of SET.entries()) {
         startedAt: began,
         endedAt: new Date(),
         run: runId,
+        within: null,
       })
     );
   }
@@ -162,6 +165,7 @@ appendRecord(
     startedAt,
     endedAt: new Date(),
     run: setRun,
+    within: null,
   })
 );
 

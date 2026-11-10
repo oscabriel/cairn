@@ -13,8 +13,16 @@
 # the whole run takes about an hour. Run it on a quiet machine: a browser judge beside a bridge window has made the bridge's
 # streaming window miss its aim before. Uses only `systemctl --user`, node and the user's own
 # logins; no sudo, no secrets printed.
+#
+# It runs under the judge lock (`flock` on `CAIRN_JUDGE_LOCK`, default /tmp/cairn-judge.lock), the
+# one `judges/run-set.ts` holds for the whole pre-deploy set, so the two never share the machine. It
+# waits up to `CAIRN_NIGHTLY_LOCK_WAIT` seconds (default 90 minutes, inside the unit's 3 hours) for
+# a holder; a night still waiting then is skipped, since it judged nothing, and exits 0. A second
+# skipped night in a row fails, so a stuck holder cannot silence the nightly. The durability runs it
+# starts record as within the nightly (`CAIRN_JUDGE_OUTER`, judges/lib/Record.ts).
 set -euo pipefail
 
+self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$0")/../../.."
 
 slow=1
@@ -33,12 +41,38 @@ done
 
 mkdir -p "$HOME/cairn-judges"
 log="${CAIRN_DURABILITY_LOG:-$HOME/cairn-judges/durability-$(date +%Y-%m-%d).jsonl}"
+
+# The judge lock: run this script again under it, unless this process already holds it.
+skipped=$HOME/cairn-judges/nightly-skipped
+if [[ ${CAIRN_JUDGE_LOCK_HELD:-} != 1 ]]; then
+	lock=${CAIRN_JUDGE_LOCK:-/tmp/cairn-judge.lock}
+	set +e
+	CAIRN_JUDGE_LOCK_HELD=1 flock --wait "${CAIRN_NIGHTLY_LOCK_WAIT:-5400}" --conflict-exit-code 75 \
+		"$lock" bash "$self" "$@"
+	status=$?
+	set -e
+	if ((status != 75)); then
+		exit "$status"
+	fi
+	echo "{\"nightly\":\"skipped\",\"reason\":\"another judge held $lock\"}" | tee -a "$log"
+	if [[ -f $skipped ]]; then
+		echo "the nightly could not take the judge lock $lock and skipped the night before too ($(cat "$skipped")); see what holds it" >&2
+		exit 1
+	fi
+	date -Iseconds >"$skipped"
+	exit 0
+fi
+rm -f "$skipped"
 failures=0
 steps=0
 started=$(date +%s)
 commit=$(git rev-parse HEAD)
 tree=clean
 [[ -z $(git status --porcelain) ]] || tree=dirty
+# The judges the steps start record as within the nightly; the nightly's own record, below, as the
+# judge that started it had it (none, from the timer).
+outer=${CAIRN_JUDGE_OUTER:-}
+export CAIRN_JUDGE_OUTER=${outer:-fixtures/durability/nightly.sh}
 
 # The commit under test, so a log line is never read against a later deploy's code.
 echo "{\"nightly\":\"start\",\"commit\":\"$commit\"}" | tee -a "$log"
@@ -73,7 +107,7 @@ fi
 
 echo "{\"nightly\":true,\"failedSteps\":$failures,\"log\":\"$log\"}"
 
-node judges/lib/append-record.ts --file fixtures/durability/nightly.sh \
+CAIRN_JUDGE_OUTER=$outer node judges/lib/append-record.ts --file fixtures/durability/nightly.sh \
 	--exit "$((failures == 0 ? 0 : 1))" --started "$started" --commit "$commit" --tree "$tree" \
 	--counts "{\"failedSteps\":$failures,\"steps\":$steps}" -- "$@" ||
 	echo "the nightly's judge record was not written" >&2

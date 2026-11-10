@@ -13,8 +13,11 @@ import { Option } from "effect";
 /** How a judge is run: in `pnpm check`, by the nightly timer, in the pre-deploy set, by a wizard or by hand. */
 export type Runs = "check" | "nightly" | "set" | "wizard" | "hand";
 
-/** What a judge needs beyond node and the checkout: system Chromium, the deployed brain, Docker or porch. */
-export type Need = "browser" | "live-brain" | "docker" | "porch";
+/**
+ * What a judge needs beyond node and the checkout: system Chromium, the deployed brain, Docker,
+ * porch, or a running systemd unit the caller names on its command line (`unit`).
+ */
+export type Need = "browser" | "live-brain" | "docker" | "porch" | "unit";
 
 /** A real model's spend: which model, and roughly how much a run costs. */
 export interface Spend {
@@ -674,7 +677,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
       "Gate S5 (ADR 0014): no stdio relay process outlives the event that should end it.",
     runs: ["hand"],
     cost: free,
-    needs: [],
+    needs: ["unit"],
     control: "none",
   },
 
@@ -847,8 +850,8 @@ export const TOOLS: ReadonlyArray<string> = ["index.ts", "status.ts"];
 
 /**
  * The pre-deploy set, in the order `run-set.ts` runs it: every free judge that needs no model, no
- * deployed brain, no Docker and no porch, read-only checks first, then the kill judges, then the
- * browser judges, then the systemd ones.
+ * deployed brain, no Docker, no porch and no unit named on its command line, read-only checks
+ * first, then the kill judges, then the browser judges, then the systemd ones.
  */
 export const SET: ReadonlyArray<SetRun> = [
   { judge: "skills", args: ["--no-model"] },

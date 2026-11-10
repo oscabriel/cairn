@@ -11,7 +11,8 @@
 #   4. Links the live worktree's cairn-nightly.service and cairn-nightly.timer (the durability matrix
 #      at 03:30, judges/fixtures/durability/nightly.sh) and cairn-nightly-failed.service (which the
 #      nightly's OnFailure= starts to push a failed night to the user's devices, ADR 0054), and
-#      enables and starts the timer.
+#      enables and starts the timer. A deploy links any of these a later commit adds
+#      (ops/cairn/link-units.sh); only enabling the timer needs this script.
 #   5. Writes the user's login PATH (`$SHELL -lc`, each directory once) as the PATH line of
 #      ~/.config/cairn/brain.env, which both units read after their own PATH, so thread tools and claude
 #      children find bun, cargo and the rest (T28). Other lines in the file are kept. Rerun after adding a

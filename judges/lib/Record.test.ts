@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterAll, assert, describe, it } from "@effect/vitest";
-import { Option } from "effect";
+import { Option, Schema } from "effect";
 
 import {
   countsOf,
@@ -61,7 +61,67 @@ const setRecord = (
     startedAt: new Date(0),
     endedAt: new Date(1000),
     run: null,
+    within: null,
   });
+
+/** The rows `status.ts --json` prints, as far as these cases read them. */
+const decodeStatus = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      judges: Schema.Array(
+        Schema.Struct({ name: Schema.String, last: Schema.String })
+      ),
+    })
+  )
+);
+
+/** A judge's record on this commit, `within` another judge when given. */
+const judgeRecord = (
+  file: string,
+  args: ReadonlyArray<string>,
+  exitCode: number,
+  within: string | null = null
+) =>
+  recordOf({
+    file,
+    args,
+    commit: repo.commit,
+    tree: "clean",
+    exitCode,
+    counts: {},
+    startedAt: new Date(0),
+    endedAt: new Date(1000),
+    run: null,
+    within,
+  });
+
+/** The `last` column of each named judge's row, with the records file holding `lines`. */
+const lastOf = (
+  name: string,
+  lines: ReadonlyArray<JudgeRecord>,
+  judges: ReadonlyArray<string>
+) => {
+  const records = path.join(root, "status-rows", name, "records.jsonl");
+
+  mkdirSync(path.dirname(records), { recursive: true });
+  writeFileSync(
+    records,
+    lines.map((line) => `${JSON.stringify(line)}\n`).join("")
+  );
+
+  const done = runWith(records, process.execPath, [
+    path.join(import.meta.dirname, "..", "status.ts"),
+    "--json",
+  ]);
+
+  assert.strictEqual(done.status, 0, done.stderr);
+
+  const rows = decodeStatus(done.stdout).judges;
+
+  return judges.map(
+    (judge) => rows.find((row) => row.name === judge)?.last ?? "missing"
+  );
+};
 
 describe("judge records", () => {
   afterAll(() => {
@@ -150,6 +210,110 @@ describe("judge records", () => {
         exitCode: 3,
         run: "set-probe/0",
       });
+    });
+  });
+
+  describe("a judge another judge starts", () => {
+    it("records the inner run as within the outer judge, from TypeScript and from shell", () => {
+      const records = path.join(root, "nested", "records.jsonl");
+      const inner = path.join(root, "probe-inner.ts");
+
+      writeFileSync(
+        inner,
+        `import { recordOnExit } from ${JSON.stringify(recordTs)};\nrecordOnExit(import.meta);\nconsole.log(JSON.stringify({ passed: 1 }));\n`
+      );
+      writeFileSync(
+        path.join(root, "probe-outer.ts"),
+        `import { spawnSync } from "node:child_process";\nimport { recordOnExit } from ${JSON.stringify(recordTs)};\nrecordOnExit(import.meta);\nspawnSync(process.execPath, [${JSON.stringify(inner)}, "--window", "1"], { stdio: "inherit" });\n`
+      );
+      writeFileSync(
+        path.join(root, "probe-shell-outer.sh"),
+        `#!/usr/bin/env bash\nset -euo pipefail\nsource ${JSON.stringify(recordSh)} && record_run probe-shell-outer.sh "$@"\nnode ${JSON.stringify(inner)} --window 2\n`
+      );
+
+      const ts = runWith(records, process.execPath, [
+        path.join(root, "probe-outer.ts"),
+      ]);
+
+      const sh = runWith(records, "bash", [
+        path.join(root, "probe-shell-outer.sh"),
+      ]);
+
+      assert.strictEqual(ts.status, 0, ts.stderr);
+      assert.strictEqual(sh.status, 0, sh.stderr);
+
+      const lines = readRecords(records).map((record) => ({
+        judge: record.judge,
+        args: record.args,
+        within: record.within,
+      }));
+
+      assert.deepStrictEqual(lines, [
+        {
+          judge: "probe-inner",
+          args: ["--window", "1"],
+          within: "probe-outer",
+        },
+        { judge: "probe-outer", args: [], within: null },
+        {
+          judge: "probe-inner",
+          args: ["--window", "2"],
+          within: "probe-shell-outer",
+        },
+        { judge: "probe-shell-outer", args: [], within: null },
+      ]);
+    });
+  });
+
+  describe("status.ts", () => {
+    it("does not let a later pass with other arguments hide a failure on the commit", () => {
+      const [push, durability] = lastOf(
+        "args",
+        [
+          judgeRecord("push.ts", ["--pwa"], 1),
+          judgeRecord("push.ts", ["--fake"], 0),
+          judgeRecord("durability.ts", ["--runs", "3"], 1),
+          judgeRecord("durability.ts", ["--sabotage", "page-text"], 0),
+        ],
+        ["push", "durability"]
+      );
+
+      assert.match(push ?? "", /^FAIL .*--pwa/u);
+      assert.match(durability ?? "", /^FAIL .*--runs 3/u);
+    });
+
+    it("shows a newer pass of the same arguments as a pass", () => {
+      const [push] = lastOf(
+        "rerun",
+        [
+          judgeRecord("push.ts", ["--pwa"], 1),
+          judgeRecord("push.ts", ["--pwa"], 0),
+          judgeRecord("push.ts", ["--fake"], 0),
+        ],
+        ["push"]
+      );
+
+      assert.match(push ?? "", /^pass /u);
+    });
+
+    it("keeps a judge's row to its own runs, not those another judge started", () => {
+      const [durability, shutdown] = lastOf(
+        "nested",
+        [
+          judgeRecord("durability.ts", [], 1),
+          judgeRecord(
+            "durability.ts",
+            ["--keep", "--window", "x"],
+            0,
+            "shutdown.sh"
+          ),
+          judgeRecord("shutdown.sh", [], 0),
+        ],
+        ["durability", "shutdown"]
+      );
+
+      assert.match(durability ?? "", /^FAIL /u);
+      assert.match(shutdown ?? "", /^pass /u);
     });
   });
 

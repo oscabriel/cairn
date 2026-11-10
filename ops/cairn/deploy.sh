@@ -4,8 +4,10 @@
 #
 # The unit runs from its own worktree, ~/Developer/projects/cairn-live, never from a working tree, so
 # half-written code never reaches the phone and development never touches the running brain. Steps:
-# check the commit out there (detached), `pnpm install --frozen-lockfile`, build the web app, reload
-# systemd (the unit file ships with the commit), restart cairn.service, then run
+# check the commit out there (detached), `pnpm install --frozen-lockfile`, build the web app, link
+# any unit beside cairn.service the commit ships that has no link yet (ops/cairn/link-units.sh, so a
+# new unit such as cairn-nightly-failed.service needs no rerun of install.sh), reload systemd (the
+# unit files ship with the commit), restart cairn.service, then run
 # ops/cairn/deploy-check.ts from the live worktree: this invocation's own `listening` line and a
 # `session.hello` over /ws within 60 s, or the deploy fails.
 #
@@ -71,8 +73,9 @@ main() {
 	}
 	systemd-analyze --user verify "$scratch/cairn.service"
 
-	# The idle guard as this checkout has it: the checkout below may replace this script's folder.
-	cp "$here/idle-guard.sh" "$scratch/idle-guard.sh"
+	# The idle guard and unit linker as this checkout has them: the checkout below may replace this
+	# script's folder.
+	cp "$here/idle-guard.sh" "$here/link-units.sh" "$scratch/"
 
 	# Runs a guard --override may pass over. On a refusal (the guard says why on stderr) it fails, or
 	# with --override says what it overrides and goes on.
@@ -109,6 +112,7 @@ main() {
 		"$here/pi-bump-guard.sh" "$repo" "$(git -C "$live" rev-parse HEAD)" "$commit" || echo "a deploy would refuse (above)"
 		node "$repo/judges/status.ts" --require-set "$commit" || echo "a deploy would refuse (above) without --override"
 		"$scratch/idle-guard.sh" || echo "a deploy now would refuse (above) without --override"
+		"$scratch/link-units.sh" --check "$live"
 		echo "unit: $(systemctl --user is-enabled cairn.service 2>/dev/null || true), $(systemctl --user is-active cairn.service 2>/dev/null || true)"
 		# The peak since this invocation started; journalctl _SYSTEMD_INVOCATION_ID=<id> -g brain_memory_peak times it.
 		echo "memory: $(systemctl --user show cairn.service -p InvocationID -p MemoryCurrent -p MemoryPeak -p MemoryHigh --value 2>/dev/null | paste -sd ' ' || true) (invocation, current, peak, high; bytes)"
@@ -158,6 +162,9 @@ main() {
 	fi
 	trap - ERR
 
+	# A unit this commit adds has no link yet; the reload below makes it known (the nightly's
+	# OnFailure= names cairn-nightly-failed.service).
+	"$scratch/link-units.sh" "$live"
 	systemctl --user daemon-reload
 	systemctl --user restart cairn.service
 	if (cd "$live" && node ops/cairn/deploy-check.ts --unit cairn --seconds 60); then

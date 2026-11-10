@@ -5,7 +5,8 @@
 #
 # record_run runs the judge again as a child, so the judge's own traps and exits stay as they are,
 # then appends its record (the commit and tree as the run started, the exit code as the verdict)
-# and exits with the child's status. In the child it returns at once.
+# and exits with the child's status. In the child it returns at once. A judge the child starts
+# records as within this one (`CAIRN_JUDGE_OUTER`), unless this judge is itself within another.
 # shellcheck shell=bash
 
 record_run() {
@@ -25,7 +26,7 @@ record_run() {
 	fi
 
 	set +e
-	CAIRN_JUDGE_RECORDING=$file bash "$0" "$@"
+	CAIRN_JUDGE_RECORDING=$file CAIRN_JUDGE_OUTER=${CAIRN_JUDGE_OUTER:-$file} bash "$0" "$@"
 	status=$?
 	node "$lib/append-record.ts" --file "$file" --exit "$status" --started "$started" \
 		--commit "$commit" --tree "$tree" -- "$@" ||

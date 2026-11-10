@@ -81,7 +81,7 @@ export interface ChildRowSource {
   /** A workflow node's own level; none takes the parent's (a dispatched subagent's row). */
   readonly thinkingLevel: Option.Option<ThinkingLevel>;
   readonly runtimeMode: RuntimeMode;
-  /** The child's own worktree (a writing role's); none for a shared child, on its parent's. */
+  /** The child's own worktree (a writer's); none for a shared child, on its parent's. */
   readonly worktree: Option.Option<ChildWorktree>;
 }
 
@@ -93,19 +93,32 @@ const nonEmpty = (value: string | undefined): Option.Option<string> =>
     ? Option.some(value)
     : Option.none();
 
-/** The part of a registry item's `dispatch` record a row reads: the protocol's `DispatchRecord`. */
-const decodeDispatched = Schema.decodeUnknownOption(
-  DispatchRecord.mapFields(Struct.pick(["resolved"]))
+/**
+ * The part of a registry item's `dispatch` record a row reads: the protocol's `DispatchRecord`'s
+ * resolved model, and only that, so a resolved spec no `ModelSpec` may name (an OpenRouter `~`
+ * alias a parent ran on, recorded unchecked) still gives the row its model.
+ */
+const DispatchedModel = DispatchRecord.mapFields(
+  Struct.pick(["resolved"])
+).mapFields(
+  Struct.evolve({
+    resolved: (resolved) => resolved.mapFields(Struct.pick(["model"])),
+  })
 );
+
+const decodeDispatched = Schema.decodeUnknownOption(DispatchedModel);
 
 const decodeWorktree = Schema.decodeUnknownOption(ChildWorktree);
 
-/** The dispatched model, when the record names a real one. */
-const dispatchedModel = (dispatch: Schema.Json | undefined) =>
-  decodeDispatched(dispatch).pipe(
-    Option.map((found) => found.resolved.model),
+/** The model a decoded dispatch names, when it is a real one. */
+const realModel = (dispatched: typeof DispatchedModel.Type) =>
+  Option.some(dispatched.resolved.model).pipe(
     Option.filter((model) => model.provider !== "unknown")
   );
+
+/** The dispatched model, when the record names a real one. */
+const dispatchedModel = (dispatch: Schema.Json | undefined) =>
+  Option.flatMap(decodeDispatched(dispatch), realModel);
 
 /**
  * The part of a parent's `cairn.workflows` a row reads: each node's child, model, level, effort
@@ -284,9 +297,11 @@ const decodeLink = Schema.decodeUnknownOption(
   )
 );
 
-/** What a seam-read row source reads of the parent's registry item. */
+/** What a seam-read row source reads of the parent's registry item; of its dispatch, the model. */
 const decodeItem = Schema.decodeUnknownOption(
-  SubagentRecord.mapFields(Struct.pick(["description", "dispatch", "worktree"]))
+  SubagentRecord.mapFields(
+    Struct.pick(["description", "dispatch", "worktree"])
+  ).mapFields(Struct.evolve({ dispatch: () => DispatchedModel }))
 );
 
 const decodeItems = Schema.decodeUnknownOption(
@@ -343,7 +358,7 @@ export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
     ),
     label,
     ...modelAndLevel(
-      Option.flatMap(item, ({ dispatch }) => dispatchedModel(dispatch)),
+      Option.flatMap(item, ({ dispatch }) => realModel(dispatch)),
       () => workflowNodeRun(ledger, threadId)
     ),
     runtimeMode: permissionMode,

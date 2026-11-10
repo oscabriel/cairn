@@ -604,7 +604,7 @@ export type PermissionsDocument = typeof PermissionsDocument.Type;
 export const GOAL_DOCUMENT = "cairn.goal";
 
 /**
- * `cairn.goal` (version 1): a goal is a thread with criteria (ADR 0026), so "is a goal" is
+ * `cairn.goal` (version 2): a goal is a thread with criteria (ADR 0026), so "is a goal" is
  * `criteria.length > 0`. A criterion's `state` and `verdict` are written only by the verdict writer.
  */
 export const GoalDocument = Schema.Struct({

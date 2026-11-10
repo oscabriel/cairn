@@ -3,8 +3,9 @@
 // envelope's `roles`, a resolution's `role`, `via`, `skipped` and `family`, `roleOverrides`), opens
 // under today's definitions and reads as today's shapes: every document decodes with its protocol
 // schema (a document a client could not read fails the read), a role name reads as no model named, a
-// spec `role` held is the `model`, and the rest of each record is as it was. Each rewrite is safe to run twice, and leaves a document already in today's
-// shape as it is.
+// spec `role` held is the `model`, and the rest of each record is as it was; the spend feed, which
+// reads a workflow run's child threads from the ledger, reads them too. Each rewrite is safe to run
+// twice, and leaves a document already in today's shape as it is.
 //
 // Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
@@ -12,27 +13,36 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { ThreadId } from "@cairn/protocol/Ids";
 import { ApprovalsDocument, GoalDocument } from "@cairn/protocol/Policy";
 import { SubagentsDocument } from "@cairn/protocol/Subagents";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai";
 import type { ConversationId, JsonObject } from "@earendil-works/pi-durable";
-import { createSession, defineDoc } from "@earendil-works/pi-durable";
+import {
+  createRegistry,
+  createSession,
+  defineDoc,
+  Harness,
+} from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 
 import { SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { GoalDoc } from "../verdicts/GoalDocs.ts";
 import type { JudgeRefState } from "../verdicts/GoalDocs.ts";
 import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
-import { Approvals } from "./CairnDocs.ts";
+import { Brain } from "./Brain.ts";
+import { Approvals, ThreadReceipt } from "./CairnDocs.ts";
 import {
   retireApprovalRoles,
   retireGoalRoles,
   retireSubagentRoles,
   retireWorkflowRoles,
 } from "./RolesRetired.ts";
+import { SpendFeed } from "./SpendFeed.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -217,8 +227,14 @@ const OLD_APPROVALS = {
   },
 };
 
+/** The thread whose conversation holds the old documents. */
+const OLD_THREAD = "01900000-0000-7000-8000-000000000001";
+
+/** The child thread a node of the old ledger ran. */
+const NODE_CHILD = "01900000-0000-7000-8000-000000000003";
+
 /** A ledger node written before roles were removed, naming `role`. */
-const oldNode = (id: string, role: string) => ({
+const oldNode = (id: string, role: string, childThreadId: string | null) => ({
   id,
   workflowId: "wf-7",
   key: null,
@@ -235,7 +251,7 @@ const oldNode = (id: string, role: string) => ({
   arms: "host",
   state: "settled",
   stage: "answered",
-  childThreadId: null,
+  childThreadId,
   conversationId: null,
   submissionId: null,
   nestedTaskId: 9,
@@ -274,8 +290,8 @@ const OLD_WORKFLOWS = {
       endedAt: 3,
       result: null,
       nodes: {
-        "n-1": oldNode("n-1", "@worker"),
-        "n-2": oldNode("n-2", "faux/scripted:high"),
+        "n-1": oldNode("n-1", "@worker", NODE_CHILD),
+        "n-2": oldNode("n-2", "faux/scripted:high", null),
       },
       log: {},
       spent: { tokens: 0, listMicros: 0, unpricedTokens: 0 },
@@ -382,6 +398,9 @@ const writeOldStore = async (file: string): Promise<ConversationId> =>
           ownership: { kind: "ownerless" },
         });
 
+        await tx.doc(ThreadReceipt, OLD_THREAD, {
+          conversationId: conversation.id,
+        });
         Object.assign(
           await tx.doc(ApprovalsV2, conversation.id),
           structuredClone(OLD_APPROVALS)
@@ -403,6 +422,21 @@ const writeOldStore = async (file: string): Promise<ConversationId> =>
       }, context)
   );
 
+/** Writes the old store in a fresh directory, runs `use` on its file, and removes it. */
+const withOldStore = async <A>(
+  use: (file: string, conversation: ConversationId) => Promise<A>
+): Promise<A> => {
+  const root = mkdtempSync(path.join(tmpdir(), "cairn-roles-retired-"));
+
+  try {
+    const file = path.join(root, "store.sqlite");
+
+    return await use(file, await writeOldStore(file));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+};
+
 const decodeApprovals = Schema.decodeUnknownSync(ApprovalsDocument);
 
 const decodeWorkflows = Schema.decodeUnknownSync(WorkflowsDocument);
@@ -415,13 +449,8 @@ const decodeGoal = Schema.decodeUnknownSync(GoalDocument);
  * Writes the old store, opens it under today's definitions, and reads every document as stored;
  * each must decode with its protocol schema, as a client reads it, or the read throws.
  */
-const readOldStore = async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "cairn-roles-retired-"));
-
-  try {
-    const file = path.join(root, "store.sqlite");
-    const conversation = await writeOldStore(file);
-
+const readOldStore = async () =>
+  await withOldStore(async (file, conversation) => {
     const read = await withSession(file, async (session) => ({
       approvals: await session.snapshot(Approvals, conversation, context),
       workflows: await session.snapshot(WorkflowsDoc, conversation, context),
@@ -435,10 +464,7 @@ const readOldStore = async () => {
     decodeGoal(read.goal);
 
     return read;
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-};
+  });
 
 /** A model judge that runs on the goal thread's model. */
 const THREAD_JUDGE: JudgeRefState = {
@@ -554,6 +580,62 @@ describe("a store written before roles were retired", () => {
       );
       assert.strictEqual(criterion?.state, "met");
     })
+  );
+
+  it.live("gives the spend feed a workflow run's child threads", () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          mkdtempSync(path.join(tmpdir(), "cairn-roles-retired-"))
+        ),
+        (dir) =>
+          Effect.sync(() => {
+            rmSync(dir, { recursive: true, force: true });
+          })
+      );
+
+      const file = path.join(root, "store.sqlite");
+
+      yield* Effect.promise(async () => await writeOldStore(file));
+
+      const storage = yield* Effect.promise(
+        async () => await openNodeSqliteStorage(file)
+      );
+
+      const harness = yield* Effect.acquireRelease(
+        Effect.promise(
+          async () =>
+            await Harness.open(
+              storage,
+              { models: createModels(), registry: createRegistry() },
+              context
+            )
+        ),
+        (open) =>
+          Effect.promise(async () => {
+            await open.close(context);
+          })
+      );
+
+      const feed = yield* SpendFeed.pipe(
+        Effect.provide(
+          SpendFeed.layer.pipe(
+            Layer.provide(
+              Layer.mock(Brain)({
+                session: Effect.succeed({ harness, storage, generation: 1 }),
+                subscribeCommits: () => Effect.void,
+                now: () => 0,
+              })
+            )
+          )
+        )
+      );
+
+      assert.deepStrictEqual(
+        yield* feed.workflowThreads(ThreadId.make(OLD_THREAD), "wf-7"),
+        Option.some([ThreadId.make(NODE_CHILD)])
+      );
+    }).pipe(Effect.scoped)
   );
 });
 

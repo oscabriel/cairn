@@ -408,7 +408,11 @@ export interface RegistryChild {
   }>;
 }
 
-/** What a client reads of one registry item, as the protocol's `SubagentRecord` has it. */
+/**
+ * What a client reads of one registry item, as the protocol's `SubagentRecord` has it: of its
+ * dispatch, only when, so a resolved model no spec may name (an OpenRouter `~` alias a parent ran
+ * on) does not hide the child.
+ */
 const RegistryItem = SubagentRecord.mapFields(
   Struct.pick([
     "threadId",
@@ -417,6 +421,10 @@ const RegistryItem = SubagentRecord.mapFields(
     "dispatch",
     "settlements",
   ])
+).mapFields(
+  Struct.evolve({
+    dispatch: (dispatch) => dispatch.mapFields(Struct.pick(["dispatchedAt"])),
+  })
 );
 
 const decodeRegistry = Schema.decodeUnknownOption(

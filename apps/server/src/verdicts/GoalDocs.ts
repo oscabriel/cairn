@@ -13,19 +13,15 @@
 //
 // Both start empty in a fork, which is another thread.
 
-import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
-import type {
-  Criterion,
-  GoalDocument,
-  JudgeRef,
-  Verdict,
-} from "@cairn/protocol/Policy";
+import { GOAL_DOCUMENT, JudgeRef } from "@cairn/protocol/Policy";
+import type { Criterion, GoalDocument, Verdict } from "@cairn/protocol/Policy";
 import type { DocumentState } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { defineDoc } from "@earendil-works/pi-durable";
-import { Match } from "effect";
+import { Schema } from "effect";
 
 import { migrateGoal } from "../brain/RolesRetired.ts";
+import { plainCopy } from "../subagents/SubagentDocs.ts";
 
 /** A judge as a document holds it: the protocol's `JudgeRef`. */
 export type JudgeRefState = DocumentState<typeof JudgeRef>;
@@ -103,25 +99,8 @@ export const JudgeRunsDoc = defineDoc<JudgeRunsState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
-/** A judge as a document holds it, copied from the protocol's value. */
+const encodeJudge = Schema.encodeSync(JudgeRef);
+
+/** A judge as a document holds it: the protocol's value, encoded by its schema (ADR 0052). */
 export const judgeState = (judge: JudgeRef): JudgeRefState =>
-  Match.value(judge).pipe(
-    Match.discriminatorsExhaustive("kind")({
-      command: (found): JudgeRefState => ({
-        kind: "command",
-        argv: [...found.argv],
-        expectExit: found.expectExit,
-        timeoutSec: found.timeoutSec,
-      }),
-      user: (): JudgeRefState => ({ kind: "user" }),
-      model: (found): JudgeRefState => ({
-        kind: "model",
-        spec: found.spec,
-        rubric: found.rubric,
-      }),
-      verification: (found): JudgeRefState => ({
-        kind: "verification",
-        recipe: found.recipe,
-      }),
-    })
-  );
+  plainCopy(encodeJudge(judge));

@@ -283,9 +283,13 @@ describe("the subagent row fiber's end", () => {
   );
 });
 
+/** The model a scripted child's dispatch resolved to, unless a test names another. */
+const SCRIPTED_MODEL = { provider: "scripted", modelId: "echo" };
+
 /** The documents a scripted child and its parent project, as `HarnessSeam.document` reads them. */
 const scriptedDocuments =
-  (parent: ThreadId) => (threadId: ThreadId, kind: string) => {
+  (parent: ThreadId, model = SCRIPTED_MODEL) =>
+  (threadId: ThreadId, kind: string) => {
     if (threadId === CHILD && kind === "cairn.child") {
       return Effect.succeedSome({
         key: "call-7",
@@ -310,8 +314,8 @@ const scriptedDocuments =
             dispatch: {
               spec: null,
               resolved: {
-                spec: "scripted/echo",
-                model: { provider: "scripted", modelId: "echo" },
+                spec: `${model.provider}/${model.modelId}`,
+                model,
                 thinkingLevel: null,
                 priced: false,
               },
@@ -463,6 +467,34 @@ describe("a scripted subagent's shell row", () => {
         assert.strictEqual(shell.provider, "scripted");
         assert.strictEqual(shell.modelId, "echo");
         assert.strictEqual(shell.runtimeMode, "auto-accept-edits");
+      }).pipe(Effect.provide(RowsTestLayer))
+  );
+
+  it.effect(
+    "takes its title and model when it runs on a parent's model id no spec may name",
+    () =>
+      Effect.gen(function* () {
+        const sink = yield* EventSink;
+        const project = createProject(1);
+        const parent = testThreadId(1);
+
+        yield* sink.commitCommand(project.command);
+        yield* sink.commitCommand(createThread(project.projectId, 1));
+
+        // An OpenRouter alias: `~` is outside `ModelSpec`, and the dispatch records the parent's
+        // model unchecked when the brief names none. The row reads only the resolved model.
+        const shell = yield* rowThroughSeam(
+          parent,
+          scriptedDocuments(parent, {
+            provider: "openrouter",
+            modelId: "~anthropic/claude-sonnet-latest",
+          })
+        );
+
+        assert.deepStrictEqual(
+          [shell.title, shell.provider, shell.modelId],
+          ["Count the files", "openrouter", "~anthropic/claude-sonnet-latest"]
+        );
       }).pipe(Effect.provide(RowsTestLayer))
   );
 

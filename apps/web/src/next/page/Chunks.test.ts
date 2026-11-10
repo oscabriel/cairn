@@ -4,6 +4,7 @@
 
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option } from "effect";
+import { Url } from "foldkit";
 import type { HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 
@@ -14,7 +15,13 @@ import { AppRoute } from "../../Route.ts";
 import { liveModel } from "../../TestFixtures.ts";
 import { update } from "../../Update.ts";
 import { view } from "../Frame.ts";
-import { initial as initialShell, initialWork } from "../shell/Model.ts";
+import {
+  FolderListing,
+  initial as initialShell,
+  initialWork,
+  ManageAction,
+} from "../shell/Model.ts";
+import { MYR, PROJECT_THREAD } from "../shell/ShellFixtures.ts";
 import * as Chunks from "./Chunks.ts";
 
 const namesOf = (commands: ReadonlyArray<{ readonly name: string }> = []) =>
@@ -95,7 +102,8 @@ describe("the chunks a cold load never draws", () => {
       failed.outMessage,
       Chunks.OutMessage.FailedChunk({ chunk: "popovers" })
     );
-    // While the popover stays open the failure stands: nothing refetches on every update.
+    // While the chunk is wanted the failure stands, so nothing refetches on every update; the root
+    // closes the view that waited (below), which puts it back to idle.
     assert.isTrue(Chunks.isServed(failed.model, ["popovers"]));
 
     const closed = Chunks.want(failed.model, []);
@@ -135,6 +143,159 @@ describe("the chunks a cold load never draws", () => {
       failed.model.notice,
       Option.some(Chunks.failureNotice("settings"))
     );
+  });
+
+  // A view whose chunk failed is closed, so its control's next tap opens it again and asks again:
+  // a touch screen has no Escape, and Cancel is inside the view that never drew (W-8 review).
+  it.each<[Chunks.ChunkName, (model: Model) => Model]>([
+    [
+      "refresh",
+      (model) => ({
+        ...model,
+        nextShell: {
+          ...model.nextShell,
+          refresh: Option.some({
+            projectId: MYR,
+            replaces: PROJECT_THREAD,
+            text: "",
+            isSending: false,
+            failure: Option.none(),
+          }),
+        },
+      }),
+    ],
+    [
+      "addProject",
+      (model) => ({
+        ...model,
+        nextShell: {
+          ...model.nextShell,
+          addProject: Option.some({
+            folder: "",
+            listing: FolderListing.Loading({ path: Option.none() }),
+            request: 1,
+            home: Option.none(),
+            adding: Option.none(),
+            failure: Option.none(),
+          }),
+        },
+      }),
+    ],
+    [
+      "manageDialog",
+      (model) => ({
+        ...model,
+        nextShell: {
+          ...model.nextShell,
+          manage: Option.some({
+            action: ManageAction.RenameProject({ projectId: MYR }),
+            text: "",
+            isSending: false,
+            failure: Option.none(),
+          }),
+        },
+      }),
+    ],
+    [
+      "popovers",
+      (model) => ({
+        ...model,
+        composer: {
+          ...model.composer,
+          popover: Option.some(
+            Popover.ModelPicker({
+              query: "",
+              highlighted: Option.none(),
+              provider: Option.none(),
+            })
+          ),
+        },
+      }),
+    ],
+    [
+      "workPanel",
+      (model) => ({
+        ...model,
+        nextShell: {
+          ...model.nextShell,
+          work: { ...model.nextShell.work, isOpen: true },
+        },
+      }),
+    ],
+    [
+      "goalPanel",
+      (model) => ({
+        ...model,
+        nextShell: {
+          ...model.nextShell,
+          goal: { ...model.nextShell.goal, isOpen: true },
+        },
+      }),
+    ],
+  ])(
+    "closes the %s view when its chunk fails, so the next open asks again",
+    (chunk, open) => {
+      const opened = update(
+        open(onRoute(AppRoute.Thread({ threadId: "thread-1" }))),
+        Message.WokeUp()
+      );
+
+      assert.strictEqual(opened.model.chunks[chunk], "loading");
+
+      const failed = update(
+        opened.model,
+        Message.GotChunkMessage({
+          message: Chunks.Message.FailedChunk({ chunk }),
+        })
+      );
+
+      assert.deepStrictEqual(Chunks.wantedChunks(failed.model), []);
+      assert.strictEqual(failed.model.chunks[chunk], "idle");
+      assert.deepStrictEqual(
+        failed.model.notice,
+        Option.some(Chunks.failureNotice(chunk))
+      );
+
+      const reopened = update(open(failed.model), Message.WokeUp());
+
+      assert.strictEqual(reopened.model.chunks[chunk], "loading");
+      assert.include(namesOf(reopened.commands), "LoadChunk");
+    }
+  );
+
+  it("asks again for a page's chunk that failed when the page is opened again", () => {
+    const opened = update(onRoute(AppRoute.Settings()), Message.WokeUp());
+
+    const failed = update(
+      opened.model,
+      Message.GotChunkMessage({
+        message: Chunks.Message.FailedChunk({ chunk: "settings" }),
+      })
+    );
+
+    assert.strictEqual(failed.model.chunks.settings, "failed");
+    assert.notInclude(
+      namesOf(update(failed.model, Message.WokeUp()).commands),
+      "LoadChunk"
+    );
+
+    const again = update(
+      failed.model,
+      Message.ChangedUrl({
+        url: Option.getOrThrow(
+          Url.fromString("https://code.gneiss.run/settings")
+        ),
+      })
+    );
+
+    assert.strictEqual(again.model.chunks.settings, "loading");
+    assert.include(namesOf(again.commands), "LoadChunk");
+  });
+
+  it("tells the user to open the view again, not to reload", () => {
+    for (const chunk of Chunks.CHUNKS) {
+      assert.notInclude(Chunks.failureNotice(chunk), "Reload");
+    }
   });
 
   it.effect("draws the usage page only once its chunk is in", () =>

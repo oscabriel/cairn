@@ -9,14 +9,17 @@
 // at once and the load judge's count of requests before interactive is unchanged. A module is code,
 // not state: it is held outside the Model, as the diff panel's view and the shiki grammars are, and
 // the Model records each chunk's progress, so the view that waits on one is drawn again when it
-// arrives. A view whose chunk is not in yet draws nothing; a failed fetch tells the root, which says
-// so in the notice bar, and the chunk is tried again the next time its view is wanted.
+// arrives. A view whose chunk is not in yet draws nothing. A failed fetch tells the root, which says
+// so in the notice bar and closes the view that waited (a touch screen has no Escape, and the view's
+// Cancel never drew), so its control's next tap opens it again and the chunk is asked for again. A
+// page's route is not closed: the next navigation, to it or away and back, asks again.
 
 import { Duration, Effect, Option, Predicate, Schedule, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Update } from "foldkit";
 import { focus } from "foldkit/dom";
 import { defineMessageUnion } from "foldkit/message";
+import { makeModifyFieldsFor, modifyFields } from "foldkit/struct";
 
 import type * as Popovers from "../../composer/Popovers.ts";
 import { INTERACTIVE_MARK } from "../../load/LoadMark.ts";
@@ -234,7 +237,7 @@ const LABELS: Readonly<Record<ChunkName, string>> = {
 
 /** The notice bar's words for a chunk that failed. */
 export const failureNotice = (chunk: ChunkName): string =>
-  `${LABELS[chunk]} could not load. Reload the page to try again.`;
+  `${LABELS[chunk]} could not load. Open it again to try again.`;
 
 /** Fetches `chunk` because its view is wanted. */
 export const LoadChunk = Command.define("LoadChunk", {
@@ -414,3 +417,68 @@ const IS_WANTED: Readonly<Record<ChunkName, (model: PageState) => boolean>> = {
 /** The chunks the root's page wants drawn now. */
 export const wantedChunks = (model: PageState): ReadonlyArray<ChunkName> =>
   CHUNKS.filter((chunk) => IS_WANTED[chunk](model));
+
+const modifyPage = makeModifyFieldsFor<PageState>();
+
+/** How the root closes each chunk's view when the chunk fails; a page's route stays as it is. */
+const CLOSE: Readonly<Record<ChunkName, <M extends PageState>(model: M) => M>> =
+  {
+    settings: (model) => model,
+    usage: (model) => model,
+    popovers: (model) =>
+      modifyPage(model, {
+        composer: (composer) =>
+          modifyFields(composer, { popover: () => Option.none() }),
+      }),
+    addProject: (model) =>
+      modifyPage(model, {
+        nextShell: (shell) =>
+          modifyFields(shell, { addProject: () => Option.none() }),
+      }),
+    workPanel: (model) =>
+      modifyPage(model, {
+        nextShell: (shell) =>
+          modifyFields(shell, {
+            work: (work) => modifyFields(work, { isOpen: () => false }),
+          }),
+      }),
+    goalPanel: (model) =>
+      modifyPage(model, {
+        nextShell: (shell) =>
+          modifyFields(shell, {
+            goal: (goal) => modifyFields(goal, { isOpen: () => false }),
+          }),
+      }),
+    refresh: (model) =>
+      modifyPage(model, {
+        nextShell: (shell) =>
+          modifyFields(shell, { refresh: () => Option.none() }),
+      }),
+    manageDialog: (model) =>
+      modifyPage(model, {
+        nextShell: (shell) =>
+          modifyFields(shell, { manage: () => Option.none() }),
+      }),
+  };
+
+/**
+ * Closes the view that waited for `chunk`, which failed: its control's next tap is a real open, so
+ * the chunk is asked for again (`want` puts a failed chunk no longer wanted back to idle).
+ */
+export const closeWaiting = <M extends PageState>(
+  chunk: ChunkName,
+  model: M
+): M => CLOSE[chunk](model);
+
+/** A navigation is a new open: every failed chunk goes back to idle, so a page's chunk is asked again. */
+export const navigated = (model: Model): Model => {
+  let next = model;
+
+  for (const chunk of CHUNKS) {
+    if (next[chunk] === "failed") {
+      next = withState(next, chunk, "idle");
+    }
+  }
+
+  return next;
+};

@@ -761,13 +761,16 @@ const readChunks = (model: Model): Option.Option<Chunks.Model> =>
 const writeChunks = (model: Model, chunks: Chunks.Model): Model =>
   modifyFields(model, { chunks: () => chunks });
 
-/** A chunk its view waited for failed: the notice bar says which, and to reload. */
+/**
+ * A chunk its view waited for failed: the notice bar says which, and the view closes, so its
+ * control's next tap opens it again and asks again (a touch screen has no Escape).
+ */
 const foldChunkOutMessage = (outMessage: Chunks.OutMessage): Step =>
   Chunks.OutMessage.match<Step>(outMessage, {
     FailedChunk:
       ({ chunk }) =>
       (model) => ({
-        model: modifyFields(model, {
+        model: modifyFields(Chunks.closeWaiting(chunk, model), {
           notice: () => Option.some(Chunks.failureNotice(chunk)),
         }),
       }),
@@ -1379,10 +1382,14 @@ const step = (received: Message): Step =>
             commands: [LoadExternal({ href })],
           }),
         }),
+    // A navigation is a new open: a page whose chunk failed asks for it again.
     ChangedUrl:
       ({ url }) =>
       (model) => ({
-        model: modifyFields(model, { route: () => urlToAppRoute(url) }),
+        model: modifyFields(model, {
+          route: () => urlToAppRoute(url),
+          chunks: Chunks.navigated,
+        }),
       }),
     CompletedNavigateInternal: () => (model) => ({ model }),
     CompletedLoadExternal: () => (model) => ({ model }),

@@ -10,6 +10,10 @@ import path from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import { isolateGitEnvironment } from "../../apps/server/src/git/GitTestKit.ts";
+
+isolateGitEnvironment();
+
 const guard = path.join(import.meta.dirname, "pi-bump-guard.sh");
 
 const root = mkdtempSync(path.join(tmpdir(), "cairn-pi-guard-"));

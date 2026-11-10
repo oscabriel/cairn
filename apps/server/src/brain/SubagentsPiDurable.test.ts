@@ -50,6 +50,7 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
   createProject,
@@ -78,6 +79,8 @@ import { FAUX_MODEL } from "./ModelSource.ts";
 import { piConversationId } from "./PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 import { SubagentToolText } from "./SubagentText.ts";
+
+isolateGitEnvironment();
 
 /** A 1x1 PNG. */
 const PNG_BASE64 =

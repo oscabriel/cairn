@@ -6,6 +6,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { Git, redactUrls } from "./Git.ts";
+import { isolateGitEnvironment } from "./GitTestKit.ts";
+
+isolateGitEnvironment();
 
 describe("git errors", () => {
   it("hide the user info of every URL", () => {

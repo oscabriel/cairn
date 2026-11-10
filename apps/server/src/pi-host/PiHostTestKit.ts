@@ -102,14 +102,14 @@ export const fixturePolicy = (
   fixture: HostFixture,
   options: {
     readonly scope: InstanceScope;
-    readonly versions?: string;
+    readonly versions?: ReadonlyArray<string>;
     readonly folderInstances?: number;
   }
 ): PiHostPolicy => ({
   packages: [
     {
       name: "pi-host-fixture",
-      versions: options.versions ?? "1.2.x",
+      versions: options.versions ?? ["1.2.x"],
       scope: options.scope,
       flags: () =>
         new Map([
@@ -121,7 +121,7 @@ export const fixturePolicy = (
     },
     {
       name: "pi-host-provider",
-      versions: "1.0.x",
+      versions: ["1.0.x"],
       scope: "brain",
       flags: () => new Map(),
       env: () => new Map(),

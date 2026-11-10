@@ -52,6 +52,9 @@ import {
   parseNumstat,
 } from "./Diffs.ts";
 import { Git, GIT_DEFAULTS } from "./Git.ts";
+import { isolateGitEnvironment } from "./GitTestKit.ts";
+
+isolateGitEnvironment();
 
 const GitLayer = Git.layerNoDeps.pipe(Layer.provideMerge(NodeServices.layer));
 

@@ -44,6 +44,7 @@ import {
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
@@ -79,6 +80,8 @@ import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
+
+isolateGitEnvironment();
 
 /** The parent's thread. */
 const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-000000000170");

@@ -13,6 +13,7 @@ import { Effect, FileSystem, Layer, Option } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
@@ -34,6 +35,8 @@ import { ExtensionSet } from "./ExtensionSet.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
+
+isolateGitEnvironment();
 
 /**
  * The brain over the children's workspaces `workspaces`, which its subagents extension makes

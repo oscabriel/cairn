@@ -4,8 +4,11 @@
 // - cwd isolation: two threads in two folders calling at once each see the folder their own
 //   instance started in. The mutation control runs the same calls on a host that shares one
 //   instance between folders and must fail them, which proves the judge can fail.
-// - the allowlist: a package no policy names never runs its code, one outside its version range
-//   loads nothing, and one that registers a provider is dropped while boot goes on.
+// - the allowlist: a package no policy names never runs its code, one outside its version ranges
+//   loads nothing, one inside any of them loads, and one that registers a provider is dropped
+//   while boot goes on.
+//
+// The user's real pi packages are judged by `judges/pi-host.ts`, outside the gate.
 // - the pool: concurrent first calls in one folder share one start, the least recently used idle
 //   folder is shut down past the limit, and closing the host shuts every instance down.
 
@@ -242,7 +245,10 @@ describe("the host's lifecycle and allowlist", () => {
         Effect.provide(
           hostLayer(
             fixture,
-            fixturePolicy(fixture, { scope: "brain", versions: "2.0.x" })
+            fixturePolicy(fixture, {
+              scope: "brain",
+              versions: ["1.1.x", "2.0.x"],
+            })
           )
         )
       );
@@ -250,6 +256,29 @@ describe("the host's lifecycle and allowlist", () => {
       assert.deepStrictEqual(host.packages, []);
       assert.deepStrictEqual(host.extension.extension.tools, []);
       assert.deepStrictEqual(logLines(fixture), [], "its code never started");
+    })
+  );
+
+  it.live("a package inside any one of its vetted ranges loads", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture(["pi-host-fixture"]);
+
+      const host = yield* PiHost.pipe(
+        Effect.provide(
+          hostLayer(
+            fixture,
+            fixturePolicy(fixture, {
+              scope: "brain",
+              versions: ["1.1.x", "1.2.x"],
+            })
+          )
+        )
+      );
+
+      assert.deepStrictEqual(
+        host.packages.map((loaded) => `${loaded.name}@${loaded.version}`),
+        ["pi-host-fixture@1.2.3"]
+      );
     })
   );
 });

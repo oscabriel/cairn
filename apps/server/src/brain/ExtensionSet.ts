@@ -74,9 +74,10 @@ const production: ReadonlyArray<
 // `ModelSpecs` leaves `SettingsStore` (and `ModelHealth`) to the root as well: `SettingsLive` in
 // the entry points, `SettingsStore.layerTest` in tests. It reads the Claude plan's windows from
 // `BridgeProvider`, a reference the deployed root provides. The `cairn.reach` tools read
-// `Artifacts` and `PortalTools`, which the root gives too (`ReachLive` in `AppLayer.ts`, the same
-// reference its handlers and boot repairs use; `ReachServicesTest` in tests), so one porch client
-// and one portal store serve the tools and the RPCs. `Subagents` is the root's as well:
+// `Artifacts`, `PortalTools` and `ReachStatus`, which the root gives too (`ReachLive` in
+// `AppLayer.ts`, the same reference its handlers and boot repairs use; `ReachServicesTest` in
+// tests), so one porch client and one portal store serve the tools and the RPCs; the extension
+// carries its tools only when that porch is set up at boot (ADR 0038). `Subagents` is the root's as well:
 // `Subagents.layer` over the root's `ChildWorkspaces` in the entry points, `Subagents.layerWith`
 // with planted faults in a test brain. The budget gate reads `BudgetBook.layer`, the reference
 // `AppLayer` gives the spend ledger, `Budgets` and the guard, so the memo map builds one book;

@@ -3,7 +3,8 @@
 // no machine config (`no-config`, before `porch init`). That is a state of the machine, not a
 // fault: the portal reconcile and the sweep record `porch: not set up` here, log it once at info
 // with the stage to run, and go on, instead of failing the boot repair or warning every minute.
-// The reach tools are unchanged: they answer porch's own "not set up" error to the model.
+// The `cairn.reach` extension asks first, when the extension set is built at boot, and carries its
+// six tools only when porch is ready (`ReachExtension.ts`), so no model is offered them before.
 //
 // `Portals.layerNoDeps` builds the status and gives it out beside `Portals`, so every root that has
 // portals has one status and no root provides it by hand.

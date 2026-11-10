@@ -28,6 +28,8 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Server settings**: The settings the brain owns and every device shares (auto-settle days, the title model, whether Claude is offered through the bridge, the bridge's generation cap and the default budget), kept in `cairn.sqlite`.
 
+**Rolling copy**: A store's daily backup: `brain.sqlite` and `cairn.sqlite` each keep their newest three copies under `<dataDir>/backups` (`brain-daily-<time>.sqlite`, `cairn-daily-<time>.sqlite`), made through SQLite's online backup when the newest on disk is a day old (ADR 0016). The second copy folder (`CAIRN_BACKUP_COPY_DIR`, off the NVMe) gets each one too. _Avoid_: mirror (that is an escalated question's record), snapshot.
+
 ## Conversations
 
 **Thread**: One conversation in the sidebar. Its arms are the project's checkout or its own git worktree on the Beelink.
@@ -398,7 +400,7 @@ _Avoid_: page, report (for the published thing)
 
 **Porch**: The user's tool (porchlight) that names private `gneiss.run` URLs and renders them into Caddy. Cairn publishes artifacts and opens portals by calling it.
 
-**Reach state**: What the brain knows of porch: unknown, ready, or not set up (the porch binary is missing or has no machine config). The portal reconcile and sweep record it and log it once at info; it is not a boot failure.
+**Reach state**: What the brain knows of porch: unknown, ready, or not set up (the porch binary is missing or has no machine config). The portal reconcile and sweep record it and log it once at info; it is not a boot failure. The brain also asks as it builds its extension set at boot, and offers models the artifact and portal tools only when porch is ready (ADR 0038).
 
 _Avoid_: preview, tunnel
 

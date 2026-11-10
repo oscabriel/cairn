@@ -107,17 +107,22 @@ const Boot = BootLayer({
 });
 
 /**
- * `cairn.sqlite` under the configured data directory, migrated (with a backup first). Exported so
- * `main.ts` gives the Executor link this same reference, and the memo map opens one connection.
+ * `cairn.sqlite` under the configured data directory, migrated (with a backup first), with its
+ * daily rolling copy. Exported so `main.ts` gives the Executor link this same reference, and the
+ * memo map opens one connection.
  */
 export const DatabaseLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
 
-    return Database.layer({
-      filename: path.join(config.dataDir, "cairn.sqlite"),
-      migrations,
-    });
+    return Database.layerRollingCopy(config.backupCopyDir).pipe(
+      Layer.provideMerge(
+        Database.layer({
+          filename: path.join(config.dataDir, "cairn.sqlite"),
+          migrations,
+        })
+      )
+    );
   })
 );
 
@@ -207,7 +212,7 @@ const BrainConfigLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
 
-    return BrainConfig.layerFrom(config.dataDir);
+    return BrainConfig.layerFrom(config.dataDir, config.backupCopyDir);
   })
 );
 

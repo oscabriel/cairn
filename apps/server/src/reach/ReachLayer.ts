@@ -103,7 +103,8 @@ export const ReachServices = Layer.mergeAll(
 
 /**
  * The reach services over `ReachMachine.layerTest`, a fresh migrated in-memory `cairn.sqlite` and a
- * temp data folder: for tests that build the extension set without a database of their own.
+ * temp data folder: for tests that build the extension set without a database of their own. The
+ * fake porch is given out too, since the `cairn.reach` tools ask it whether porch is set up.
  */
 export const ReachServicesTest = Layer.unwrap(
   Effect.gen(function* () {
@@ -114,7 +115,7 @@ export const ReachServicesTest = Layer.unwrap(
     });
 
     return ReachServices.pipe(
-      Layer.provide(ReachMachine.layerTest),
+      Layer.provideMerge(ReachMachine.layerTest),
       Layer.provide(Database.layerTest(migrations)),
       Layer.provide(
         ServerConfig.layerWith({ dataDir: path.join(root, "data") })

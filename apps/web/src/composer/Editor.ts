@@ -183,6 +183,43 @@ export const ComposerInput = Mount.defineStream("ComposerInput", {
 
           let last = { start: -1, end: -1 };
 
+          // A press that moves focus off the editor (a mouse down on Send) reports the blur only
+          // once it ends, a task later so its click lands first: the blur lets a request card the
+          // typing guard held take the composer's slot on the phone, and a card drawn mid-press
+          // would take the click meant for Send (W-1). A blur with no press under way, or one
+          // that a touch tap makes after its pointer is up, is reported at once.
+          let pressing = false;
+          let blurWaiting = false;
+          let blurTimeout: ReturnType<typeof setTimeout> | undefined;
+
+          const endPress = () => {
+            pressing = false;
+
+            if (!blurWaiting) {
+              return;
+            }
+
+            blurWaiting = false;
+            blurTimeout = setTimeout(() => {
+              if (document.activeElement !== element) {
+                Queue.offerUnsafe(queue, Message.BlurredEditor());
+              }
+            }, 0);
+          };
+
+          const pressListeners: ReadonlyArray<
+            readonly [string, (event: Event) => void]
+          > = [
+            [
+              "pointerdown",
+              () => {
+                pressing = true;
+              },
+            ],
+            ["pointerup", endPress],
+            ["pointercancel", endPress],
+          ];
+
           if (element instanceof HTMLTextAreaElement) {
             const reportSelection = () => {
               const current = {
@@ -231,12 +268,19 @@ export const ComposerInput = Mount.defineStream("ComposerInput", {
               [
                 "focus",
                 () => {
+                  blurWaiting = false;
                   Queue.offerUnsafe(queue, Message.FocusedEditor());
                 },
               ],
               [
                 "blur",
                 () => {
+                  if (pressing) {
+                    blurWaiting = true;
+
+                    return;
+                  }
+
                   Queue.offerUnsafe(queue, Message.BlurredEditor());
                 },
               ]
@@ -245,14 +289,24 @@ export const ComposerInput = Mount.defineStream("ComposerInput", {
             for (const [type, listener] of listeners) {
               element.addEventListener(type, listener);
             }
+
+            for (const [type, listener] of pressListeners) {
+              window.addEventListener(type, listener, { capture: true });
+            }
           }
 
-          return listeners;
+          return { listeners, pressListeners, blurTimeout: () => blurTimeout };
         }),
-        (listeners) =>
+        ({ blurTimeout: pendingBlur, listeners, pressListeners }) =>
           Effect.sync(() => {
+            clearTimeout(pendingBlur());
+
             for (const [type, listener] of listeners) {
               element.removeEventListener(type, listener);
+            }
+
+            for (const [type, listener] of pressListeners) {
+              window.removeEventListener(type, listener, { capture: true });
             }
           })
       ).pipe(Effect.flatMap(() => Effect.never))

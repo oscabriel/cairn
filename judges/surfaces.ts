@@ -9,7 +9,7 @@
 // ends with one JSON line. No model provider is called.
 //
 //   node judges/surfaces.ts [--only card-approval,card-question,card-typing,brief-go,brief-go-back,brief-go-unready]
-//                           [--width 390,1440] [--broken slot|double|advance|undo|nocheck]
+//                           [--width 390,1440] [--broken slot|double|advance|undo|nocheck|typing]
 //                           [--out <dir>]
 //
 // Checks (6A, the request card):
@@ -33,7 +33,10 @@
 //                  the keys keep coming (the composer drawn, no key dropped), and shows only once
 //                  the typing pauses (the typing guard, W-1: not sooner than 1 s after the last
 //                  key); the draft holds every key typed; at 390 a key pressed once the card took
-//                  the composer's slot lands in no hidden draft.
+//                  the composer's slot lands in no hidden draft. Then at 390, with a second
+//                  approval waiting while the user types, a mouse press on Send held 100 ms sends
+//                  exactly one `thread.send` and empties the draft, though the press moved focus
+//                  off the editor, and the card shows after it.
 //
 // Checks (6B, the brief card and Go; ADR 0026, 0030, 0043):
 //   brief-go          a `subagent_spawn` brief naming `faux/scripted:medium` shows its words (Do,
@@ -61,7 +64,9 @@
 //   advance  the 200 ms pause fires at once (card-question);
 //   undo     the 3 s undo window fires at once (card-question);
 //   nocheck  every `models.check` frame is dropped, so no model is ever checked (brief-go,
-//            brief-go-unready).
+//            brief-go-unready);
+//   typing   every key in the composer's editor blurs and refocuses it first, so the typing guard
+//            lets a waiting request go while the user types (card-typing).
 // Exits 0 when every check passed; a broken control's run exits 1 when it failed rightly, and the
 // JSON line names the failing checks.
 
@@ -91,6 +96,7 @@ const BROKEN_CONTROLS = [
   "advance",
   "undo",
   "nocheck",
+  "typing",
 ] as const;
 
 type Broken = (typeof BROKEN_CONTROLS)[number] | "";
@@ -214,6 +220,26 @@ const plantSlot = () => {
   });
 };
 
+// Blurs and refocuses the composer's editor before every key it takes: each blur releases the
+// typing guard, so a request that arrived while the user types shows at their next key.
+const plantTyping = () => {
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      const { target } = event;
+
+      if (
+        target instanceof HTMLElement &&
+        target.dataset.testid === "composer-editor"
+      ) {
+        target.blur();
+        target.focus();
+      }
+    },
+    { capture: true }
+  );
+};
+
 // Sends every `thread.respond` frame twice. Page code, kept as text: it patches the browser's own
 // WebSocket, which this module's types cannot describe without casts.
 const PLANT_DOUBLE = `
@@ -265,6 +291,10 @@ const newDevice = async (
     await context.addInitScript(plantSlot);
   }
 
+  if (broken === "typing") {
+    await context.addInitScript(plantTyping);
+  }
+
   if (broken === "double") {
     await context.addInitScript({ content: PLANT_DOUBLE });
   }
@@ -287,11 +317,15 @@ const newDevice = async (
 const editor = (page: Page) =>
   page.locator('[data-testid="composer-editor"]').first();
 
-/** A page and the `thread.respond` and `models.check` frames it sent, with the time each left. */
+/**
+ * A page and the `thread.respond`, `models.check` and `thread.send` frames it sent, with the time
+ * each left.
+ */
 interface Device {
   readonly page: Page;
   readonly responds: Array<number>;
   readonly checks: Array<number>;
+  readonly sends: Array<number>;
 }
 
 const openThread = async (
@@ -301,6 +335,7 @@ const openThread = async (
   const page = await context.newPage();
   const responds: Array<number> = [];
   const checks: Array<number> = [];
+  const sends: Array<number> = [];
 
   page.on("websocket", (socket) => {
     socket.on("framesent", ({ payload }) => {
@@ -310,6 +345,10 @@ const openThread = async (
 
       if (String(payload).includes("models.check")) {
         checks.push(Date.now());
+      }
+
+      if (String(payload).includes("thread.send")) {
+        sends.push(Date.now());
       }
     });
   });
@@ -321,7 +360,7 @@ const openThread = async (
   // Attached, not visible: on the phone a pending request hides the composer.
   await editor(page).waitFor({ state: "attached", timeout: 15_000 });
 
-  return { page, responds, checks };
+  return { page, responds, checks, sends };
 };
 
 const card = (page: Page) => page.locator('[data-testid="request-card"]');
@@ -844,6 +883,94 @@ const KEYS_AFTER_REQUEST = 30;
 const TYPED_WORDS =
   "steer the subagents toward the parser first, then the tests ";
 
+/**
+ * At 390 with a mouse (a narrow desktop window): the user types, a request arrives and waits, and
+ * they press Send, holding the button 100 ms as a hand does. The press moves focus off the editor,
+ * which lets the card take the composer's slot; the press must still send the turn (W-1).
+ */
+const pressSendWhileHeld = async (
+  context: BrowserContext,
+  a: Device,
+  b: Device,
+  headerSays: (word: string) => Promise<boolean>,
+  typeKey: () => Promise<void>
+) => {
+  const settledUntil = Date.now() + 10_000;
+
+  while ((await headerSays("Approval")) && Date.now() < settledUntil) {
+    await settle(100);
+  }
+
+  await editor(a.page).fill("");
+  await editor(a.page).focus();
+
+  const raising = send(b.page, "open the gate again while typing");
+  const until = Date.now() + 15_000;
+
+  while (!(await headerSays("Approval")) && Date.now() < until) {
+    await typeKey();
+  }
+
+  await raising;
+  expect(
+    await headerSays("Approval"),
+    "the header never said the thread waits on the second approval"
+  );
+  await typeKey();
+
+  const box = await a.page
+    .locator('[data-testid="composer-send"]')
+    .first()
+    .boundingBox();
+
+  expect(box !== null, "Send is not drawn while the request waits");
+
+  const x = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+  const y = (box?.y ?? 0) + (box?.height ?? 0) / 2;
+  const sendsBefore = a.sends.length;
+  const cdp = await context.newCDPSession(a.page);
+  const press = { button: "left", x, y, modifiers: 0, clickCount: 1 };
+
+  await a.page.mouse.move(x, y);
+  await cdp.send("Input.dispatchMouseEvent", {
+    ...press,
+    type: "mousePressed",
+    buttons: 1,
+  });
+  await settle(100);
+  await cdp.send("Input.dispatchMouseEvent", {
+    ...press,
+    type: "mouseReleased",
+    buttons: 0,
+  });
+
+  const sentUntil = Date.now() + 5000;
+
+  while (a.sends.length === sendsBefore && Date.now() < sentUntil) {
+    await settle(100);
+  }
+
+  // Long enough for a second frame to follow, if one would.
+  await settle(500);
+
+  const sent = a.sends.length - sendsBefore;
+  const draft = await editor(a.page).inputValue();
+
+  expect(
+    sent === 1,
+    `a mouse press on Send with a request waiting sent ${sent} turns, not 1`
+  );
+  expect(
+    draft === "",
+    `the draft still holds ${JSON.stringify(draft)} after Send`
+  );
+
+  // The send lets the card show; approve it, so the next check starts from an empty card.
+  await card(a.page).waitFor({ state: "visible", timeout: 10_000 });
+  await action(a.page, "approve").click();
+  await card(a.page).waitFor({ state: "hidden", timeout: 10_000 });
+};
+
 const cardTyping = async (browser: Browser, url: string, width: number) => {
   const contextA = await newDevice(browser, width);
   const contextB = await newDevice(browser, width);
@@ -852,6 +979,9 @@ const cardTyping = async (browser: Browser, url: string, width: number) => {
     const a = await openThread(contextA, url);
     const b = await openThread(contextB, url);
     const header = a.page.locator('[data-testid="next-header-status"]');
+
+    const headerSays = async (word: string) =>
+      ((await header.textContent()) ?? "").includes(word);
 
     await editor(a.page).focus();
 
@@ -885,16 +1015,13 @@ const cardTyping = async (browser: Browser, url: string, width: number) => {
     const raising = send(b.page, `open the gate while typing (${width})`);
     const until = Date.now() + 15_000;
 
-    while (
-      !((await header.textContent()) ?? "").includes("Approval") &&
-      Date.now() < until
-    ) {
+    while (!(await headerSays("Approval")) && Date.now() < until) {
       await typeKey();
     }
 
     await raising;
     expect(
-      ((await header.textContent()) ?? "").includes("Approval"),
+      await headerSays("Approval"),
       "the header never said the thread waits on an approval"
     );
 
@@ -932,11 +1059,17 @@ const cardTyping = async (browser: Browser, url: string, width: number) => {
     await action(a.page, "approve").click();
     await card(a.page).waitFor({ state: "hidden", timeout: 10_000 });
 
+    const keysTyped = typed.length;
+
+    if (width < 640) {
+      await pressSendWhileHeld(contextA, a, b, headerSays, typeKey);
+    }
+
     record(
       "card-typing",
       width,
       true,
-      `${typed.length} keys, none dropped; the card waited while the header said Approval and showed ${waitedMs} ms after the last key`
+      `${keysTyped} keys, none dropped; the card waited while the header said Approval and showed ${waitedMs} ms after the last key${width < 640 ? "; a mouse press on Send with a request waiting sent the turn" : ""}`
     );
   } catch (error) {
     await keepScreens("card-typing", width, [contextA, contextB]);

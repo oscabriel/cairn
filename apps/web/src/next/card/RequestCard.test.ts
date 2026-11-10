@@ -997,6 +997,59 @@ describe("the request card while the user types in the composer (W-1)", () => {
     );
   });
 
+  it("holds a request in a second thread whose id repeats one shown in the first", () => {
+    // A budget raise is keyed `budget-raise-<epoch>` in its own thread's approvals, from epoch 0 in
+    // every thread, so two threads' first raises share an id.
+    const raiseId = ApprovalId.make("budget-raise-0");
+    const raise = record({ id: raiseId });
+    const otherThread = ThreadId.make("01890a5d-ac96-774b-bcce-b302099a0002");
+
+    // Thread A's raise shows while the user is idle.
+    const shownInA = informed(showing(null), doc(raise)).model;
+
+    cardIsUp(shownInA, raiseId);
+
+    // The user opens thread B, focuses the composer and types; B's first raise lands mid-word.
+    const typingInB = report(
+      informed(shownInA, null, true, otherThread).model,
+      composerFocused,
+      composerTyped
+    ).model;
+
+    const arrivedInB = informed(typingInB, doc(raise), true, otherThread);
+
+    assert.deepStrictEqual(arrivedInB.model.typing.held, [raiseId]);
+    cardWaits(arrivedInB.model);
+
+    const paused = run(
+      arrivedInB.model,
+      Message.ElapsedTypingPause({ timer: typingInB.typingTimer })
+    );
+
+    cardIsUp(paused.model, raiseId);
+  });
+
+  it("forgets the requests it saw on a thread switch, and keeps the composer's focus and typing", () => {
+    const typingInA = informed(typingInComposer().model, doc(approval)).model;
+
+    const moved = informed(
+      typingInA,
+      null,
+      true,
+      ThreadId.make("01890a5d-ac96-774b-bcce-b302099a0002")
+    ).model;
+
+    assert.deepStrictEqual(
+      [
+        moved.typing.seen,
+        moved.typing.held,
+        moved.typing.focused,
+        moved.typing.lastTypedAt,
+      ],
+      [[], [], true, typingInA.typing.lastTypedAt]
+    );
+  });
+
   it("checks a held brief's models only once it shows", () => {
     const arrived = informed(typingInComposer().model, doc(brief));
 
@@ -1074,6 +1127,29 @@ describe("the card's status, pinned with its actions (U-5)", () => {
         "The answer did not reach Cairn."
       ),
       Scene.expect(inBody("request-card-failure")).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("keeps why Go waits on the budget out of the scrolling body", () => {
+    const bId = ApprovalId.make("b-1");
+
+    const typed = run(
+      showing(doc(brief)),
+      Message.ClickedChangeBudget({ approvalId: bId }),
+      Message.ChangedBudgetDollars({ approvalId: bId, value: "abc" })
+    ).model;
+
+    Scene.scene(
+      config,
+      Scene.given(typed),
+      Scene.expect(inStatus("request-card-budget-blocked")).toContainText(
+        "Dollars must be an amount above zero"
+      ),
+      Scene.expect(inBody("request-card-budget-blocked")).toBeAbsent(),
+      Scene.expect(Scene.role("button", { name: "Go" })).toBeDisabled(),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

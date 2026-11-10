@@ -1236,8 +1236,39 @@ const failureBar = (model: Model, h: H): Option.Option<Html> =>
   );
 
 /**
+ * Why Go waits on the budget field: what it holds is not a budget. The field's own hint says so too,
+ * but it scrolls with the body, and Go, disabled, never says why on a press.
+ */
+const budgetBlockBar = (
+  model: Model,
+  h: H,
+  request: PendingRequest
+): Option.Option<Html> =>
+  Option.map(
+    Option.filter(
+      Result.getFailure(budgetEdit(model, request)),
+      () =>
+        !Option.contains(model.declining, request.record.id) &&
+        !Option.contains(model.sendingBack, request.record.id)
+    ),
+    (problem) =>
+      banner(
+        h,
+        {
+          tone: "failed",
+          mark: Option.none(),
+          title: "Go waits on the budget.",
+          detail: Option.some(problem),
+          actions: [],
+        },
+        [h.DataAttribute("testid", "request-card-budget-blocked")]
+      )
+  );
+
+/**
  * What the card says about its answer, pinned with its actions below the scrolling body so it is
- * always in view (U-5): why Go is blocked, the undo bar, and why the last answer did not go.
+ * always in view (U-5): why Go is blocked by a model or by the budget field, the undo bar, and why
+ * the last answer did not go.
  */
 const statusOf = (
   model: Model,
@@ -1246,6 +1277,7 @@ const statusOf = (
 ): ReadonlyArray<Html> =>
   Array.getSomes([
     goBlockBar(model, h, request),
+    budgetBlockBar(model, h, request),
     undoBar(model, h, request.record.id),
     failureBar(model, h),
   ]);

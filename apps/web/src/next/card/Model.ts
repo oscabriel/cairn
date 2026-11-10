@@ -131,7 +131,9 @@ export const Model = Schema.Struct({
   closed: Schema.Option(ClosedRequest),
   /**
    * The composer's typing guard: the requests seen, those held back while the user types, and the
-   * composer's focus. Carried over a thread switch, since the composer stays where it is.
+   * composer's focus. Its focus and typing carry over a thread switch, since the composer stays
+   * where it is; the requests it saw and holds do not, since a request's id is unique only in its
+   * own thread.
    */
   typing: TypingGuardState,
   /** Bumped by every keystroke in the composer, so only the last one's pause releases the guard. */

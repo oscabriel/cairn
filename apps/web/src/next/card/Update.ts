@@ -34,7 +34,9 @@
 //   composer typing guard, `ComposerTypingGuard.ts`; W-1): the card shows it once the user pauses
 //   for `COMPOSER_TYPING_IDLE_MS` (1.5 s), sends or leaves the composer, so it never takes the
 //   composer's slot mid-word on the phone. Only the card waits: the thread's row and header show
-//   the request from the stream at once. A request that showed once is never held again.
+//   the request from the stream at once. A request that showed once is never held again while its
+//   thread stays open. The composer leaves only once a press on it ends (`Editor.ts`), so a press
+//   on Send is not lost to a card that takes the slot under the pointer.
 
 import {
   goBlockOf,
@@ -46,6 +48,7 @@ import {
 } from "@cairn/client-logic/BriefGo";
 import {
   COMPOSER_TYPING_IDLE_MS,
+  initialTypingGuard,
   TypingGuardEvent,
   updateTypingGuard,
 } from "@cairn/client-logic/ComposerTypingGuard";
@@ -1082,14 +1085,21 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
 
   // The check generation and the timer carry over, so an answer to another thread's check is never
   // taken, and a pause or an undo window's wait from before the switch, which keeps running, never
-  // ends a later one. The typing guard carries over too: the composer is where it was.
+  // ends a later one. The composer's focus and typing carry over, since the composer is where it
+  // was, but the requests the guard saw do not: a request's id is unique only in its own thread (a
+  // budget raise is `budget-raise-<epoch>` from epoch 0 in every thread), so another thread's
+  // request seen here must not let this thread's request past the guard.
   const base = sameThread
     ? model
     : {
         ...initial,
         checkGeneration: model.checkGeneration,
         timer: model.timer,
-        typing: model.typing,
+        typing: {
+          ...initialTypingGuard,
+          focused: model.typing.focused,
+          lastTypedAt: model.typing.lastTypedAt,
+        },
         typingTimer: model.typingTimer,
       };
 

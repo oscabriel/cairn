@@ -531,7 +531,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
-    control: "--broken slot|double|advance|undo|nocheck",
+    control: "--broken slot|double|advance|undo|nocheck|typing",
   },
   {
     name: "transcript-scroll",

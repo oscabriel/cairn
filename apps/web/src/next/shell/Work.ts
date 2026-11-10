@@ -5,7 +5,9 @@
 // - Lineage: the way up (the parent, then its parent, each a link) and the thread's children, the
 //   live ones first with Stop beside each and the resting ones under "Previous", folded, six rows
 //   then twelve more per "Show more" (t3code's lineage panel, `ThreadRelationshipsControl.tsx`).
-//   A child's state is the one thread-state function's (client-logic `ThreadLineage.ts`).
+//   A child's state is the one thread-state function's (client-logic `ThreadLineage.ts`), drawn in
+//   the one state table's word and mark (`STATE_LOOKS`, U-14). A row's Stop says "Stop" beside the
+//   composer's Stop glyph; nothing undoes it, so its first press asks "Stop?" in place (U-3).
 // - Steps: on a subagent's own page, its steps from Go to its answer (`SubagentSteps.ts`), which the
 //   header's button counts ("2/4 steps").
 // - Workflows: each workflow of the thread's dispatch ledger as the steps panel reads it
@@ -43,6 +45,8 @@ import {
   settledOutcomesOf,
   showMoreCount,
 } from "@cairn/client-logic/ThreadLineage";
+import { STATE_LOOKS } from "@cairn/client-logic/ThreadState";
+import type { StateLook } from "@cairn/client-logic/ThreadState";
 import {
   isStoppableNode,
   isStoppableWorkflow,
@@ -70,7 +74,7 @@ import type { WorkflowRecord } from "@cairn/protocol/Workflows";
 import { Option, Predicate, Schema } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
-import { CornerLeftUp, ListTree, Square, X } from "lucide";
+import { CornerLeftUp, ListTree, X } from "lucide";
 
 import type { Model } from "../../Model.ts";
 import { threadRouter } from "../../Route.ts";
@@ -85,8 +89,8 @@ import {
 } from "../ui/Classes.ts";
 import { disclosure } from "../ui/Disclosure.ts";
 import type { StatusMark } from "../ui/Glyph.ts";
-import { glyph, markOfTone, statusGlyph } from "../ui/Glyph.ts";
-import { iconButton } from "../ui/IconButton.ts";
+import { glyph, markOfTone, statusGlyph, stopGlyph } from "../ui/Glyph.ts";
+import { iconButtonWithTooltip } from "../ui/IconButton.ts";
 import type { Tone } from "../ui/Tone.ts";
 import { TONE_TEXT, toneOfThreadTone } from "../ui/Tone.ts";
 import type { Message } from "./Message.ts";
@@ -254,17 +258,17 @@ const mark = (h: H, tone: Tone, which: StatusMark = markOfTone(tone)): Html =>
     [statusGlyph(h, which, "regular")]
   );
 
-const STEP_LOOK: Readonly<
-  Record<
-    ChildStepState,
-    { readonly tone: Tone; readonly mark: StatusMark; readonly word: string }
-  >
-> = {
-  done: { tone: "done", mark: "done", word: "done" },
-  now: { tone: "working", mark: "busy", word: "now" },
-  todo: { tone: "neutral", mark: "todo", word: "to do" },
-  failed: { tone: "failed", mark: "failed", word: "failed" },
-  stopped: { tone: "neutral", mark: "idle", word: "stopped" },
+/** A state's mark, from the one state table (U-14). */
+const lookMark = (h: H, look: StateLook): Html =>
+  mark(h, toneOfThreadTone(look.tone), look.mark);
+
+/** A subagent's steps in the table's words, sentence case like every row's (U-14). */
+const STEP_LOOK: Readonly<Record<ChildStepState, StateLook>> = {
+  done: STATE_LOOKS.done,
+  now: STATE_LOOKS.now,
+  todo: STATE_LOOKS.todo,
+  failed: STATE_LOOKS.failed,
+  stopped: STATE_LOOKS.stopped,
 };
 
 /** What the steps sum to: failed if one failed, at work while one is now, done when all are. */
@@ -377,11 +381,46 @@ const ancestorRow = (h: H, ancestor: LineageAncestor, index: number): Html => {
   );
 };
 
+/**
+ * A row's Stop (U-3): the word and the one Stop glyph, never a bare square. Nothing undoes a stop,
+ * so the first press asks "Stop?" in place and the second stops; leaving the control, any other
+ * press in the panel, or a pause of `STOP_ASK_MS` lets it go.
+ */
+const rowStop = (
+  h: H,
+  config: {
+    readonly title: string;
+    readonly testId: string;
+    readonly isArmed: boolean;
+    readonly message: Message;
+  }
+): Html =>
+  button(
+    h,
+    {
+      ...buttonDefaults<Message>(),
+      variant: config.isArmed ? "danger" : "ghost",
+      size: "small",
+      onClick: Option.some(config.message),
+      ariaLabel: Option.some(
+        config.isArmed
+          ? `Stop ${config.title}? Press again to stop it`
+          : `Stop ${config.title}`
+      ),
+      attributes: [
+        h.DataAttribute("testid", config.testId),
+        ...onlyIf(config.isArmed, h.DataAttribute("armed", "true")),
+        h.OnBlur(ShellMessage.BlurredStop()),
+      ],
+    },
+    [stopGlyph(h), config.isArmed ? "Stop?" : "Stop"]
+  );
+
 const childRow = (h: H, child: LineageChild, work: WorkState): Html => {
   const { thread, status, label } = child;
   const isStopping = work.stopping.includes(thread.id);
-  const tone = toneOfThreadTone(label.tone);
   const isStoppable = isStoppableChildStatus(status);
+  const look = isStopping ? STATE_LOOKS.stopping : label;
 
   return h.li(
     [
@@ -399,26 +438,18 @@ const childRow = (h: H, child: LineageChild, work: WorkState): Html => {
           h.Class(LINK_ROW),
         ],
         [
-          isStopping ? mark(h, "working", "busy") : mark(h, tone),
+          lookMark(h, look),
           title(h, thread.title),
-          word(h, isStopping ? "Stopping" : label.word, "work-child-state"),
+          word(h, look.word, "work-child-state"),
         ]
       ),
       isStoppable && !isStopping
-        ? iconButton(
-            h,
-            {
-              ...buttonDefaults<Message>(),
-              variant: "ghost",
-              size: "small",
-              label: `Stop ${thread.title}`,
-              onClick: Option.some(
-                ShellMessage.ClickedStopChild({ threadId: thread.id })
-              ),
-              attributes: [h.DataAttribute("testid", "work-child-stop")],
-            },
-            glyph(h, Square, "square", "small")
-          )
+        ? rowStop(h, {
+            title: thread.title,
+            testId: "work-child-stop",
+            isArmed: Option.contains(work.armedStop, thread.id),
+            message: ShellMessage.ClickedStopChild({ threadId: thread.id }),
+          })
         : h.empty,
     ]
   );
@@ -549,7 +580,7 @@ const stepsSection = (h: H, steps: ReadonlyArray<ChildStep>): Html =>
               h.Class(classNames(ROW, "min-h-9 pointer-coarse:min-h-9")),
             ],
             [
-              mark(h, look.tone, look.mark),
+              lookMark(h, look),
               title(h, step.title),
               Option.match(step.meta, {
                 onNone: () => h.empty,
@@ -566,27 +597,25 @@ const stepsSection = (h: H, steps: ReadonlyArray<ChildStep>): Html =>
 // ---------------------------------------------------------------------------------------------
 // Workflows
 
-const NODE_LOOK: Readonly<
-  Record<NodeStatus, { readonly tone: Tone; readonly mark: StatusMark }>
-> = {
-  queued: { tone: "neutral", mark: "todo" },
-  running: { tone: "working", mark: "busy" },
-  held: { tone: "waiting", mark: "warning" },
-  unknown: { tone: "waiting", mark: "warning" },
-  done: { tone: "done", mark: "done" },
-  failed: { tone: "failed", mark: "failed" },
-  stopped: { tone: "neutral", mark: "idle" },
-  refused: { tone: "neutral", mark: "idle" },
+/** A node's state in the table's words: a running node is a working child, "Working" (U-14). */
+const NODE_LOOK: Readonly<Record<NodeStatus, StateLook>> = {
+  queued: STATE_LOOKS.queued,
+  running: STATE_LOOKS.working,
+  held: STATE_LOOKS.held,
+  unknown: STATE_LOOKS.unknown,
+  done: STATE_LOOKS.done,
+  failed: STATE_LOOKS.failed,
+  stopped: STATE_LOOKS.stopped,
+  refused: STATE_LOOKS.refused,
 };
 
-const PHASE_LOOK: Readonly<
-  Record<PhaseLabel, { readonly tone: Tone; readonly mark: StatusMark }>
-> = {
-  running: { tone: "working", mark: "busy" },
-  failed: { tone: "failed", mark: "failed" },
-  stopped: { tone: "neutral", mark: "idle" },
-  done: { tone: "done", mark: "done" },
-  "not started": { tone: "neutral", mark: "todo" },
+/** A phase's state in the table's words; one not started yet is "To do", as a step is. */
+const PHASE_LOOK: Readonly<Record<PhaseLabel, StateLook>> = {
+  running: STATE_LOOKS.working,
+  failed: STATE_LOOKS.failed,
+  stopped: STATE_LOOKS.stopped,
+  done: STATE_LOOKS.done,
+  "not started": STATE_LOOKS.todo,
 };
 
 /** Where a workflow is drawn: its thread, and the panel's Stopping keys. */
@@ -594,26 +623,6 @@ interface WorkflowPlace {
   readonly threadId: ThreadId;
   readonly work: WorkState;
 }
-
-/** The small Stop beside a node or a workflow's heading. */
-const stopButton = (
-  h: H,
-  label: string,
-  testId: string,
-  message: Message
-): Html =>
-  iconButton(
-    h,
-    {
-      ...buttonDefaults<Message>(),
-      variant: "ghost",
-      size: "small",
-      label,
-      onClick: Option.some(message),
-      attributes: [h.DataAttribute("testid", testId)],
-    },
-    glyph(h, Square, "square", "small")
-  );
 
 const nodeRow = (
   h: H,
@@ -630,9 +639,7 @@ const nodeRow = (
     (place.work.stoppingWork.includes(key) ||
       place.work.stoppingWork.includes(workflow.id));
 
-  const look = isStopping
-    ? ({ tone: "working", mark: "busy" } as const)
-    : NODE_LOOK[member.status];
+  const look = isStopping ? STATE_LOOKS.stopping : NODE_LOOK[member.status];
 
   return h.li(
     [
@@ -653,10 +660,7 @@ const nodeRow = (
           ),
         ],
         [
-          h.span(
-            [h.Class("mt-0.5 inline-flex shrink-0")],
-            [mark(h, look.tone, look.mark)]
-          ),
+          h.span([h.Class("mt-0.5 inline-flex shrink-0")], [lookMark(h, look)]),
           h.span(
             [h.Class("flex min-w-0 flex-1 flex-col")],
             [
@@ -672,20 +676,20 @@ const nodeRow = (
               ),
             ]
           ),
-          word(h, isStopping ? "stopping" : member.status, "work-node-status"),
+          word(h, look.word, "work-node-status"),
         ]
       ),
       isStoppableNode(member, workflow) && !isStopping
-        ? stopButton(
-            h,
-            `Stop ${node.label}`,
-            "work-node-stop",
-            ShellMessage.ClickedStopWorkflow({
+        ? rowStop(h, {
+            title: node.label,
+            testId: "work-node-stop",
+            isArmed: Option.contains(place.work.armedStop, key),
+            message: ShellMessage.ClickedStopWorkflow({
               threadId: place.threadId,
               workflowId: workflow.id,
               nodeId: Option.some(node.id),
-            })
-          )
+            }),
+          })
         : h.empty,
     ]
   );
@@ -802,7 +806,7 @@ const workflowBlock = (
                   h.Class(classNames(ROW, "min-h-9 pointer-coarse:min-h-9")),
                 ],
                 [
-                  mark(h, look.tone, look.mark),
+                  lookMark(h, look),
                   title(h, phase.title),
                   h.span(
                     [
@@ -817,7 +821,7 @@ const workflowBlock = (
                       `${String(phase.settledCount)}/${String(phase.members.length)}`,
                     ]
                   ),
-                  word(h, label, "work-phase-label"),
+                  word(h, look.word, "work-phase-label"),
                 ]
               ),
               ...phase.members.map((member) =>
@@ -1017,7 +1021,7 @@ export const workPanelView = Submodel.defineView<
                 ],
                 ["Work"]
               ),
-              iconButton(
+              iconButtonWithTooltip(
                 h,
                 {
                   ...buttonDefaults<Message>(),
@@ -1026,7 +1030,8 @@ export const workPanelView = Submodel.defineView<
                   onClick: Option.some(ShellMessage.ClickedCloseWork()),
                   attributes: [h.DataAttribute("testid", "work-close")],
                 },
-                glyph(h, X, "x", "regular")
+                glyph(h, X, "x", "regular"),
+                "end"
               ),
             ]
           ),

@@ -23,6 +23,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { needsYouCount } from "@cairn/client-logic/Badge";
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { newThreadOpens } from "@cairn/client-logic/ProjectThread";
 import {
@@ -40,7 +41,6 @@ import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import { draftRouter, threadRouter } from "../Route.ts";
-import { badgeCount } from "../shell/Notifications.ts";
 import { planVisit } from "../shell/Visited.ts";
 import {
   DetectPlatform,
@@ -348,11 +348,10 @@ const settleDerived = (model: Model): UpdateReturn => {
   const count = Option.match(withPending.context.shell, {
     onNone: () => 0,
     onSome: (shell) =>
-      badgeCount(
-        shell,
-        withPending.context.openThreadId,
-        withPending.context.scratchThreadId
-      ),
+      needsYouCount(shell, {
+        scratchThreadId: withPending.context.scratchThreadId,
+        openThreadId: withPending.context.openThreadId,
+      }),
   });
 
   const visited = modifyFields(withPending, {

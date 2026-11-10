@@ -31,6 +31,7 @@ import { DateTime, Option } from "effect";
 
 import {
   deriveProjectIdentity,
+  managedGroupsOf,
   isThreadWoke,
   nextThreadAfterLeaving,
   orderItemsByPreferredIds,
@@ -46,6 +47,7 @@ import {
   visibleSettledCount,
   visibleThreadOrder,
 } from "./Sidebar.ts";
+import type { ThreadCategory } from "./ThreadState.ts";
 
 const time = (iso: string) => DateTime.makeUnsafe(iso);
 
@@ -489,5 +491,32 @@ describe(searchExcerpt, () => {
       Option.some(`…${text.slice(text.indexOf("bridge") - 40)}`)
     );
     assert.isTrue(Option.isNone(searchExcerpt(text, "absent")));
+  });
+});
+
+describe(managedGroupsOf, () => {
+  it("lifts the rows that ask above the other live ones and folds the resting and failed ones", () => {
+    const rows: ReadonlyArray<readonly [string, ThreadCategory]> = [
+      ["new-working", "active"],
+      ["new-done", "resting"],
+      ["held", "held"],
+      ["asking", "waiting-on-you"],
+      ["failed", "failed"],
+      ["old-asking", "waiting-on-you"],
+      ["old-idle", "resting"],
+    ];
+
+    const groups = managedGroupsOf(rows, ([, category]) => category);
+
+    assert.deepStrictEqual(
+      {
+        live: groups.live.map(([name]) => name),
+        resting: groups.resting.map(([name]) => name),
+      },
+      {
+        live: ["asking", "old-asking", "new-working", "held"],
+        resting: ["new-done", "failed", "old-idle"],
+      }
+    );
   });
 });

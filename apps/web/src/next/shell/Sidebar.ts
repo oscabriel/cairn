@@ -1,7 +1,10 @@
 // The selected project's sidebar list (the user, 2026-10-29): the project's name and root, its one
-// project thread on top (the only thread the user talks to), and under it a running list of the
-// threads it manages (subagents, brief children, workflow nodes), newest first, each with its
-// status mark from the one thread-state function. No Active, Settled, Pinned or Snoozed groups.
+// project thread on top (the only thread the user talks to), and under it the threads it manages
+// (subagents, brief children, workflow nodes) in the work panel's shape (U-9): the live ones, those
+// that ask the user first, then newest first; the resting and failed ones folded under
+// "Resting (n)"; each group six rows, then twelve more per "Show more", so the list never grows
+// without limit. Each row has its status mark and, where "subagent" was, its word, from the one
+// state table. No Active, Settled, Pinned or Snoozed groups.
 // Every row opens its thread. The project thread's row counts its goal's criteria when it holds one
 // ("2/4 met", from the row's tally; plan 6H). Under them, "Previous (n)" folds the project's earlier
 // project threads, the ones a refresh replaced (ADR 0048), newest first; each opens read only. The
@@ -13,6 +16,8 @@ import {
   goalTallyText,
 } from "@cairn/client-logic/GoalProgress";
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
+import { showMoreCount } from "@cairn/client-logic/ThreadLineage";
+import type { LineageWindow } from "@cairn/client-logic/ThreadLineage";
 import type { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -35,14 +40,34 @@ import type { RowStatus } from "./Derived.ts";
 import { manageItem, menuAnchor } from "./Manage.ts";
 import { Message } from "./Message.ts";
 import { ManageAction, MenuTarget } from "./Model.ts";
+import type { ManagedGroup } from "./Model.ts";
 
 /** A managed thread as its row shows it. */
 export interface ManagedRow {
   readonly thread: ThreadShell;
   readonly row: RowStatus;
-  /** What it is and its age, or that it asks the user. */
+  /** Its status word and its age. */
   readonly meta: string;
   readonly isOpen: boolean;
+}
+
+/**
+ * The threads the project thread manages, in the work panel's shape (U-9): the live ones (those
+ * that ask the user first) in a window, and the resting and failed ones folded behind their count,
+ * in a window of their own, so the list never grows without limit on screen.
+ */
+export interface ManagedContent {
+  /** Every thread the project thread manages. */
+  readonly count: number;
+  readonly live: LineageWindow<ManagedRow>;
+  readonly resting: LineageWindow<ManagedRow>;
+  readonly restingCount: number;
+  readonly isRestingOpen: boolean;
+  /**
+   * The open thread's row while it rests in the closed fold: drawn under the fold's header, so the
+   * list still says where the user is. Each window keeps the open row in it too.
+   */
+  readonly openResting: Option.Option<ManagedRow>;
 }
 
 /** The project thread as its row shows it. */
@@ -75,7 +100,7 @@ export interface PreviousContent {
 export interface SidebarContent {
   readonly project: Option.Option<ProjectShell>;
   readonly projectThread: Option.Option<ProjectThreadRow>;
-  readonly managed: ReadonlyArray<ManagedRow>;
+  readonly managed: ManagedContent;
   /** None until the project's earlier project threads are read, and while it has none. */
   readonly previous: Option.Option<PreviousContent>;
   /** The project's menu is open. */
@@ -404,9 +429,51 @@ const noProjectThread = (
     ]
   );
 
+/** "Show N more" under a managed group, while it hides rows. */
+const managedMore = (
+  h: HtmlBuilder<Message>,
+  hidden: number,
+  group: ManagedGroup
+): Html =>
+  hidden <= 0
+    ? h.empty
+    : h.div(
+        [h.Class("ms-(--space-4) px-(--space-1-5)")],
+        [
+          button(
+            h,
+            {
+              ...buttonDefaults<Message>(),
+              variant: "ghost",
+              size: "small",
+              onClick: Option.some(Message.ClickedMoreManaged({ group })),
+              attributes: [
+                h.DataAttribute("testid", "shell-managed-more"),
+                h.DataAttribute("group", group),
+              ],
+            },
+            [`Show ${String(showMoreCount(hidden))} more`]
+          ),
+        ]
+      );
+
+const managedList = (
+  h: HtmlBuilder<Message>,
+  testId: string,
+  rows: ReadonlyArray<ManagedRow>
+): Html =>
+  h.ul(
+    [
+      h.DataAttribute("testid", testId),
+      h.Class("flex flex-col gap-(--space-0-5) px-(--space-1-5)"),
+    ],
+    rows.map((each) => managedView(h, each))
+  );
+
 const managedSection = (
   h: HtmlBuilder<Message>,
-  managed: ReadonlyArray<ManagedRow>
+  managed: ManagedContent,
+  idSuffix: string
 ): ReadonlyArray<Html> => [
   h.div(
     [
@@ -424,11 +491,11 @@ const managedSection = (
           h.DataAttribute("testid", "shell-managed-count"),
           h.Class("tabular-nums"),
         ],
-        [String(managed.length)]
+        [String(managed.count)]
       ),
     ]
   ),
-  managed.length === 0
+  managed.count === 0
     ? h.p(
         [
           h.DataAttribute("testid", "shell-managed-empty"),
@@ -436,13 +503,48 @@ const managedSection = (
         ],
         ["Subagents, briefs and workflow nodes it starts show here."]
       )
-    : h.ul(
+    : h.empty,
+  managed.live.visibleRows.length === 0
+    ? h.empty
+    : managedList(h, "shell-managed-list", managed.live.visibleRows),
+  managedMore(h, managed.live.hiddenCount, "live"),
+  managed.restingCount === 0
+    ? h.empty
+    : h.div(
         [
-          h.DataAttribute("testid", "shell-managed-list"),
-          h.Class("flex flex-col gap-(--space-0-5) px-(--space-1-5)"),
+          h.DataAttribute("testid", "shell-resting"),
+          h.Class("px-(--space-1-5) pt-(--space-1-5)"),
         ],
-        managed.map((each) => managedView(h, each))
+        [
+          disclosure(
+            h,
+            {
+              id: `shell-resting${idSuffix}`,
+              isOpen: managed.isRestingOpen,
+              onToggle: () => Message.ClickedRestingThreads(),
+              isDisabled: false,
+              attributes: [h.DataAttribute("testid", "shell-resting-toggle")],
+            },
+            {
+              glyph: Option.none(),
+              title: `Resting (${String(managed.restingCount)})`,
+              tally: Option.none(),
+              body: [
+                managedList(
+                  h,
+                  "shell-resting-list",
+                  managed.resting.visibleRows
+                ),
+                managedMore(h, managed.resting.hiddenCount, "resting"),
+              ],
+            }
+          ),
+        ]
       ),
+  Option.match(managed.openResting, {
+    onNone: () => h.empty,
+    onSome: (open) => managedList(h, "shell-resting-open", [open]),
+  }),
 ];
 
 const footButton = (
@@ -544,7 +646,7 @@ export const sidebarList = (
                     [h.Class("px-(--space-1-5) pt-(--space-2)")],
                     [projectThreadView(h, top)]
                   ),
-                  ...managedSection(h, content.managed),
+                  ...managedSection(h, content.managed, idSuffix),
                 ],
               }),
               previousSection(h, content.previous, idSuffix),

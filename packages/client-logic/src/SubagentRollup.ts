@@ -8,7 +8,9 @@
 // chain stops the walk, a subagent's row resolves to its nearest ancestor that is not one, and the
 // parent's banner names its asking descendants unless the parent asks the user itself. Changed: Cairn's shell rows (`lineage` is an Option, the run is
 // live while `activeRunId` is set or `activity` is busy), a brief or a criteria proposal counts with
-// no live run because no run holds one (ADR 0030), one environment, plain functions instead of atoms.
+// no live run because no run holds one (ADR 0030), a brief rolls up as Go (between approval and
+// input) so its ancestors say what its own row says, one environment, plain functions instead of
+// atoms.
 // Not ported: provider-native subagents, forks, the atom caches and their reference stability.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
@@ -33,8 +35,21 @@ import type { RuntimeRequestKind } from "@cairn/protocol/Policy";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 
-/** What a descendant's pending request asks of the user, as its ancestors show it. */
-export type SubagentRequest = "approval" | "input";
+import type { ThreadLabel } from "./ThreadState.ts";
+import { isRunLive, THREAD_LABELS } from "./ThreadState.ts";
+
+/**
+ * What a descendant's pending request asks of the user, as its ancestors show it: an approval, a
+ * brief's Go, or input. Each reads on the ancestors in the word the child's own row says (U-14).
+ */
+export type SubagentRequest = "approval" | "go" | "input";
+
+/** Which request an ancestor shows when several descendants ask: approval, then Go, then input. */
+const REQUEST_RANK: Readonly<Record<SubagentRequest, number>> = {
+  approval: 2,
+  go: 1,
+  input: 0,
+};
 
 /** The fields of a row the rollup reads. */
 export type RollupRow = Pick<
@@ -72,16 +87,14 @@ const HELD_BY_NO_RUN: ReadonlySet<RuntimeRequestKind> = new Set([
   "criteria",
 ]);
 
-/** A run holds the request only while it is live: a stopped run's request no longer counts. */
-const isRunLive = (thread: RollupRow): boolean =>
-  Option.isSome(thread.activeRunId) ||
-  thread.activity === "preparing" ||
-  thread.activity === "running" ||
-  thread.activity === "waiting";
+/** A brief waits for Go, a question or a sign-in for input, and every other kind for approval. */
+export const requestOfKind = (kind: RuntimeRequestKind): SubagentRequest => {
+  if (kind === "brief") {
+    return "go";
+  }
 
-/** Approvals of every kind but a question or a sign-in, which ask for input. */
-export const requestOfKind = (kind: RuntimeRequestKind): SubagentRequest =>
-  kind === "user-input" || kind === "sign-in" ? "input" : "approval";
+  return kind === "user-input" || kind === "sign-in" ? "input" : "approval";
+};
 
 /** What a subagent's own pending request asks its ancestors to show, if it counts. */
 export const subagentRequestOf = (
@@ -105,7 +118,8 @@ const indexById = <T extends RollupRow>(
 
 /**
  * Each ancestor of a subagent with a counting request, mapped to what it should show: approval
- * wins over input from any descendant. A thread with no asking descendant is absent.
+ * wins over Go, and Go over input, from any descendant. A thread with no asking descendant is
+ * absent.
  */
 export const pendingSubagentRequests = (
   threads: ReadonlyArray<RollupRow>
@@ -128,7 +142,12 @@ export const pendingSubagentRequests = (
 
       seen.add(parentId);
 
-      if (requests.get(parentId) !== "approval") {
+      const shown = requests.get(parentId);
+
+      if (
+        shown === undefined ||
+        REQUEST_RANK[request.value] > REQUEST_RANK[shown]
+      ) {
         requests.set(parentId, request.value);
       }
 
@@ -193,7 +212,7 @@ export const subagentDescendants = <
 
 /**
  * The descendants of `threadId` whose requests count, nearest first: what the parent's banner
- * lists ("Subagent needs approval").
+ * lists ("Subagent · Approval").
  */
 export const childrenAsking = <T extends RollupRow>(
   threadId: ThreadId,
@@ -203,25 +222,43 @@ export const childrenAsking = <T extends RollupRow>(
     Option.isSome(subagentRequestOf(child))
   );
 
-/** The banner's title over the asking children: approval when all ask for one, else input or you. */
+/**
+ * What an asking child's own row says, from the one state table: "Waiting for Go" for a brief,
+ * "Input" for a question or a sign-in, else "Approval" (`threadStatus`'s own-request order).
+ */
+export const askingLabelOf = (child: RollupRow): ThreadLabel =>
+  Option.match(child.pendingRuntimeRequest, {
+    onNone: () => THREAD_LABELS.approval,
+    onSome: ({ kind }) => THREAD_LABELS[requestOfKind(kind)],
+  });
+
+/** The one label every asking child shares, if they share one. */
+export const sharedAskingLabel = (
+  children: ReadonlyArray<RollupRow>
+): Option.Option<ThreadLabel> => {
+  const kinds = new Set(children.map((child) => askingLabelOf(child).kind));
+  const [first] = children;
+
+  return kinds.size === 1 && first !== undefined
+    ? Option.some(askingLabelOf(first))
+    : Option.none();
+};
+
+/**
+ * The banner's title over the asking children, in the rows' own words (U-14): "Subagent ·
+ * Approval", "2 subagents · Waiting for Go", and "3 subagents need you" when they ask for
+ * different things (each child's word then follows its name).
+ */
 export const childInputsTitle = (
   children: ReadonlyArray<RollupRow>
 ): string => {
-  const approvals = children.filter((child) =>
-    Option.contains(subagentRequestOf(child), "approval")
-  ).length;
+  const subject =
+    children.length === 1 ? "Subagent" : `${children.length} subagents`;
 
-  let need = "you";
-
-  if (approvals === 0) {
-    need = "input";
-  } else if (approvals === children.length) {
-    need = "approval";
-  }
-
-  return children.length === 1
-    ? `Subagent needs ${need}`
-    : `${children.length} subagents need ${need}`;
+  return Option.match(sharedAskingLabel(children), {
+    onNone: () => `${subject} need you`,
+    onSome: (label) => `${subject} · ${label.word}`,
+  });
 };
 
 /**
@@ -257,14 +294,16 @@ export const sidebarRowThreadId = (
 
 /** The banner over a parent's composer while its descendants ask the user. */
 export interface ParentBanner<T> {
-  /** "Subagent needs approval", "2 subagents need input". */
+  /** "Subagent · Approval", "2 subagents · Input", "2 subagents need you". */
   readonly title: string;
   /** Every descendant asking, nearest first; each is named, and opens its thread. */
   readonly children: ReadonlyArray<T>;
-  /** The first of them, which the banner's action opens. */
+  /** The first of them, which the banner's action (Open) opens. */
   readonly first: T;
-  /** What the first asks for, which names the action ("Open approval" or "Open question"). */
+  /** What the first asks for, as its ancestors' rows roll it up. */
   readonly request: SubagentRequest;
+  /** The label every asking child shares; none when they ask for different things. */
+  readonly label: Option.Option<ThreadLabel>;
 }
 
 /**
@@ -294,5 +333,6 @@ export const parentBannerOf = <T extends RollupRow>(
     children,
     first,
     request,
+    label: sharedAskingLabel(children),
   }));
 };

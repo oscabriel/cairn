@@ -21,7 +21,7 @@ import {
   WEIGHT_STRONG,
 } from "../ui/Classes.ts";
 import { glyph } from "../ui/Glyph.ts";
-import { iconButton } from "../ui/IconButton.ts";
+import { iconButtonWithTooltip } from "../ui/IconButton.ts";
 import { shortcut } from "../ui/Kbd.ts";
 import { Message } from "./Message.ts";
 import type { ScratchState } from "./Model.ts";
@@ -176,7 +176,7 @@ export const scratchHead = (
         },
         [glyph(h, Trash2, "trash-2", "small"), "Clear"]
       ),
-      iconButton(
+      iconButtonWithTooltip(
         h,
         {
           ...buttonDefaults<Message>(),
@@ -185,7 +185,8 @@ export const scratchHead = (
           onClick: Option.some(Message.ClickedCloseScratch()),
           attributes: [h.DataAttribute("testid", "scratch-close")],
         },
-        glyph(h, X, "x", "regular")
+        glyph(h, X, "x", "regular"),
+        "end"
       ),
     ]
   );
@@ -252,7 +253,7 @@ export const scratchFoot = (
               )
             ),
           ]),
-          iconButton(
+          iconButtonWithTooltip(
             h,
             {
               ...buttonDefaults<Message>(),
@@ -263,7 +264,8 @@ export const scratchFoot = (
               isBusy: scratch.isBusy,
               attributes: [h.DataAttribute("testid", "scratch-send")],
             },
-            glyph(h, ArrowUp, "arrow-up", "regular")
+            glyph(h, ArrowUp, "arrow-up", "regular"),
+            "above-end"
           ),
         ]
       ),

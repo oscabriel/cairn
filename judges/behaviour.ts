@@ -72,8 +72,10 @@
 //                         project with none, the selected one marked; a bubble opens its project
 //                         (its project thread, or a draft in that project when it has none);
 //   shell-list-<w>        the project thread on top opens it under the new header ("project
-//                         thread"), and under it the managed threads, newest first, each with
-//                         its status mark and word; no Active, Settled, Pinned or Snoozed group;
+//                         thread"), and under it the managed threads: the asking and live ones
+//                         first, the resting ones under "Resting (n)", each group newest first,
+//                         each row with its status mark and word; no Active, Settled, Pinned or
+//                         Snoozed group;
 //   shell-managed-<w>     a managed thread opens, says it is managed, and takes a message that
 //                         shows in its transcript; a limited one shows the hold banner;
 //   shell-foot-<w>        Usage opens the usage page and Settings the settings page, and the foot
@@ -144,6 +146,19 @@ recordOnExit(import.meta);
 const root = path.join(import.meta.dirname, "..");
 
 const BASELINE = path.join(root, "judges/fixtures/parity/t3@fe27e8e3");
+
+/**
+ * The managed rows' order in the sidebar (U-9): the one that asks first, the other live ones newest
+ * first, then the resting fold's, newest first.
+ */
+const MANAGED_ORDER = [
+  "asking",
+  "working",
+  "limited",
+  "failed",
+  "done",
+  "idle",
+] as const;
 
 const { values } = parseArgs({
   options: {
@@ -466,6 +481,12 @@ const shellChecks = async (browser: Browser, hero: string) => {
 
           const side = sidebarOf(page, width);
 
+          // The resting rows fold behind their count (U-9): open the fold to read every row.
+          await side.getByTestId("shell-resting-toggle").click();
+          await side
+            .getByTestId("shell-resting-list")
+            .waitFor({ state: "visible", timeout: 5000 });
+
           const titleTexts = await side
             .getByTestId("shell-row-title")
             .allTextContents();
@@ -504,7 +525,7 @@ const shellChecks = async (browser: Browser, hero: string) => {
         },
         (detail) =>
           detail ===
-          `titles ${JSON.stringify(MANAGED_SEED.map((seed) => seed.title).toReversed())}, marks ${JSON.stringify(["Approval", "Working", "Failed", "Limited", "Done", "Idle"])}, groups 0, opened true, role project thread`
+          `titles ${JSON.stringify(MANAGED_ORDER.map((state) => MANAGED_SEED.find((seed) => seed.state === state)?.title ?? state))}, marks ${JSON.stringify(["Approval", "Working", "Limited", "Failed", "Done", "Idle"])}, groups 0, opened true, role project thread`
       );
     },
     async (width) => {
@@ -527,6 +548,10 @@ const shellChecks = async (browser: Browser, hero: string) => {
             (await page.getByTestId("thread-hold").textContent()) ?? "";
 
           await openSidebar(page, width);
+          // An idle thread rests under the "Resting" fold (U-9).
+          await sidebarOf(page, width)
+            .getByTestId("shell-resting-toggle")
+            .click();
           await sidebarOf(page, width)
             .getByTestId("shell-managed-thread")
             .filter({ hasText: "Map the favicon resolver" })

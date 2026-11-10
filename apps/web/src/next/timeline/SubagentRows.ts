@@ -54,7 +54,6 @@ import type {
 import { registerSubagentRowViews } from "../../timeline/Subagents.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import type { StatusMark } from "../ui/Glyph.ts";
-import { markOfTone } from "../ui/Glyph.ts";
 import type { Tone } from "../ui/Tone.ts";
 import { toneOfThreadTone } from "../ui/Tone.ts";
 import { placeSubagentItems, subagentItemKeys } from "./SubagentItems.ts";
@@ -150,7 +149,7 @@ const memberRow = (h: H, row: SubagentRow): Html => {
   const content = [
     h.span(
       [h.Class(classNames("inline-flex shrink-0", TONE_TEXT[tone]))],
-      [statusGlyph(h, markOfTone(tone))]
+      [statusGlyph(h, row.label.mark)]
     ),
     h.span(
       [h.Class("flex min-w-0 flex-1 flex-col")],

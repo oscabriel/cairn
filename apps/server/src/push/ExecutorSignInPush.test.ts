@@ -39,6 +39,7 @@ describe("the Executor sign-in push", () => {
         executorSignedIn: note("signed-in"),
         nightlyFailed: Effect.succeed([]),
         settle: Effect.void,
+        badge: Effect.succeed(0),
       });
 
       yield* Effect.gen(function* () {

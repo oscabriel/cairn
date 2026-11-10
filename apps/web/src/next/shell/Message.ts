@@ -11,7 +11,7 @@ import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
 import { OutboxItem } from "../../connection/Outbox.ts";
-import { ChildGroup, ManageAction, MenuTarget } from "./Model.ts";
+import { ChildGroup, ManageAction, ManagedGroup, MenuTarget } from "./Model.ts";
 
 /** Everything the shell reacts to. */
 export const Message = defineMessageUnion({
@@ -83,13 +83,24 @@ export const Message = defineMessageUnion({
   ClickedCloseWork: {},
   ClickedPreviousChildren: {},
   ClickedMoreChildren: { group: ChildGroup },
-  /** Stop on a child's row: its run stops, its queue and its own children stay. */
+  /**
+   * Stop on a child's row: the first press asks "Stop?" in place, the second stops its run (its
+   * queue and its own children stay). Nothing undoes a stop, so it asks once (U-3).
+   */
   ClickedStopChild: { threadId: ThreadId },
+  /** A row's Stop lost focus: a "Stop?" it was asking lets go. */
+  BlurredStop: {},
+  /**
+   * The pause after a row's first press ran out (`STOP_ASK_MS`): the "Stop?" asked under `key`
+   * lets go. WebKit does not focus a tapped button, so no blur may ever come.
+   */
+  LapsedStop: { key: Schema.String },
   StoppedChild: { threadId: ThreadId },
   FailedStopChild: { threadId: ThreadId, message: Schema.String },
   /**
    * Stop on a workflow (6F): the whole of it, or one node when `nodeId` is some (the script sees
-   * `null` for it). `key` is the work panel's Stopping key (`stopKeyOf`).
+   * `null` for it). A node's row Stop asks "Stop?" on its first press, as a child's does (U-3).
+   * `key` is the work panel's Stopping key (`stopKeyOf`).
    */
   ClickedStopWorkflow: {
     threadId: ThreadId,
@@ -99,6 +110,11 @@ export const Message = defineMessageUnion({
   StoppedWorkflow: { key: Schema.String },
   FailedStopWorkflow: { key: Schema.String, message: Schema.String },
   ClickedDismissWorkFailure: {},
+
+  /** The managed list's "Resting" fold: show the resting threads, or hide them (U-9). */
+  ClickedRestingThreads: {},
+  /** Show more under one of the managed list's groups. */
+  ClickedMoreManaged: { group: ManagedGroup },
 
   /** The "Previous" fold's header: show the project's earlier project threads, or hide them. */
   ClickedPreviousThreads: {},

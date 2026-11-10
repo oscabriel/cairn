@@ -62,6 +62,7 @@ import { Message, OutMessage } from "./Message.ts";
 import {
   FIRST_CHILD_ROWS,
   FolderListing,
+  initialManagedList,
   initialPrevious,
   ManageAction,
   MenuTarget,
@@ -70,6 +71,7 @@ import {
 import type {
   AddProjectState,
   GoalPanelState,
+  ManagedListState,
   ManageState,
   Model,
   PreviousState,
@@ -131,6 +133,7 @@ const informWork = (
     shownActive: (shown) => (moved ? FIRST_CHILD_ROWS : shown),
     shownPrevious: (shown) => (moved ? FIRST_CHILD_ROWS : shown),
     isPreviousOpen: (open) => (moved ? false : open),
+    armedStop: (armed) => (moved ? Option.none() : armed),
   });
 };
 
@@ -517,6 +520,27 @@ const setWork = (
   model: modifyFields(model, { work: change }),
 });
 
+/**
+ * The panel with no "Stop?" asked: a blur, the pause running out, a close, or any other press in
+ * the panel lets the question go, since WebKit gives a tapped button no focus to lose (U-3).
+ */
+const disarmStop = (work: WorkState): WorkState =>
+  modifyFields(work, { armedStop: () => Option.none() });
+
+/** A row's Stop pressed once: it asks "Stop?" now, and any other row's question lets go (U-3). */
+const armStop = (model: Model, key: string): UpdateReturn =>
+  setWork(model, (work) =>
+    modifyFields(work, { armedStop: () => Option.some(key) })
+  );
+
+/** The sidebar's managed list with `change` applied. */
+const setManagedList = (
+  model: Model,
+  change: (list: ManagedListState) => ManagedListState
+): UpdateReturn => ({
+  model: modifyFields(model, { managedList: change }),
+});
+
 /** The goal panel with `change` applied. */
 const setGoal = (
   model: Model,
@@ -530,6 +554,11 @@ const openProject = (model: Model, projectId: ProjectId): UpdateReturn => {
   const picked = modifyFields(model, {
     selectedProjectId: () => Option.some(projectId),
     awaitedFolder: () => Option.none(),
+    // Another project's list starts at its first page, its resting fold closed.
+    managedList: (list) =>
+      Option.contains(model.selectedProjectId, projectId)
+        ? list
+        : initialManagedList,
   });
 
   const target = Option.flatMap(
@@ -1107,7 +1136,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     ClickedWork: () => ({
       model: modifyFields(model, {
-        work: (work) => modifyFields(work, { isOpen: (open) => !open }),
+        work: (work) =>
+          modifyFields(work, {
+            isOpen: (open) => !open,
+            armedStop: () => Option.none(),
+          }),
         goal: (goal) =>
           model.work.isOpen
             ? goal
@@ -1115,34 +1148,58 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     ClickedCloseWork: () =>
-      setWork(model, (work) => modifyFields(work, { isOpen: () => false })),
+      setWork(model, (work) =>
+        modifyFields(work, {
+          isOpen: () => false,
+          armedStop: () => Option.none(),
+        })
+      ),
     ClickedPreviousChildren: () =>
       setWork(model, (work) =>
-        modifyFields(work, { isPreviousOpen: (open) => !open })
+        modifyFields(disarmStop(work), { isPreviousOpen: (open) => !open })
       ),
     ClickedMoreChildren: ({ group }) =>
       group === "active"
         ? setWork(model, (work) =>
-            modifyFields(work, { shownActive: (shown) => shown + LINEAGE_PAGE })
+            modifyFields(disarmStop(work), {
+              shownActive: (shown) => shown + LINEAGE_PAGE,
+            })
           )
         : setWork(model, (work) =>
-            modifyFields(work, {
+            modifyFields(disarmStop(work), {
               shownPrevious: (shown) => shown + LINEAGE_PAGE,
             })
           ),
-    ClickedStopChild: ({ threadId }) =>
-      model.work.stopping.includes(threadId)
-        ? { model }
-        : {
-            model: modifyFields(model, {
-              work: (work) =>
-                modifyFields(work, {
-                  stopping: (stopping) => [...stopping, threadId],
-                  failure: () => Option.none(),
-                }),
+    ClickedStopChild: ({ threadId }) => {
+      if (model.work.stopping.includes(threadId)) {
+        return { model };
+      }
+
+      // Nothing undoes a stop: the first press asks "Stop?" in place, the second stops (U-3).
+      if (!Option.contains(model.work.armedStop, threadId)) {
+        return armStop(model, threadId);
+      }
+
+      return {
+        model: modifyFields(model, {
+          work: (work) =>
+            modifyFields(work, {
+              armedStop: () => Option.none(),
+              stopping: (stopping) => [...stopping, threadId],
+              failure: () => Option.none(),
             }),
-            commands: [StopChild({ threadId })],
-          },
+        }),
+        commands: [StopChild({ threadId })],
+      };
+    },
+    BlurredStop: () =>
+      Option.isNone(model.work.armedStop)
+        ? { model }
+        : setWork(model, disarmStop),
+    LapsedStop: ({ key }) =>
+      Option.contains(model.work.armedStop, key)
+        ? setWork(model, disarmStop)
+        : { model },
     // The stop's answer comes after the run's abort joined, so the row now says what is true: a
     // child the stop could not bring to rest (held, or one whose queued input started a run) shows
     // its own state again rather than Stopping for ever.
@@ -1162,18 +1219,29 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedStopWorkflow: ({ threadId, workflowId, nodeId }) => {
       const key = stopKeyOf(workflowId, nodeId);
 
-      return model.work.stoppingWork.includes(key)
-        ? { model }
-        : {
-            model: modifyFields(model, {
-              work: (work) =>
-                modifyFields(work, {
-                  stoppingWork: (stopping) => [...stopping, key],
-                  failure: () => Option.none(),
-                }),
+      if (model.work.stoppingWork.includes(key)) {
+        return { model };
+      }
+
+      // A node's row Stop asks "Stop?" first, as a child's does; the worded "Stop workflow" does not.
+      if (
+        Option.isSome(nodeId) &&
+        !Option.contains(model.work.armedStop, key)
+      ) {
+        return armStop(model, key);
+      }
+
+      return {
+        model: modifyFields(model, {
+          work: (work) =>
+            modifyFields(work, {
+              armedStop: () => Option.none(),
+              stoppingWork: (stopping) => [...stopping, key],
+              failure: () => Option.none(),
             }),
-            commands: [StopWorkflow({ key, threadId, workflowId, nodeId })],
-          };
+        }),
+        commands: [StopWorkflow({ key, threadId, workflowId, nodeId })],
+      };
     },
     // The stop answers once it is marked, so the ledger the panel reads already says how it ended.
     StoppedWorkflow: ({ key }) =>
@@ -1191,7 +1259,20 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       ),
     ClickedDismissWorkFailure: () =>
       setWork(model, (work) =>
-        modifyFields(work, { failure: () => Option.none() })
+        modifyFields(disarmStop(work), { failure: () => Option.none() })
+      ),
+
+    ClickedRestingThreads: () =>
+      setManagedList(model, (list) =>
+        modifyFields(list, { isRestingOpen: (open) => !open })
+      ),
+    ClickedMoreManaged: ({ group }) =>
+      setManagedList(model, (list) =>
+        group === "live"
+          ? modifyFields(list, { shownLive: (shown) => shown + LINEAGE_PAGE })
+          : modifyFields(list, {
+              shownResting: (shown) => shown + LINEAGE_PAGE,
+            })
       ),
 
     ClickedPreviousThreads: () => openPrevious(model),
@@ -1305,8 +1386,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         goal: (goal) => modifyFields(goal, { isOpen: (open) => !open }),
         work: (work) =>
           model.goal.isOpen
-            ? work
-            : modifyFields(work, { isOpen: () => false }),
+            ? disarmStop(work)
+            : modifyFields(disarmStop(work), { isOpen: () => false }),
       }),
     }),
     ClickedCloseGoal: () =>

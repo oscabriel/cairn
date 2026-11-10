@@ -140,7 +140,10 @@ const nextCommandId = () => {
   return testCommandId(70_000 + counter);
 };
 
-/** Makes thread `n` in project `n`, a subagent of `parent` when given, under `root` (or `parent`). */
+/**
+ * Makes thread `n` in project `n`, a subagent of `parent` when given, under `root` (or `parent`).
+ * A thread with no parent is its project's project thread, so the badge counts it.
+ */
 const makeThread = (
   n: number,
   parent: Option.Option<ThreadId> = Option.none(),
@@ -150,16 +153,23 @@ const makeThread = (
     const sink = yield* EventSink;
     const project = createProject(n);
 
+    const created = ThreadCreate.make({
+      ...createThread(project.projectId, n),
+      lineage: Option.map(parent, (parentThreadId) => ({
+        parentThreadId,
+        relationshipToParent: "subagent" as const,
+        rootThreadId: Option.getOrElse(root, () => parentThreadId),
+      })),
+    });
+
     yield* sink.commitCommand(project.command);
     yield* sink.commitCommand(
-      ThreadCreate.make({
-        ...createThread(project.projectId, n),
-        lineage: Option.map(parent, (parentThreadId) => ({
-          parentThreadId,
-          relationshipToParent: "subagent" as const,
-          rootThreadId: Option.getOrElse(root, () => parentThreadId),
-        })),
-      })
+      Option.isNone(parent)
+        ? ThreadCreate.make({
+            ...created,
+            projectThread: { replaces: Option.none() },
+          })
+        : created
     );
 
     return testThreadId(n);

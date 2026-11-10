@@ -46,6 +46,7 @@ import {
 } from "../../composer/Models.ts";
 import { providerMark } from "../../composer/ProviderMark.ts";
 import { isThreadRunning } from "../../composer/Update.ts";
+import { stopGlyph } from "../ui/Glyph.ts";
 import {
   ACTIONS_CLASS,
   ATTACH_CLASS,
@@ -184,9 +185,6 @@ const modeBlock = (
   ]);
 };
 
-const STOP_ICON_PATH =
-  "M3.5 2h5A1.5 1.5 0 0 1 10 3.5v5A1.5 1.5 0 0 1 8.5 10h-5A1.5 1.5 0 0 1 2 8.5v-5A1.5 1.5 0 0 1 3.5 2Z";
-
 const SEND_ICON_PATH = "M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5";
 
 const stopButton = (h: HtmlBuilder<Message>): Html =>
@@ -198,18 +196,7 @@ const stopButton = (h: HtmlBuilder<Message>): Html =>
       h.Class(ROUND_ACTION_CLASS),
       h.OnClick(Message.ClickedStop({ clearQueue: false })),
     ],
-    [
-      h.svg(
-        [
-          h.Attribute("width", "12"),
-          h.Attribute("height", "12"),
-          h.Attribute("viewBox", "0 0 12 12"),
-          h.Attribute("fill", "currentColor"),
-          h.Attribute("aria-hidden", "true"),
-        ],
-        [h.path([h.Attribute("d", STOP_ICON_PATH)])]
-      ),
-    ]
+    [stopGlyph(h)]
   );
 
 /** What the send button says, and the glyph it draws while a run works. */

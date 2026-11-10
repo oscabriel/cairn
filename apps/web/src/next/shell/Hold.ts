@@ -1,6 +1,7 @@
 // The hold banner above an open thread: what holds it up beyond the user, from the one thread-state
-// function's `threadHold` and `HOLD_LABELS`. A spent plan window says when it resets; a turn waiting
-// for a Claude slot says so. It sends nothing. Drawn with L3's banner, so its tone is a mark, a rule
+// function's `threadHold` and `HOLD_LABELS`, whose word, tone and mark are the one state table's
+// (a spent window is the same "Limited" and warning mark its row shows; U-14). A spent plan window
+// says when it resets; a turn waiting for a Claude slot says so. It sends nothing. Drawn with L3's banner, so its tone is a mark, a rule
 // and words, never colour alone. It keeps the `thread-hold` test id and the `data-hold` kind.
 
 import {
@@ -57,7 +58,7 @@ const content = (model: Model, h: H): Html =>
             "limited",
             banner(h, {
               tone: toneOf("Limited"),
-              mark: Option.some("warning"),
+              mark: Option.some(HOLD_LABELS.Limited.mark),
               title: HOLD_LABELS.Limited.word,
               detail: Option.some(
                 Option.match(resetsAt, {
@@ -76,7 +77,7 @@ const content = (model: Model, h: H): Html =>
             "claude-slot",
             banner(h, {
               tone: toneOf("WaitingForSlot"),
-              mark: Option.none(),
+              mark: Option.some(HOLD_LABELS.WaitingForSlot.mark),
               title: HOLD_LABELS.WaitingForSlot.word,
               detail: Option.some("This thread is waiting for a Claude slot."),
               actions: [],

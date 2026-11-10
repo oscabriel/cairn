@@ -12,7 +12,6 @@
 // counts them, under one tag per reactor, so a run of bad events is one notification and none is
 // left out.
 
-import { badgeOf } from "@cairn/client-logic/Badge";
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Context, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 import type { Array as Arr } from "effect";
@@ -157,10 +156,7 @@ export const WorkflowBudgetPush = Layer.effectDiscard(
     const notifier = yield* Notifier;
     const threads = yield* ThreadRows;
 
-    const badge = threads.listLive.pipe(
-      Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
-      Effect.orElseSucceed(() => 0)
-    );
+    const { badge } = notifier;
 
     const titleOf = (threadId: string) =>
       Option.match(decodeThreadId(threadId), {

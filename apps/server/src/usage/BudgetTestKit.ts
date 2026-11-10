@@ -239,6 +239,7 @@ const GuardFakes = Layer.unwrap(
           Ref.update(record.pushes, (pushes) => [...pushes, message]).pipe(
             Effect.as(["delivered" as const])
           ),
+        badge: Effect.succeed(0),
       })
     );
   })

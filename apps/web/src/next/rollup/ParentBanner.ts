@@ -1,7 +1,8 @@
 // The parent banner (plan wave 6, 6D; surfaces note S6; ADR 0027): above a thread's composer, while
-// any of its subagents (or theirs) asks the user something, one line says so ("Subagent needs
-// approval", "2 subagents need input"), names each asking child as a link to its thread, and
-// offers "Open approval" or "Open question" for the first, whose own card answers it. It hides
+// any of its subagents (or theirs) asks the user something, one line says so in the rows' own words
+// from the one state table ("Subagent · Approval", "2 subagents · Waiting for Go", or "3 subagents
+// need you" with each child's word after its name; U-14), names each asking child as a link to its
+// thread, and offers Open for the first, whose own card answers it. It hides
 // while the thread asks the user something itself, since its request card then has the lane (an
 // escalated question is the parent's own mirror, answered on that card). The rows' rollup is the
 // one thread-state function's; this banner reads the same rollup (`parentBannerOf`).
@@ -11,7 +12,10 @@
 // draws no state of its own: the shell rows decide it, so a reload or a second device shows the
 // same banner.
 
-import { parentBannerOf } from "@cairn/client-logic/SubagentRollup";
+import {
+  askingLabelOf,
+  parentBannerOf,
+} from "@cairn/client-logic/SubagentRollup";
 import type { ParentBanner } from "@cairn/client-logic/SubagentRollup";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
@@ -45,7 +49,8 @@ export const parentBannerFor = (
 const childLink = <Message>(
   h: HtmlBuilder<Message>,
   child: ThreadShell,
-  isLast: boolean
+  isLast: boolean,
+  showsWord: boolean
 ): Html =>
   h.span(
     [h.Class("whitespace-nowrap")],
@@ -65,6 +70,8 @@ const childLink = <Message>(
         ],
         [child.title]
       ),
+      // Children asking for different things each say what, in their row's word.
+      showsWord ? ` (${askingLabelOf(child).word})` : "",
       isLast ? "" : ",",
     ]
   );
@@ -103,7 +110,13 @@ export const parentBanner = <Message>(
                 [
                   h.span(
                     [h.Class(classNames("mt-0.5", TONE_TEXT.waiting))],
-                    [statusGlyph(h, "needs", "regular")]
+                    [
+                      statusGlyph(
+                        h,
+                        askingLabelOf(banner.first).mark,
+                        "regular"
+                      ),
+                    ]
                   ),
                   h.p(
                     [h.Class("min-w-0 break-words")],
@@ -123,7 +136,8 @@ export const parentBanner = <Message>(
                           childLink(
                             h,
                             child,
-                            index === banner.children.length - 1
+                            index === banner.children.length - 1,
+                            Option.isNone(banner.label)
                           ),
                         ])
                       ),
@@ -138,13 +152,10 @@ export const parentBanner = <Message>(
                     [
                       h.DataAttribute("testid", "parent-banner-open"),
                       h.Href(threadRouter({ threadId: banner.first.id })),
+                      h.AriaLabel(`Open ${banner.first.title}`),
                       h.Class(buttonClass("secondary", "small")),
                     ],
-                    [
-                      banner.request === "approval"
-                        ? "Open approval"
-                        : "Open question",
-                    ]
+                    ["Open"]
                   ),
                 ]
               ),

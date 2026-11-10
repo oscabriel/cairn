@@ -1,6 +1,7 @@
 // The `next` icon button: a square button holding one glyph, in the button's variants and states.
-// It has no visible words, so its accessible name is required; the catalogue pairs one with a
-// tooltip, which repeats the name for the pointer and is never the only place it is said.
+// It has no visible words, so its accessible name is required; `iconButtonWithTooltip` pairs it
+// with a tooltip (U-15), which repeats the name for a desktop pointer and keyboard focus and is
+// never the only place it is said.
 
 import * as FoldkitButton from "@foldkit/ui/button";
 import { Option } from "effect";
@@ -10,6 +11,8 @@ import { classNames } from "../../ui/ClassNames.ts";
 import type { ButtonConfig, ButtonSize } from "./Button.ts";
 import { buttonAttributes, buttonClass } from "./Button.ts";
 import { statusGlyph } from "./Glyph.ts";
+import type { TooltipAlign } from "./Tooltip.ts";
+import { withTooltip } from "./Tooltip.ts";
 
 const SQUARE: Readonly<Record<ButtonSize, string>> = {
   regular: "w-9 px-0",
@@ -67,3 +70,11 @@ export const iconButton = <Message>(
     },
     h
   );
+
+/** An icon button with its name as a tooltip under it (`withTooltip`), lined up with `align`. */
+export const iconButtonWithTooltip = <Message>(
+  h: HtmlBuilder<Message>,
+  config: IconButtonConfig<Message>,
+  glyph: Html,
+  align: TooltipAlign = "center"
+): Html => withTooltip(h, iconButton(h, config, glyph), config.label, align);

@@ -1,8 +1,9 @@
 // The `next` shell's Subscriptions: Cmd+J and Ctrl+J show or hide the scratch thread on any
 // platform, even while typing (the user, 2026-10-29), and Escape closes the rename or remove dialog,
 // an open menu, the add-project picker, the refresh confirm or the overlay while one is open. The root lifts them only while the `next` views draw.
+// A work panel row's "Stop?" lets go after a pause, since a tap in WebKit never blurs it (U-3).
 
-import { Option, Schema, Stream } from "effect";
+import { Duration, Effect, Option, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";
 import { streamFromEventFilterMap, streamFromKeyBindings } from "foldkit/dom";
 
@@ -30,6 +31,22 @@ const escape: Stream.Stream<Message> = streamFromEventFilterMap({
       : Option.none(),
 });
 
+/** How long a row's "Stop?" waits for its second press before it lets go. */
+export const STOP_ASK_MS = 5000;
+
+/** The pause after a row's first press: a new question, or none, starts it again. */
+const stopAsked = (armed: Option.Option<string>): Stream.Stream<Message> =>
+  Option.match(armed, {
+    onNone: () => Stream.empty,
+    onSome: (key) =>
+      Stream.fromEffect(
+        Effect.as(
+          Effect.sleep(Duration.millis(STOP_ASK_MS)),
+          Message.LapsedStop({ key })
+        )
+      ),
+  });
+
 /** The shell's subscriptions. */
 export const subscriptions = Subscription.make<Model, Message, Services>()(
   (entry) => ({
@@ -46,6 +63,13 @@ export const subscriptions = Subscription.make<Model, Message, Services>()(
             Option.isSome(model.manage),
         }),
         dependenciesToStream: ({ open }) => (open ? escape : Stream.empty),
+      }
+    ),
+    stopAsked: entry(
+      { armed: Schema.Option(Schema.String) },
+      {
+        modelToDependencies: (model) => ({ armed: model.work.armedStop }),
+        dependenciesToStream: ({ armed }) => stopAsked(armed),
       }
     ),
   })

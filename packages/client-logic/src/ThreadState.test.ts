@@ -37,8 +37,11 @@ import {
   pendingSubagentRequests,
   subagentRequestFor,
 } from "./SubagentRollup.ts";
+import type { SubagentRequest } from "./SubagentRollup.ts";
 import {
   HOLD_LABELS,
+  isRunLive,
+  STATE_LOOKS,
   THREAD_LABELS,
   ThreadHold,
   threadHold,
@@ -49,6 +52,9 @@ import {
 const time = (iso: string) => DateTime.makeUnsafe(iso);
 
 const NOW = time("2026-04-10T12:00:00.000Z");
+
+/** A state's word: sentence case, where Go and Claude are names. */
+const SENTENCE_CASE = /^[A-Z][a-z]+(?: (?:[a-z]+|Go|Claude))*$/u;
 
 const threadId = (suffix: number) =>
   ThreadId.make(
@@ -103,6 +109,16 @@ const request = (kind: RuntimeRequestKind) =>
   });
 
 const none = Option.none();
+
+/** The status of a row asking `own`, whose descendants ask `rolled`. */
+const status = (
+  own: Option.Option<RuntimeRequestKind>,
+  rolled: Option.Option<SubagentRequest>
+) =>
+  threadStatus(
+    { ...base, pendingRuntimeRequest: Option.flatMap(own, request) },
+    rolled
+  );
 
 const stateOf = (thread: ThreadShell) =>
   threadState(thread, { now: NOW, subagentRequest: none });
@@ -301,8 +317,9 @@ describe(threadHold, () => {
   it("names each hold's badge", () => {
     assert.deepStrictEqual(
       [HOLD_LABELS.Limited.word, HOLD_LABELS.WaitingForSlot.word],
-      ["Limited", "Waiting"]
+      ["Limited", "Waiting for a Claude slot"]
     );
+    assert.strictEqual(HOLD_LABELS.Limited, STATE_LOOKS.limited);
   });
 
   it("keeps a row working under a Claude slot hold, in the held category", () => {
@@ -450,13 +467,98 @@ describe(threadState, () => {
     assert.strictEqual(asking.category, "waiting-on-you");
     assert.deepStrictEqual(asking.label, Option.some(THREAD_LABELS.approval));
     assert.strictEqual(rootState([root, child, grandchild]).status, "waiting");
+
+    // A child's brief reads on its ancestors as the child's own row reads it (U-14).
+    const briefing = rootState([
+      root,
+      { ...child, pendingRuntimeRequest: request("brief") },
+    ]);
+
+    assert.strictEqual(briefing.status, "go");
+    assert.strictEqual(briefing.category, "waiting-on-you");
+    assert.deepStrictEqual(briefing.label, Option.some(THREAD_LABELS.go));
+  });
+
+  it("keeps a rolled-up order: approval, then Go, then input, own or a descendant's", () => {
+    assert.strictEqual(status(Option.none(), Option.some("go")), "go");
+    assert.strictEqual(
+      status(Option.some("user-input"), Option.some("go")),
+      "go"
+    );
+    assert.strictEqual(
+      status(Option.some("brief"), Option.some("input")),
+      "go"
+    );
+    assert.strictEqual(
+      status(Option.some("brief"), Option.some("approval")),
+      "approval"
+    );
+    assert.strictEqual(
+      status(Option.some("tool-call"), Option.some("go")),
+      "approval"
+    );
   });
 
   it("gives every label words and a tone, and no label shows a raw status", () => {
     for (const [kind, label] of Object.entries(THREAD_LABELS)) {
       assert.strictEqual(label.kind, kind);
       assert.notStrictEqual(label.word, kind);
-      assert.match(label.word, /^[A-Z][a-z]+(?: [a-z]+)*$/u);
+      assert.match(label.word, SENTENCE_CASE);
     }
+  });
+});
+
+describe("the state table", () => {
+  it("gives each state one word in sentence case, and no two states the same word", () => {
+    const looks = Object.values(STATE_LOOKS);
+
+    for (const look of looks) {
+      assert.match(look.word, SENTENCE_CASE);
+    }
+
+    assert.strictEqual(
+      new Set(looks.map((look) => look.word)).size,
+      looks.length
+    );
+  });
+
+  it("keeps the needs-you dot for the states that wait on the user", () => {
+    const needs = Object.entries(STATE_LOOKS)
+      .filter(([, look]) => look.mark === "needs")
+      .map(([name]) => name);
+
+    assert.deepStrictEqual(needs, ["approval", "go", "input"]);
+    assert.strictEqual(STATE_LOOKS.limited.mark, "warning");
+  });
+
+  it("is what the thread labels and the holds read", () => {
+    for (const [kind, label] of Object.entries(THREAD_LABELS)) {
+      const { word, tone, mark } = STATE_LOOKS[label.kind];
+
+      assert.strictEqual(label.kind, kind);
+      assert.deepStrictEqual(
+        { word: label.word, tone: label.tone, mark: label.mark },
+        { word, tone, mark }
+      );
+    }
+
+    assert.strictEqual(
+      HOLD_LABELS.WaitingForSlot,
+      STATE_LOOKS["waiting-for-slot"]
+    );
+  });
+});
+
+describe(isRunLive, () => {
+  it("is true while a run is held or the activity is busy", () => {
+    assert.deepStrictEqual(
+      (["idle", "preparing", "running", "waiting", "failed"] as const).map(
+        (activity) => isRunLive({ activity, activeRunId: Option.none() })
+      ),
+      [false, true, true, true, false]
+    );
+    assert.isTrue(
+      isRunLive({ activity: "idle", activeRunId: Option.some(RunId.make(1)) })
+    );
   });
 });

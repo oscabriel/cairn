@@ -5,6 +5,9 @@
 // and foot. `Layout.ts` places them around the page's own parts, which keep their own Messages; the
 // look catalogue draws them over a fixture.
 
+import { managedGroupsOf } from "@cairn/client-logic/Sidebar";
+import { lineageWindow } from "@cairn/client-logic/ThreadLineage";
+import type { LineageWindow } from "@cairn/client-logic/ThreadLineage";
 import { formatSidebarAge } from "@cairn/client-logic/Time";
 import { Array, Option, Predicate, Record } from "effect";
 import { Submodel } from "foldkit";
@@ -42,7 +45,12 @@ import { refreshConfirm } from "./Refresh.ts";
 import { scratchFoot, scratchHead, scratchScrim } from "./Scratch.ts";
 import type { Placement } from "./Scratch.ts";
 import { sidebarList } from "./Sidebar.ts";
-import type { PreviousContent, SidebarContent } from "./Sidebar.ts";
+import type {
+  ManagedContent,
+  ManagedRow,
+  PreviousContent,
+  SidebarContent,
+} from "./Sidebar.ts";
 
 type H = HtmlBuilder<Message>;
 
@@ -128,6 +136,52 @@ const previousContentOf = (
   });
 };
 
+/**
+ * A group's window that keeps the open thread's row on screen: past the window, it follows the
+ * shown rows, one fewer hidden.
+ */
+const windowKeepingOpen = (
+  rows: ReadonlyArray<ManagedRow>,
+  shown: number
+): LineageWindow<ManagedRow> => {
+  const window = lineageWindow(rows, shown);
+
+  const open = rows
+    .slice(window.visibleRows.length)
+    .find((each) => each.isOpen);
+
+  return open === undefined
+    ? window
+    : {
+        visibleRows: [...window.visibleRows, open],
+        hiddenCount: window.hiddenCount - 1,
+      };
+};
+
+/**
+ * The managed rows (newest first) in the work panel's shape (U-9): asking and live rows first, the
+ * resting ones folded, each group in its window. The open thread's row always shows: past its
+ * group's window it follows the shown rows, and in the closed fold it shows under the fold's header.
+ */
+const managedContentOf = (
+  model: Model,
+  rows: ReadonlyArray<ManagedRow>
+): ManagedContent => {
+  const groups = managedGroupsOf(rows, (each) => each.row.category);
+  const list = model.managedList;
+
+  return {
+    count: rows.length,
+    live: windowKeepingOpen(groups.live, list.shownLive),
+    resting: windowKeepingOpen(groups.resting, list.shownResting),
+    restingCount: groups.resting.length,
+    isRestingOpen: list.isRestingOpen,
+    openResting: list.isRestingOpen
+      ? Option.none()
+      : Option.fromUndefinedOr(groups.resting.find((each) => each.isOpen)),
+  };
+};
+
 /** What the sidebar list shows for the selected project. */
 export const sidebarContentOf = (model: Model): SidebarContent => {
   const requests = requestsOf(model);
@@ -145,20 +199,23 @@ export const sidebarContentOf = (model: Model): SidebarContent => {
       age: projectThreadAgeOf(thread, nowMs),
       isOpen: Option.contains(openId, thread.id),
     })),
-    managed: Option.match(top, {
-      onNone: () => [],
-      onSome: (thread) =>
-        managedThreadsFor(model, thread).map((managed) => {
-          const row = rowStatusOf(managed, requests, nowMs);
+    managed: managedContentOf(
+      model,
+      Option.match(top, {
+        onNone: () => [],
+        onSome: (thread) =>
+          managedThreadsFor(model, thread).map((managed) => {
+            const row = rowStatusOf(managed, requests, nowMs);
 
-          return {
-            thread: managed,
-            row,
-            meta: managedMetaOf(managed, row, nowMs),
-            isOpen: Option.contains(openId, managed.id),
-          };
-        }),
-    }),
+            return {
+              thread: managed,
+              row,
+              meta: managedMetaOf(managed, row, nowMs),
+              isOpen: Option.contains(openId, managed.id),
+            };
+          }),
+      })
+    ),
     previous: previousContentOf(
       model,
       Option.map(project, (each) => each.id)

@@ -1,8 +1,8 @@
 // Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/threadInbox.ts at
-// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: what "working" means for the inbox (busy and not
-// blocked on the user) and the two inbox orders (by return, by send), newest first with id
-// tie-breaks. Changed: Cairn's shell rows (`activity` instead of runtime and run status, no plan
-// mode or subagents), and the return time a client observed is passed in as an `Option`. The return
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the two inbox orders (by return, by send), newest
+// first with id tie-breaks. Changed: Cairn's shell rows (no plan mode or subagents), and the return
+// time a client observed is passed in as an `Option`; whether a run is live is the one thread-state
+// module's `isRunLive` (`ThreadState.ts`), so the inbox's own "working" is gone (C-11). The return
 // tracker for the Working shelf is not ported: the shelf is off by default in t3code and Cairn does
 // not build it (plan D27).
 //
@@ -25,15 +25,6 @@
 
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Array, DateTime, Option, Order } from "effect";
-
-/** True while the agent is busy on the thread and nothing waits on the user. */
-export const isThreadWorking = (
-  thread: Pick<ThreadShell, "activity" | "pendingRuntimeRequest">
-): boolean =>
-  Option.isNone(thread.pendingRuntimeRequest) &&
-  (thread.activity === "preparing" ||
-    thread.activity === "running" ||
-    thread.activity === "waiting");
 
 const millisOr = (time: Option.Option<DateTime.Utc>): number =>
   Option.match(time, { onNone: () => 0, onSome: DateTime.toEpochMillis });

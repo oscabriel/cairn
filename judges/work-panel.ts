@@ -13,10 +13,12 @@
 //   lineage-stop  the header's work button says "4 subagents" and opens the panel: at 1,440 a
 //                 column beside the chat column, never over it, as tall as the page; at 390 a
 //                 bottom sheet over a scrim, the full width, its rows and Stop buttons at least
-//                 44 px. Two children work with Stop beside them, the done and the failed one are
-//                 under "Previous (2)", folded. Stop on "Read the README" ends that child alone:
-//                 its row turns Stopped and moves under "Previous (3)" with no Stop, while "List
-//                 the docs" still works; nothing scrolls sideways. A click on the working child's
+//                 44 px. Two children work with Stop beside them, each the word "Stop" (U-3); the
+//                 done and the failed one are under "Previous (2)", folded. The first press on
+//                 Stop for "Read the README" reads "Stop?" and stops nothing, and lets go after a
+//                 pause (5 s) so the next press asks again; the second press then ends that
+//                 child alone: its row turns Stopped and moves under "Previous (3)" with no Stop,
+//                 while "List the docs" still works; nothing scrolls sideways. A click on the working child's
 //                 row opens its thread, whose panel leads the way up with its parent.
 //   steps         on that child's page the button reads "2/4 steps" and the steps read Go done,
 //                 started done, working now, the answer to do. Released, the child answers: the
@@ -644,9 +646,82 @@ const runWidth = async (browser: Browser, width: number) => {
       );
       expect(!(await overflows(page)), "the page scrolls sideways");
 
-      await childRow(page, STOPPED_CHILD.description)
-        .locator('[data-testid="work-child-stop"]')
-        .click();
+      // Stop says so in words (U-3), and nothing undoes it: the first press asks "Stop?" in place
+      // and stops nothing; the second press on the same control stops the child.
+      const stopButton = childRow(page, STOPPED_CHILD.description).locator(
+        '[data-testid="work-child-stop"]'
+      );
+
+      const words = await page
+        .locator(
+          '[data-testid="work-children"] [data-testid="work-child-stop"]'
+        )
+        .allTextContents();
+
+      expect(
+        words.length === 2 && words.every((text) => text.trim() === "Stop"),
+        `the live children's Stop buttons read ${JSON.stringify(words)}`
+      );
+
+      await stopButton.click();
+
+      const question = await until(
+        async () => {
+          const text = await stopButton.textContent();
+
+          return text?.trim() ?? "";
+        },
+        (text) => text === "Stop?",
+        5000
+      );
+
+      expect(
+        question === "Stop?",
+        `the first press on Stop reads ${JSON.stringify(question)}`
+      );
+      await sleep(500);
+
+      const stillLive = await childStates(page, "work-children");
+
+      expect(stillLive.length === 2, "the first press on Stop stopped a child");
+
+      // A tap never blurs a button in WebKit, so the question lets go after a pause on its own
+      // (`STOP_ASK_MS`, 5 s); the next press asks again rather than stopping.
+      const lapsed = await until(
+        async () => {
+          const text = await stopButton.textContent();
+
+          return text?.trim() ?? "";
+        },
+        (text) => text === "Stop",
+        8000
+      );
+
+      expect(
+        lapsed === "Stop",
+        `8 s after the first press Stop still reads ${JSON.stringify(lapsed)}`
+      );
+
+      await stopButton.click();
+
+      const askedAgain = await until(
+        async () => {
+          const text = await stopButton.textContent();
+
+          return text?.trim() ?? "";
+        },
+        (text) => text === "Stop?",
+        5000
+      );
+
+      const liveAfterAsking = await childStates(page, "work-children");
+
+      expect(
+        askedAgain === "Stop?" && liveAfterAsking.length === 2,
+        `a press after the pause read ${JSON.stringify(askedAgain)}, or stopped a child`
+      );
+
+      await stopButton.click();
 
       const stopped = await until(
         async () => ({

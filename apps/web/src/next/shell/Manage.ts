@@ -20,7 +20,7 @@ import {
   WEIGHT_STRONG,
 } from "../ui/Classes.ts";
 import { glyph } from "../ui/Glyph.ts";
-import { iconButton } from "../ui/IconButton.ts";
+import { iconButtonWithTooltip } from "../ui/IconButton.ts";
 import { menuPanel } from "../ui/Menu.ts";
 import type { PanelItem } from "../ui/Menu.ts";
 import { Message } from "./Message.ts";
@@ -48,7 +48,7 @@ export const menuAnchor = (
   h.div(
     [h.Class("relative shrink-0")],
     [
-      iconButton(
+      iconButtonWithTooltip(
         h,
         {
           ...buttonDefaults<Message>(),
@@ -61,7 +61,8 @@ export const menuAnchor = (
             h.AriaExpanded(config.isOpen),
           ],
         },
-        glyph(h, Ellipsis, "ellipsis", "regular")
+        glyph(h, Ellipsis, "ellipsis", "regular"),
+        "end"
       ),
       config.isOpen
         ? h.div(

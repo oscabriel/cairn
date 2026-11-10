@@ -251,7 +251,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `RunFailureClass` | `transport_error` | "Failed", and `lastError`: "The model provider could not be reached. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `brain_restart` | "Failed", and `lastError`: "The brain restarted while the model was answering. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `unknown` | "Failed", and `lastError`: "The run failed. Send again to retry.", or a launch's own message. | Sidebar row, thread page |
-| `WaitingFor` | `claude_slot` | Banner "Waiting": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
+| `WaitingFor` | `claude_slot` | Banner "Waiting for a Claude slot": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
 | `WaitingFor` | `parent` | The child's managed row in the sidebar says "Asked its parent"; its ancestors are not lit and show no parent banner, since the user is not asked yet (6D). | Sidebar row |
 | `WaitingFor` | `none` | Nothing. | None |
 | `SettledOverride` | `settled` | Nothing: the sidebar draws no shelves and no page offers Settle or Unsettle; the brain still settles quiet threads and the row keeps the field. | None |
@@ -260,7 +260,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `RuntimeRequestKind` | `tool-call` | "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `user-input` | "Input". | Sidebar row |
 | `RuntimeRequestKind` | `sign-in` | "Input". | Sidebar row |
-| `RuntimeRequestKind` | `brief` | "Go", in the approval colour. A child's brief shows on its ancestors as "Approval". The brief card (6B) or a workflow's launch card (6F) asks it. | Sidebar row, request card |
+| `RuntimeRequestKind` | `brief` | "Waiting for Go", in the approval colour. A child's brief shows the same words on its ancestors, below a descendant's approval and above its question. The brief card (6B) or a workflow's launch card (6F) asks it. | Sidebar row, request card |
 | `RuntimeRequestKind` | `criteria` | "Approval". | Sidebar row |
 | `ApprovalStatus` | `pending` | The request card asks it (6A), and the thread's row says "Approval" or "Input". | Request card, sidebar row |
 | `ApprovalStatus` | `accepted` | The settled-record line in the transcript: "Approved by you", or by its decider and body ("Go from you", "Answered by you", "Accepted by full access"). | Transcript |

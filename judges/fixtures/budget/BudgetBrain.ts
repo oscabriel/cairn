@@ -241,6 +241,7 @@ const NotifierToFile = Layer.mock(Notifier)({
 
       return ["delivered" as const];
     }),
+  badge: Effect.succeed(0),
 });
 
 /** The guard's seam: its first stop says `stopping`, each later one waits a stagger more. */

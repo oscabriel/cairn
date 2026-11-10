@@ -88,6 +88,28 @@ export const glyph = <Message>(
   size: GlyphSize
 ): Html => icon(h, node, name, classNames("shrink-0", SIZE[size]));
 
+const STOP_PATH =
+  "M3.5 2h5A1.5 1.5 0 0 1 10 3.5v5A1.5 1.5 0 0 1 8.5 10h-5A1.5 1.5 0 0 1 2 8.5v-5A1.5 1.5 0 0 1 3.5 2Z";
+
+/**
+ * The one Stop glyph (U-3): a filled rounded square, 12 px, in the current ink. The composer's Stop
+ * and the work panel's row Stops draw it, so Stop looks alike wherever it is offered. Hidden from
+ * assistive technology: its button says Stop in words.
+ */
+export const stopGlyph = <Message>(h: HtmlBuilder<Message>): Html =>
+  h.svg(
+    [
+      h.DataAttribute("glyph", "stop"),
+      h.Attribute("width", "12"),
+      h.Attribute("height", "12"),
+      h.Attribute("viewBox", "0 0 12 12"),
+      h.Attribute("fill", "currentColor"),
+      h.Attribute("aria-hidden", "true"),
+      h.Class("shrink-0"),
+    ],
+    [h.path([h.Attribute("d", STOP_PATH)])]
+  );
+
 /**
  * A status mark. The busy spinner turns only when motion is allowed; under reduced motion it is a
  * still ring with its gap, which reads as busy beside its word.

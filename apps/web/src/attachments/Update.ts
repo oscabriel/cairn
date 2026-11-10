@@ -138,14 +138,31 @@ const savedFrom = (items: ReadonlyArray<Item>): SavedAttachments =>
       })
   );
 
+/** The tray with a save on its way, and the save. */
+interface Saving {
+  readonly model: Model;
+  readonly commands?: ReadonlyArray<TrayCommand>;
+}
+
 /**
- * The save of what this tab changed in the ready attachments, once the saved ones were read (else
- * this tab would not know which of them it removed).
+ * The save of what this tab changed in the ready attachments since it last asked for one, once the
+ * saved ones were read (else this tab would not know which of them it removed). What it asks for is
+ * its base from now on, not from when the save answers: a save asked for while another is on its
+ * way writes only what changed since that one, so the send that empties the tray as the last upload
+ * answers also removes that upload, which its own save, still on its way, was adding.
  */
-const saveCommands = (model: Model): ReadonlyArray<TrayCommand> =>
-  model.loaded
-    ? [SaveReady({ base: model.stored, drafts: savedFrom(model.items) })]
-    : [];
+const save = (model: Model): Saving => {
+  if (!model.loaded) {
+    return { model };
+  }
+
+  const drafts = savedFrom(model.items);
+
+  return {
+    model: modifyFields(model, { stored: () => drafts }),
+    commands: [SaveReady({ base: model.stored, drafts })],
+  };
+};
 
 const revokeCommands = (
   items: ReadonlyArray<Item>
@@ -381,17 +398,17 @@ const removeItem = (model: Model, localId: string): UpdateReturn =>
         onSome: ({ id }) => [DiscardAttachment({ attachmentId: id })],
       });
 
+      const saved: Saving = Option.match(ref, {
+        onNone: () => ({ model: without }),
+        onSome: () => save(without),
+      });
+
       return afterChange(
-        without,
-        [
-          ...cancel,
-          ...revokeCommands([item]),
-          ...discard,
-          ...Option.match(ref, {
-            onNone: () => [],
-            onSome: () => saveCommands(without),
-          }),
-        ],
+        saved.model,
+        Array.appendAll(
+          [...cancel, ...revokeCommands([item]), ...discard],
+          saved.commands ?? []
+        ),
         Option.map(ref, ({ id }) =>
           OutMessage.Detached({ draftKey: item.draftKey, attachmentId: id })
         )
@@ -472,9 +489,10 @@ const isIn = (saved: SavedAttachments, item: Item, ref: AttachmentRef) =>
   );
 
 /**
- * The tray once storage holds `stored`: it becomes the base of the next save, and the ready items
- * follow every attachment this tab did not add or remove since `written`, so one another tab
- * removed goes and one it added comes in. Items still on their way stay.
+ * The tray once storage holds `stored`: the base of the next save becomes `stored` with what this
+ * tab asked for in the saves still on their way since `written`, and the ready items follow every
+ * attachment this tab did not add or remove since `written`, so one another tab removed goes and
+ * one it added comes in. Items still on their way stay.
  */
 const syncSaved = (
   model: Model,
@@ -489,9 +507,11 @@ const syncSaved = (
   const dropped = Array.filter(model.items, isGone);
   const kept = Array.filter(model.items, (item) => !isGone(item));
 
+  // The base of the next save: storage as answered, with what this tab asked for in the saves
+  // still on their way since `written`.
   const next = modifyFields(
     restoreSaved(modifyFields(model, { items: () => kept }), target),
-    { stored: () => stored }
+    { stored: () => rebaseSaved(written, model.stored, stored) }
   );
 
   return { model: next, commands: revokeCommands(dropped) };
@@ -573,9 +593,11 @@ export const update = (
             status: AttachmentStatus.Ready({ ref }),
           }));
 
+          const saved = save(next);
+
           return afterChange(
-            next,
-            saveCommands(next),
+            saved.model,
+            saved.commands ?? [],
             Option.some(
               OutMessage.Attached({
                 draftKey: item.draftKey,
@@ -614,30 +636,38 @@ export const update = (
     LoadedSaved: ({ drafts }) => {
       // Attachments made ready before storage answered stay, and are saved beside the rest.
       const restored = syncSaved(model, model.stored, drafts);
+      const saved = save(restored.model);
 
       return {
-        model: restored.model,
-        commands: [...restored.commands, ...saveCommands(restored.model)],
+        model: saved.model,
+        commands: Array.appendAll(restored.commands, saved.commands ?? []),
       };
     },
     // Saving merges into what the other tab wrote, and its answer brings those attachments here.
-    ChangedStoredAttachments: () => ({ model, commands: saveCommands(model) }),
-    CompletedSave: ({ stored, written }) =>
+    ChangedStoredAttachments: () => save(model),
+    CompletedSave: ({ base, stored, written }) =>
       Option.match(stored, {
         onSome: (saved) => syncSaved(model, written, saved),
-        onNone: () =>
-          Option.match(context.draftKey, {
-            onNone: () => ({ model }),
+        onNone: () => {
+          // Nothing was written: the base goes back to `base`, with what this tab asked for in
+          // the saves still on their way since, so the next save writes this one's changes again.
+          const unsaved = modifyFields(model, {
+            stored: () => rebaseSaved(written, model.stored, base),
+          });
+
+          return Option.match(context.draftKey, {
+            onNone: () => ({ model: unsaved }),
             onSome: (draftKey) => ({
               model: setNotice(
-                model,
+                unsaved,
                 draftKey,
                 Option.some(
                   "Attachments could not be saved on this device. Send before you reload this page."
                 )
               ),
             }),
-          }),
+          });
+        },
       }),
   });
 
@@ -683,12 +713,12 @@ export const restore = (
 ): Update.Return<Model, Message, Services> => {
   const made = readyItemsFor(model, draftKey, refs);
 
-  const next = modifyFields(model, {
-    items: (items) => [...items, ...made.items],
-    nextLocalId: () => made.nextLocalId,
-  });
-
-  return { model: next, commands: saveCommands(next) };
+  return save(
+    modifyFields(model, {
+      items: (items) => [...items, ...made.items],
+      nextLocalId: () => made.nextLocalId,
+    })
+  );
 };
 
 /** Says in `draftKey`'s tray that its send was let go when the user moved to another draft. */
@@ -708,20 +738,22 @@ export const clearSent = (
 ): Update.Return<Model, Message, Services> => {
   const sent = itemsOf(model, draftKey);
 
-  const next = setNotice(
-    stopWaiting(
-      modifyFields(model, {
-        items: (items) =>
-          Array.filter(items, (item) => item.draftKey !== draftKey),
-      }),
-      draftKey
-    ),
-    draftKey,
-    Option.none()
+  const saved = save(
+    setNotice(
+      stopWaiting(
+        modifyFields(model, {
+          items: (items) =>
+            Array.filter(items, (item) => item.draftKey !== draftKey),
+        }),
+        draftKey
+      ),
+      draftKey,
+      Option.none()
+    )
   );
 
   return {
-    model: next,
-    commands: [...revokeCommands(sent), ...saveCommands(next)],
+    model: saved.model,
+    commands: Array.appendAll(revokeCommands(sent), saved.commands ?? []),
   };
 };

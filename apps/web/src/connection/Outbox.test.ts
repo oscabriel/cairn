@@ -1063,6 +1063,7 @@ describe("a turn the brain refuses", () => {
         [
           SaveReady,
           AttachmentsMessage.CompletedSave({
+            base: {},
             written: { [threadKey]: [ref] },
             stored: Option.some({ [threadKey]: [ref] }),
           }),
@@ -1141,6 +1142,7 @@ describe("a turn the brain refuses", () => {
         [
           SaveReady,
           AttachmentsMessage.CompletedSave({
+            base: {},
             written: { [threadKey]: [ref] },
             stored: Option.some({ [threadKey]: [ref] }),
           }),

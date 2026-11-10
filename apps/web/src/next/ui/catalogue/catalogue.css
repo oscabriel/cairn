@@ -1,11 +1,17 @@
 /*
- * The look catalogue's classes: its own page layout, sections and specimens, and the primitives it
- * shows. The client's utilities are built by styles.css, which leaves this folder out so production
- * never carries a class only the catalogue uses; this dev-only page (Main.ts) does not load
- * styles.css, so it builds the primitives' classes here, from all of next/ui, in one build.
+ * The look catalogue's own classes: its page layout, sections and specimens, and the fixtures its
+ * specimens draw. The client's utilities, the primitives' and the shell's among them, come from
+ * styles.css, which index.html loads first and which leaves this folder and the fixtures out, so
+ * production never carries a class only the catalogue uses. These sit in the `catalogue` layer,
+ * which index.html ranks above preflight (`base`) and below the client's utilities: a margin or
+ * padding built only here holds, and a plain utility built here again (`.h-9`) can never beat a
+ * variant the client built (`pointer-coarse:h-(--hit-target)`), so every specimen measures as the
+ * client draws it.
  */
 @reference "tailwindcss";
-@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "tailwindcss/utilities.css" layer(catalogue) source(none);
 @import "../theme.css";
-@source "../";
-@source not "../**/*.test.ts";
+@source "./";
+@source "../SceneFixture.ts";
+@source "../../shell/ShellFixtures.ts";
+@source not "./**/*.test.ts";

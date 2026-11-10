@@ -222,6 +222,9 @@ const plantWide = (): boolean => {
 
   wide.dataset.planted = "";
   wide.style.setProperty("width", "600px");
+  // Unshrinkable: the key hint's specimen is a wrapping flex row, which would shrink an empty block
+  // 600 px wide to fit (its min-content width is 0), and the page would not scroll.
+  wide.style.setProperty("min-width", "600px");
   wide.style.setProperty("height", "4px");
   into.append(wide);
 

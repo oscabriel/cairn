@@ -232,6 +232,121 @@ describe("saved attachments in two tabs", () => {
   );
 });
 
+describe("saved attachments in one tab", () => {
+  it.effect(
+    "stay gone once a send clears the tray before the last attachment's save answers",
+    () =>
+      Effect.gen(function* () {
+        const inA = { draftKey: Option.some("thread:a") };
+
+        /** `tab` once `answers` arrived, in order. */
+        const answered = (tab: Model, answers: ReadonlyArray<Message>) => {
+          let model = tab;
+
+          for (const answer of answers) {
+            ({ model } = update(model, answer, inA));
+          }
+
+          return model;
+        };
+
+        // One attachment ready and saved: the tab and storage agree.
+        const first = restore({ ...initial, loaded: true }, "thread:a", [
+          ref("att_a"),
+        ]);
+
+        const saved = answered(first.model, yield* runSaves(first));
+
+        // A second one is ready, and its save is on its way when the send clears the tray (the
+        // upload that releases a waiting send does both in one update).
+        const second = restore(saved, "thread:a", [ref("att_b")]);
+        const sent = clearSent(second.model, "thread:a");
+
+        const secondAnswers = yield* runSaves(second);
+        const sentAnswers = yield* runSaves(sent);
+
+        const tab = answered(sent.model, [...secondAnswers, ...sentAnswers]);
+        const stored = yield* loadSaved;
+
+        expect({
+          tray: readyIds(tab, "thread:a"),
+          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
+        }).toStrictEqual({ tray: [], stored: [] });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  /** The tray without its one attachment: sent, or removed with its x. */
+  const leaves = {
+    sent: (tab: Model) => clearSent(tab, "thread:a"),
+    removed: (tab: Model) =>
+      update(
+        tab,
+        Message.ClickedRemove({ localId: tab.items[0]?.localId ?? "" }),
+        { draftKey: Option.some("thread:a") }
+      ),
+  };
+
+  it.effect.each(["sent", "removed"] as const)(
+    "stay gone once storage refused the save that took one out (%s)",
+    (how) =>
+      Effect.gen(function* () {
+        const inA = { draftKey: Option.some("thread:a") };
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        /** Storage that refuses every write, as a full localStorage does. */
+        const full = KeyValueStore.make({
+          ...store,
+          set: (key) =>
+            Effect.fail(
+              new KeyValueStore.KeyValueStoreError({
+                message: "quota exceeded",
+                method: "set",
+                key,
+              })
+            ),
+        });
+
+        /** `tab` once `answers` arrived, in order. */
+        const answered = (tab: Model, answers: ReadonlyArray<Message>) => {
+          let model = tab;
+
+          for (const answer of answers) {
+            ({ model } = update(model, answer, inA));
+          }
+
+          return model;
+        };
+
+        // One attachment ready and saved: the tab and storage agree.
+        const first = restore({ ...initial, loaded: true }, "thread:a", [
+          ref("att_a"),
+        ]);
+
+        const saved = answered(first.model, yield* runSaves(first));
+
+        // The save that takes it out is refused.
+        const left = leaves[how](saved);
+
+        const refused = answered(
+          left.model,
+          yield* runSaves(left).pipe(
+            Effect.provideService(KeyValueStore.KeyValueStore, full)
+          )
+        );
+
+        // Any later save, here one asked because another tab wrote, writes the removal again.
+        const told = update(refused, Message.ChangedStoredAttachments(), inA);
+        const tab = answered(told.model, yield* runSaves(told));
+        const stored = yield* loadSaved;
+
+        expect({
+          tray: readyIds(tab, "thread:a"),
+          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
+        }).toStrictEqual({ tray: [], stored: [] });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
 describe("an upload answer", () => {
   it("is worth a new URL when the old one expired, is unknown or was used", () => {
     expect(isRetryableAnswer(400, Option.some("expired"))).toBeTruthy();

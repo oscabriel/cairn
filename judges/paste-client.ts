@@ -4,11 +4,14 @@
 //   node judges/paste-client.ts [--real] [--headed] [--screenshot <png after the drops>]
 //
 // The judge starts a brain from the app's own layers (scripted harness, one seeded thread) and the
-// web client's Vite server on ephemeral loopback ports. Until 3A's attachment routes are composed
-// into the brain, the judge answers them itself: `attachments.createUploadUrl` and
+// web client's Vite server on ephemeral loopback ports. The judge answers the attachment routes
+// itself, so it can hold an upload and time the client: `attachments.createUploadUrl` and
 // `attachments.discard` are answered on the page's protocol socket (every other RPC goes through to
 // the brain), and `POST /api/attachments/upload/:token` is answered with an `AttachmentRef` built
-// from the bytes it received. With `--real` nothing is stubbed, so the brain's own routes answer.
+// from the bytes it received, which the judge also records in the brain's attachment store as they
+// came (an image as its own prepared file), since the brain refuses a turn that names an attachment
+// it does not hold and the client then puts the turn back in the tray. With `--real` nothing is
+// stubbed, so the brain's own routes answer.
 //
 // Cases: a PNG `File` pasted through `DataTransfer` makes one chip and starts one upload, fitted to
 // the 1,568 px long edge; a text paste over 32 KiB becomes `pasted-text.txt`; the same text after
@@ -25,6 +28,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import {
+  AttachmentRef,
   CreateUploadUrlInput,
   DiscardAttachmentInput,
 } from "@cairn/protocol/Attachments";
@@ -39,6 +43,7 @@ import {
   Predicate,
   References,
   Schema,
+  Stream,
 } from "effect";
 import { createServer as createViteServer } from "vite";
 
@@ -47,6 +52,7 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../apps/server/src/AppLayer.ts";
+import { AttachmentStore } from "../apps/server/src/attachments/AttachmentStore.ts";
 import { EventReactors } from "../apps/server/src/brain/EventReactors.ts";
 import { FauxModels } from "../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../apps/server/src/brain/HarnessSeam.ts";
@@ -191,11 +197,16 @@ const Seed = Layer.effectDiscard(
   })
 );
 
-/** Starts the brain and Vite; resolves with the thread page's URL and a stop function. */
-const startApp = async (): Promise<{
+/** The judge's app: the thread page's URL, how to keep a stubbed upload in the brain, and a stop. */
+interface App {
   readonly url: string;
+  /** Records `bytes` in the brain's attachment store as `ref`, as the brain's upload route would. */
+  readonly keep: (ref: AttachmentRef, bytes: Uint8Array) => Promise<void>;
   readonly stop: () => Promise<void>;
-}> => {
+}
+
+/** Starts the brain and Vite. */
+const startApp = async (): Promise<App> => {
   const vitePort = await freePort();
   const brainPort = await freePort();
   const origin = `http://${LOOPBACK}:${vitePort}`;
@@ -239,6 +250,30 @@ const startApp = async (): Promise<{
 
   return {
     url: `${origin}/t/${THREAD_ID}`,
+    keep: async (ref, bytes) => {
+      await runtime.runPromise(
+        AttachmentStore.use((store) =>
+          Effect.gen(function* () {
+            yield* store.receive(ref.id, bytes.length, Stream.make(bytes));
+
+            if (ref.kind === "image") {
+              yield* store.writeVariant(ref.id, "prepared", bytes);
+            }
+
+            yield* store.record({
+              ref,
+              preparedMimeType:
+                ref.kind === "image"
+                  ? Option.some(ref.mimeType)
+                  : Option.none(),
+              pages: Option.none(),
+              textChars: Option.none(),
+              textTruncated: false,
+            });
+          })
+        ).pipe(Effect.provideService(References.MinimumLogLevel, "Error"))
+      );
+    },
     stop: async () => {
       await vite.close();
       await runtime.dispose();
@@ -325,7 +360,11 @@ let nextAttachment = 1;
 /** Uploads wait on this while the send case holds them. */
 let held: Option.Option<{ readonly release: Promise<boolean> }> = Option.none();
 
-const answerUpload = async (route: Route): Promise<void> => {
+const decodeRef = Schema.decodeUnknownSync(AttachmentRef);
+
+const encodeRef = Schema.encodeSync(AttachmentRef);
+
+const answerUpload = async (app: App, route: Route): Promise<void> => {
   const token = route.request().url().split("/").at(-1) ?? "";
   const claims = tokens.get(token);
   const body = route.request().postDataBuffer() ?? Buffer.alloc(0);
@@ -347,17 +386,17 @@ const answerUpload = async (route: Route): Promise<void> => {
     return;
   }
 
-  await route.fulfill({
-    status: 200,
-    json: {
-      id: claims.attachmentId,
-      name: claims.name,
-      mimeType: claims.mimeType,
-      sizeBytes: body.length,
-      kind: kindOf(claims.mimeType),
-      sha256: createHash("sha256").update(body).digest("hex"),
-    },
+  const ref = decodeRef({
+    id: claims.attachmentId,
+    name: claims.name,
+    mimeType: claims.mimeType,
+    sizeBytes: body.length,
+    kind: kindOf(claims.mimeType),
+    sha256: createHash("sha256").update(body).digest("hex"),
   });
+
+  await app.keep(ref, new Uint8Array(body));
+  await route.fulfill({ status: 200, json: encodeRef(ref) });
 };
 
 /** The `--real` run's upload hook: records the bytes, holds them when the send case does, then lets them through to the brain. */
@@ -552,7 +591,11 @@ await page.routeWebSocket(
 
 await page.route(
   "**/api/attachments/upload/**",
-  values.real ? observeUpload : answerUpload
+  values.real
+    ? observeUpload
+    : async (route) => {
+        await answerUpload(app, route);
+      }
 );
 
 await page.goto(app.url, { waitUntil: "networkidle" });

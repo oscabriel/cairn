@@ -71,7 +71,9 @@
 //                         circle), the favicon drawn edge to edge in its bubble, a letter for a
 //                         project with none, the selected one marked; a bubble opens its project
 //                         (its project thread, or a draft in that project when it has none);
-//   shell-list-<w>        the project thread on top opens it under the new header ("project
+//   shell-list-<w>        from the hero, whose project picker chooses cairn (the hero's sidebar
+//                         shows the project the hero launches in, U-21), the project thread on
+//                         top opens it under the new header ("project
 //                         thread"), and under it the managed threads: the asking and live ones
 //                         first, the resting ones under "Resting (n)", each group newest first,
 //                         each row with its status mark and word; no Active, Settled, Pinned or
@@ -98,7 +100,8 @@
 //   shell-refresh-1440    Refresh asks first in an alert dialog whose field holds the keyboard
 //                         (U-12); Escape closes it and focus goes back to Refresh, Cancel keeps the
 //                         thread; then it starts a new project thread with the typed message,
-//                         opens it and lists it on top;
+//                         opens it and lists it on top (the checks after it that type in cairn's
+//                         project thread open this one: the seeded thread is now read only);
 //   shell-previous-<w>    after the refresh, cairn's list folds its earlier project thread under
 //                         "Previous (1)" (ADR 0048); the row opens the seeded thread read only: the
 //                         header says "earlier project thread", its transcript shows, its work panel
@@ -235,6 +238,13 @@ const app = await startCairn(
 );
 
 const { threadUrl } = app;
+
+/**
+ * Cairn's live project thread: the seeded thread until `shell-refresh-1440` starts a new one, after
+ * which the seeded thread is an earlier project thread, read only with no composer (ADR 0048). The
+ * checks after the refresh that need a thread to type in open this one.
+ */
+let liveThreadUrl = threadUrl;
 
 const desktop = (width: number): BrowserContextOptions => ({
   viewport: { width, height: 900 },
@@ -489,6 +499,13 @@ const shellChecks = async (browser: Browser, hero: string) => {
         shellContext(width),
         hero,
         async (page) => {
+          // The hero's sidebar shows the project the hero launches in (U-21), the most recently
+          // updated one (myr, seeded last): the hero's project picker chooses cairn, and the rail
+          // and the list follow it.
+          await page.getByTestId("hero-project-trigger").click();
+          await page
+            .getByRole("option", { name: exported.projectTitle, exact: true })
+            .click();
           await openSidebar(page, width);
 
           const side = sidebarOf(page, width);
@@ -921,6 +938,8 @@ const shellChecks = async (browser: Browser, hero: string) => {
         { timeout: 10_000 }
       );
 
+      liveThreadUrl = `${app.origin}${new URL(page.url()).pathname}`;
+
       const shown = await page
         .locator('[data-message-role="user"]', { hasText: words })
         .first()
@@ -968,9 +987,10 @@ const shellChecks = async (browser: Browser, hero: string) => {
 
         const side = sidebarOf(page, width);
 
+        // Cairn's rail bubble ("cairn" or "cairn, <mark>"), not its list's "cairn project actions".
         await side
           .getByRole("button", {
-            name: new RegExp(`^${exported.projectTitle}`, "u"),
+            name: new RegExp(`^${exported.projectTitle}(?:,|$)`, "u"),
           })
           .click();
         await page.waitForURL((url) => url.pathname.startsWith("/t/"), {
@@ -1070,11 +1090,11 @@ const shellChecks = async (browser: Browser, hero: string) => {
     browser,
     "shell-start-1440",
     desktop(1440),
-    projectThreadUrl,
+    liveThreadUrl,
     async (page) => {
       const column = page.getByTestId("shell-column");
 
-      await column.getByRole("button", { name: /^myr/u }).click();
+      await column.getByRole("button", { name: /^myr(?:,|$)/u }).click();
       await page.waitForURL((url) => url.pathname.startsWith("/new/"), {
         timeout: 5000,
       });
@@ -1119,7 +1139,7 @@ const shellChecks = async (browser: Browser, hero: string) => {
       // Cairn's project thread is still there: its bubble opens it, not the empty project.
       await column
         .getByRole("button", {
-          name: new RegExp(`^${exported.projectTitle}`, "u"),
+          name: new RegExp(`^${exported.projectTitle}(?:,|$)`, "u"),
         })
         .click();
 
@@ -1330,7 +1350,8 @@ const shellChecks = async (browser: Browser, hero: string) => {
  * draft, which launches in the most recently updated project, would start in one of them.
  */
 const addProjectChecks = async (browser: Browser) => {
-  const projectThreadUrl = threadUrl;
+  // Cairn's live project thread: the seeded one is read only after the refresh.
+  const projectThreadUrl = liveThreadUrl;
 
   // The rail's + bubble adds a folder under the home folder (the only place the brain takes one
   // from), browsed to at 1,440 and typed at 390, and selects it; adding it again selects it again.
@@ -2353,7 +2374,7 @@ try {
     chromiumBrowser,
     "drafts-separate",
     desktop(1440),
-    threadUrl,
+    liveThreadUrl,
     async (page) => {
       await editor(page).click();
       await page.keyboard.type("a thread draft");
@@ -2363,7 +2384,7 @@ try {
 
       const heroValue = await value(page);
 
-      await page.goto(threadUrl, { waitUntil: "networkidle" });
+      await page.goto(liveThreadUrl, { waitUntil: "networkidle" });
       await editor(page).waitFor({ state: "visible" });
       await page.waitForTimeout(800);
 
@@ -2438,7 +2459,7 @@ if (wanted("soft-keyboard")) {
     const page = await context.newPage();
 
     try {
-      await page.goto(threadUrl, { waitUntil: "networkidle" });
+      await page.goto(liveThreadUrl, { waitUntil: "networkidle" });
       await editor(page).waitFor({ state: "visible", timeout: 15_000 });
       await expectUi(page);
       await editor(page).tap();

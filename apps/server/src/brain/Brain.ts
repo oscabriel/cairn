@@ -61,8 +61,7 @@ import type { Cause, Scope } from "effect";
 import { Arms } from "./Arms.ts";
 import { BrainOpenTimeout } from "./BrainOpenTimeout.ts";
 import { BrainStore } from "./BrainStore.ts";
-import { durable, errorText } from "./Durable.ts";
-import type { DurableCallError } from "./Durable.ts";
+import { DurableCallError, durable, errorText } from "./Durable.ts";
 import { Extensions } from "./Extensions.ts";
 import { ModelSource } from "./ModelSource.ts";
 import { RestartLimit } from "./RestartLimit.ts";
@@ -276,9 +275,17 @@ export class Brain extends Context.Service<
 
           opening.storage = Option.some(storage);
 
-          // Given up while the store opened: the storage closes now, and the cancelled open fails.
+          // Given up while the store opened: the storage closes now, and the open fails here rather
+          // than hand pi-durable a closed store and rely on its abort check coming first.
           if (opening.abandoned) {
             yield* closeStorage(storage);
+
+            return yield* new DurableCallError({
+              message: "pi-durable open was given up before it began",
+              operation: "open",
+              closed: true,
+              cause: undefined,
+            });
           }
 
           const harness = yield* durable(
@@ -344,9 +351,14 @@ export class Brain extends Context.Service<
       // Every reopen still opening, or closing what it opened after its waiter gave up on it.
       const opening = new Set<Opening>();
 
-      /** Closes what an open nobody waits for made, and forgets the open. */
+      /**
+       * Closes what an open nobody waits for made, and forgets the open. Its storage is closed after
+       * the Harness, whatever the Harness's close did (a storage close is idempotent), so a Harness
+       * whose close failed or ran past its bound leaves nothing open behind it.
+       */
       const closeLanded = (attempt: Opening, opened: Opened) =>
         closeHarness(opened.harness).pipe(
+          Effect.ensuring(closeStorage(opened.storage).pipe(Effect.ignore)),
           Effect.ensuring(
             Effect.sync(() => {
               opening.delete(attempt);
@@ -364,8 +376,13 @@ export class Brain extends Context.Service<
           attempt.abandoned = true;
           attempt.cancel.abort();
 
+          // Not landed: its storage, if the store opened it, closes now. An open whose storage call
+          // hangs never rejects, so waiting for it would keep one connection per retry until exit.
           return Option.match(attempt.landed, {
-            onNone: () => Effect.void,
+            onNone: () =>
+              Effect.forEach(Option.toArray(attempt.storage), closeStorage, {
+                discard: true,
+              }).pipe(Effect.ignore),
             onSome: (landed) => closeLanded(attempt, landed),
           });
         });

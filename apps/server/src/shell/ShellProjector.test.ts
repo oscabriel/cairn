@@ -1323,7 +1323,7 @@ describe("the shell projector", () => {
   );
 
   it.effect(
-    "the boot reconcile ends a row idle when the kept failure is older than the row's own run",
+    "the boot reconcile ends a row idle when the kept failure is older than the row's own run's request",
     () =>
       run(
         Effect.gen(function* () {
@@ -1342,6 +1342,7 @@ describe("the shell projector", () => {
                 ...emptyActivityPatch,
                 activity: Option.some("running"),
                 activeRunId: Option.some(Option.some(run7)),
+                latestRunRequestedAt: Option.some(Option.some(at(55))),
                 latestRunStartedAt: Option.some(Option.some(at(60))),
               },
             })
@@ -1379,6 +1380,68 @@ describe("the shell projector", () => {
             Option.some(at(3600))
           );
           assert.isTrue(yield* reconciled.has(THREAD, at(3600)));
+        })
+      )
+  );
+
+  it.effect(
+    "the boot reconcile ends a row failed when its run failed before the projector stamped its start",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThreads();
+
+          const fake = yield* FakeHarness;
+          const sink = yield* EventSink;
+          const projector = yield* ShellProjector;
+          const reconciled = yield* ReconciledEnds;
+
+          yield* sink.commitCommand(
+            ThreadActivityUpdate.make({
+              commandId: testCommandId(903),
+              threadId: THREAD,
+              patch: {
+                ...emptyActivityPatch,
+                activity: Option.some("running"),
+                activeRunId: Option.some(Option.some(run7)),
+                latestRunRequestedAt: Option.some(Option.some(at(55))),
+                latestRunStartedAt: Option.some(Option.some(at(60))),
+              },
+            })
+          );
+
+          // The run failed within milliseconds: after its request, before the start's stamp.
+          yield* Ref.set(fake.live, [
+            {
+              threadId: THREAD,
+              conversationId: ConversationId.make(1),
+              runId: Option.none(),
+              queueLength: 0,
+              pendingApprovals: [],
+              lastRunFailure: Option.some<LastRunFailure>({
+                failure: {
+                  class: "provider_error",
+                  retryable: true,
+                  resetAt: Option.none(),
+                  plan: Option.none(),
+                },
+                at: Option.some(at(58)),
+              }),
+            },
+          ]);
+
+          yield* TestClock.setTime(DateTime.toEpochMillis(at(3600)));
+          yield* projector.reconcile;
+
+          const row = yield* shellOf(THREAD);
+
+          assert.strictEqual(row.activity, "failed");
+          assert.deepStrictEqual(
+            row.lastErrorClass,
+            Option.some("provider_error")
+          );
+          assert.deepStrictEqual(row.latestRunCompletedAt, Option.some(at(58)));
+          assert.isFalse(yield* reconciled.has(THREAD, at(3600)));
         })
       )
   );

@@ -428,9 +428,12 @@ export const endedUnseen = (
 
 /**
  * The failure the boot reconcile ends an ended-unseen row with: the harness's kept failure of the
- * newest run, unless it is dated before the row's own run started. Such a failure is an older run's,
- * which pi-durable would keep past a later run only under `afterFailedRun: "continue"` (Cairn sets
- * "keep", `RunFailure.ts`); the row then ends `idle` as before, so the setting is not relied on.
+ * newest run, unless it is dated before the row's own run was requested. Such a failure is an older
+ * run's, which pi-durable would keep past a later run only under `afterFailedRun: "continue"` (Cairn
+ * sets "keep", `RunFailure.ts`); the row then ends `idle` as before, so the setting is not relied
+ * on. The request, not the start: the projector stamps a run's start when it sees it, and a run
+ * that fails within milliseconds ends before that stamp (the durability judge's mid-commit-failed
+ * window: ended .223, start stamped .229, requested .203).
  */
 export const unseenFailureOf = (
   projection: ThreadProjection,
@@ -441,8 +444,8 @@ export const unseenFailureOf = (
         Option.flatMap(live, (state) => state.lastRunFailure),
         (found) =>
           !Option.exists(found.at, (at) =>
-            Option.exists(projection.fields.latestRunStartedAt, (started) =>
-              DateTime.isLessThan(at, started)
+            Option.exists(projection.fields.latestRunRequestedAt, (requested) =>
+              DateTime.isLessThan(at, requested)
             )
           )
       )

@@ -42,11 +42,7 @@ import {
 } from "effect";
 import { createServer as createViteServer } from "vite";
 
-import {
-  AppLayer,
-  HarnessBoot,
-  SettingsLive,
-} from "../../../apps/server/src/AppLayer.ts";
+import { AppLayer, HarnessBoot } from "../../../apps/server/src/AppLayer.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
 import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
 import {
@@ -66,7 +62,10 @@ import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts"
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
 import { BridgeProvider } from "../../../apps/server/src/models/BridgeProvider.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
-import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
+import {
+  SettingsLive,
+  SettingsStore,
+} from "../../../apps/server/src/models/SettingsStore.ts";
 import { ReachMachine } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import {

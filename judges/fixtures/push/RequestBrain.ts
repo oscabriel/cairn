@@ -15,9 +15,6 @@ import { Clock, Effect, Layer, Predicate } from "effect";
 import {
   AppLayer,
   HarnessBoot,
-  ModelHealthLive,
-  ReachLive,
-  SettingsLive,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
 import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
@@ -37,10 +34,13 @@ import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import type { ServerSettings } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
+import { ModelHealthLive } from "../../../apps/server/src/models/ModelHealth.ts";
+import { SettingsLive } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { NotifierSettings } from "../../../apps/server/src/push/Notifier.ts";
 import {
   judgePortalSettings,
+  ReachLive,
   ReachMachine,
 } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { Skills } from "../../../apps/server/src/skills/SkillsLayer.ts";

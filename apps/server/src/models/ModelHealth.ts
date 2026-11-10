@@ -49,6 +49,7 @@ import { SqlClient } from "effect/sql";
 
 import { usageLimitOf } from "../brain/RunFailure.ts";
 import { Database } from "../db/Database.ts";
+import { DatabaseLive } from "../db/DatabaseLive.ts";
 import { migrations } from "../db/Migrations.ts";
 
 /** Transient failures that turn a provider failing when they fall inside `STREAK_WINDOW_MS`. */
@@ -809,3 +810,13 @@ export class ModelHealth extends Context.Service<
     Layer.provide(Database.layerTest(migrations))
   );
 }
+
+/**
+ * The brain's one health store, over `DatabaseLive`. Every production layer that records or reads
+ * health (the brain's health feed, the login and status RPCs) is given this reference, so the memo
+ * map builds one store whose memory all of them see. `ModelHealth.layerNoDeps` is for test
+ * assemblies over their own database.
+ */
+export const ModelHealthLive = ModelHealth.layerNoDeps.pipe(
+  Layer.provide(DatabaseLive)
+);

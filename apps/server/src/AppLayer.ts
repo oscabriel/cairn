@@ -6,8 +6,6 @@
 // `Shutdown`, and the HTTP server after it, so on SIGTERM the sockets close first, then the hooks
 // run, then the stores and the Harness close.
 
-import path from "node:path";
-
 import { NodeServices } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
 
@@ -29,8 +27,7 @@ import { ReactorSet } from "./brain/ReactorSet.ts";
 import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
 import { SpendFeed } from "./brain/SpendFeed.ts";
 import { ServerConfig } from "./Config.ts";
-import { Database } from "./db/Database.ts";
-import { migrations } from "./db/Migrations.ts";
+import { DatabaseLive } from "./db/DatabaseLive.ts";
 import { ExecutorSweep } from "./executor/ExecutorSweep.ts";
 import {
   CHECKPOINT_ENTRY_KIND,
@@ -45,16 +42,16 @@ import { HttpLive } from "./http/Http.ts";
 import { BootData } from "./load/BootData.ts";
 import { PeerPath } from "./load/PeerPath.ts";
 import { MemoryWatch } from "./MemoryWatch.ts";
-import { ModelHealth } from "./models/ModelHealth.ts";
+import { ModelHealthLive } from "./models/ModelHealth.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
-import { SettingsStore } from "./models/SettingsStore.ts";
+import { SettingsLive } from "./models/SettingsStore.ts";
 import { FileSearch } from "./projects/FileSearch.ts";
 import { FolderRules } from "./projects/FolderRules.ts";
 import { ScratchProject } from "./projects/ScratchProject.ts";
 import { Worktrees } from "./projects/Worktrees.ts";
 import { ExecutorSignInPush } from "./push/ExecutorSignInPush.ts";
 import { PushLayer } from "./push/PushLayer.ts";
-import { ReachServices } from "./reach/ReachLayer.ts";
+import { ReachLive } from "./reach/ReachLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHelloWithModels } from "./rpc/ModelHandlers.ts";
 import { SessionHelloWithPush } from "./rpc/PushHandlers.ts";
@@ -88,7 +85,6 @@ import {
 } from "./workflows/WorkflowPushes.ts";
 import { WorkflowStops } from "./workflows/WorkflowStop.ts";
 import { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
-import { ChildWorkspaceStore } from "./workspaces/ChildWorkspaceStore.ts";
 
 /**
  * How boot hands the harness its work after the repairs. pi-durable does not resume on open, so
@@ -106,66 +102,15 @@ const Boot = BootLayer({
   resume: HarnessBoot.use((boot) => boot.resume),
 });
 
-/**
- * `cairn.sqlite` under the configured data directory, migrated (with a backup first), with its
- * daily rolling copy. Exported so `main.ts` gives the Executor link this same reference, and the
- * memo map opens one connection.
- */
-export const DatabaseLive = Layer.unwrap(
-  Effect.gen(function* () {
-    const config = yield* ServerConfig;
-
-    return Database.layerRollingCopy(config.backupCopyDir).pipe(
-      Layer.provideMerge(
-        Database.layer({
-          filename: path.join(config.dataDir, "cairn.sqlite"),
-          migrations,
-        })
-      )
-    );
-  })
-);
-
 /** The shell store with settlement and the default projector signals, over the database. */
 const ShellLive = ShellLayer.pipe(Layer.provideMerge(DatabaseLive));
-
-/**
- * Each provider's health over the database. One reference, which `AppLayer` uses (the login RPCs
- * reset it) and each entry point gives `PiDurableBrain` (its `model-health` extension records into
- * it), so the memo map builds one store whose memory both see.
- */
-export const ModelHealthLive = ModelHealth.layerNoDeps.pipe(
-  Layer.provide(DatabaseLive)
-);
-
-/**
- * The server settings over the database. One reference, which `AppLayer` uses and each entry point
- * gives `PiDurableBrain` (the `models` tool and the brain's budgets read it).
- */
-export const SettingsLive = SettingsStore.layerNoDeps.pipe(
-  Layer.provide(DatabaseLive)
-);
-
-/**
- * Artifacts, portals, the portal tools and the reach lister over the database (`ReachLayer.ts`).
- * One reference, which `AppLayer` uses (the reach RPCs, the portal boot repairs and close hook) and
- * each entry point gives `PiDurableBrain` (the `cairn.reach` tools), so the memo map builds one
- * portal store. The porch (`PorchClient`) and the units (`PortalUnits`), with `PortalSettings`, are
- * the entry point's.
- */
-export const ReachLive = ReachServices.pipe(Layer.provide(DatabaseLive));
-
-/** Child workspaces (3B): the plan store and worktrees under the data folder, over the database. */
-const ChildWorkspacesLive = ChildWorkspaces.layerNoDeps.pipe(
-  Layer.provide(ChildWorkspaceStore.layerNoDeps)
-);
 
 /** Folders, the scratch project, worktrees, child workspaces and file search, over git. */
 const ProjectsLive = Layer.mergeAll(
   FolderRules.layer,
   ScratchProject.layerNoDeps,
   FileSearch.layerNoDeps,
-  ChildWorkspacesLive
+  ChildWorkspaces.layer
 ).pipe(
   Layer.provideMerge(Worktrees.layerNoDeps),
   Layer.provideMerge(Git.layer),
@@ -173,16 +118,12 @@ const ProjectsLive = Layer.mergeAll(
 );
 
 /**
- * The subagents extension (3A) over the app's child workspaces: `ChildWorkspacesLive`, its
- * worktrees and git are the references `ProjectsLive` uses, so the memo map builds one
- * `ChildWorkspaces` for the brief task's `prepare` and the boot repair. `SubagentFaults` keeps its
- * default, no faults.
+ * The subagents extension (3A) over the app's child workspaces: `ChildWorkspaces.layer`, the
+ * reference `ProjectsLive` uses, so the memo map builds one `ChildWorkspaces` for the brief task's
+ * `prepare` and the boot repair. `SubagentFaults` keeps its default, no faults.
  */
 const SubagentsLive = Subagents.layer.pipe(
-  Layer.provide(ChildWorkspacesLive),
-  Layer.provide(Worktrees.layerNoDeps),
-  Layer.provide(Git.layer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(ChildWorkspaces.layer),
   Layer.provide(DatabaseLive)
 );
 
@@ -227,9 +168,10 @@ export const withCatalog = <E, R>(models: Layer.Layer<ModelSource, E, R>) =>
  * pi-durable behind the harness seam, with the given models and extension set (the production
  * set unless a judge adds its tools) and the durable event reactors (`ReactorSet.ts`). Boot resumes
  * it after the repairs. The `cairn.reach` tools' `Artifacts` and `PortalTools` are the entry
- * point's too: `ReachLive`, as `AppLayer` uses. `ModelHealth`, which the set's health feed records into, is left to the
- * entry point: `ModelHealthLive`, the reference `AppLayer` uses, so one store serves both; so is
- * `SettingsStore` (`SettingsLive`), which the brain's tools read. The models layer is also
+ * point's too: `ReachLive`, as `AppLayer` uses. `ModelHealth`, which the set's health feed records
+ * into, is left to the entry point: `ModelHealthLive`, the reference `AppLayer` uses, so one
+ * store serves both; so is `SettingsStore` (`SettingsLive`), which the brain's tools read.
+ * The models layer is also
  * exposed, so the app's catalog and title model read the same runtime the harness does.
  */
 export const PiDurableBrain = <Models = never>(options: {

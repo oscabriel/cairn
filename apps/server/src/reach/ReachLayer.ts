@@ -16,6 +16,7 @@ import { Duration, Effect, FileSystem, Layer } from "effect";
 
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
+import { DatabaseLive } from "../db/DatabaseLive.ts";
 import { migrations } from "../db/Migrations.ts";
 import { Git } from "../git/Git.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
@@ -100,6 +101,14 @@ export const ReachServices = Layer.mergeAll(
   Layer.provide(ArtifactPublisher.layer),
   Layer.provide(Git.layer)
 );
+
+/**
+ * The brain's reach services over `DatabaseLive`: the reference the reach RPCs, the portal boot
+ * repairs and close hook, and the `cairn.reach` tools are all given, so the memo map builds one
+ * portal store. The porch (`PorchClient`) and the units (`PortalUnits`), with `PortalSettings`,
+ * are the entry point's.
+ */
+export const ReachLive = ReachServices.pipe(Layer.provide(DatabaseLive));
 
 /**
  * The reach services over `ReachMachine.layerTest`, a fresh migrated in-memory `cairn.sqlite` and a

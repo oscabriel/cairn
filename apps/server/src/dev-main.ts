@@ -10,22 +10,21 @@ import { parseArgs } from "node:util";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
-import {
-  AppLayer,
-  ModelHealthLive,
-  PiDurableBrain,
-  ReachLive,
-  SettingsLive,
-  ScriptedBrain,
-} from "./AppLayer.ts";
+import { AppLayer, PiDurableBrain, ScriptedBrain } from "./AppLayer.ts";
 import { ServerConfig } from "./Config.ts";
 import { DevDemo } from "./DevDemo.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
+import { ModelHealthLive } from "./models/ModelHealth.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
+import { SettingsLive } from "./models/SettingsStore.ts";
 import { observabilityLayer } from "./Observability.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
-import { judgePortalSettings, ReachMachine } from "./reach/ReachLayer.ts";
+import {
+  judgePortalSettings,
+  ReachLive,
+  ReachMachine,
+} from "./reach/ReachLayer.ts";
 
 const { values } = parseArgs({
   options: { models: { type: "string", default: "scripted" } },

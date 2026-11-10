@@ -14,14 +14,7 @@ import { Effect, Layer } from "effect";
 
 import { JudgeModel } from "../../../judges/fixtures/JudgeModel.ts";
 import { JudgeTools } from "../../../judges/fixtures/JudgeTools.ts";
-import {
-  AppLayer,
-  ModelHealthLive,
-  PiDurableBrain,
-  ReachLive,
-  SettingsLive,
-  withCatalog,
-} from "./AppLayer.ts";
+import { AppLayer, PiDurableBrain, withCatalog } from "./AppLayer.ts";
 import {
   judgeSubagentCrashes,
   NO_SUBAGENT_FAULTS,
@@ -36,11 +29,17 @@ import {
   BridgeExtraProviders,
   BridgeProvider,
 } from "./models/BridgeProvider.ts";
+import { ModelHealthLive } from "./models/ModelHealth.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
+import { SettingsLive } from "./models/SettingsStore.ts";
 import { observabilityLayer } from "./Observability.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { judgePortalFaults } from "./reach/Portals.ts";
-import { judgePortalSettings, ReachMachine } from "./reach/ReachLayer.ts";
+import {
+  judgePortalSettings,
+  ReachLive,
+  ReachMachine,
+} from "./reach/ReachLayer.ts";
 
 // `--models real` runs pi's model runtime with the bridge (the bridge windows of judges/durability.ts); the default is
 // the judge's faux model.

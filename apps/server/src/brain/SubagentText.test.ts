@@ -3,6 +3,7 @@
 // a nudge's words that the transcript would no longer recognise fails in this file.
 
 import { brainInputText } from "@cairn/client-logic/TimelineEntries";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Result } from "effect";
 
@@ -42,8 +43,12 @@ describe("the brain's inputs as the transcript shows them", () => {
                 }),
                 wake: Option.none(),
                 model: Option.none(),
+                maxTokens: Option.none(),
+                maxUsd: Option.none(),
+                doneWhen: Option.none(),
               },
-              "full-access"
+              "full-access",
+              DEFAULT_BUDGET
             )
           )
         )

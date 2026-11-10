@@ -1,5 +1,6 @@
 // The build route through the router: the build id `session.hello` reports, as JSON, never cached,
-// so a page refused by the socket can tell it belongs to another build.
+// so a page refused by the socket can tell it belongs to another build. The path and the body are
+// written out, not imported: the web app asks for exactly these (`apps/web/src/load/Load.test.ts`).
 
 import { NodeHttpServer } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -7,7 +8,7 @@ import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { FALLBACK_DEFAULTS, SessionHello } from "../rpc/SessionHandlers.ts";
-import { BUILD_PATH, BuildRoute } from "./Build.ts";
+import { BuildRoute } from "./Build.ts";
 
 const app = BuildRoute.pipe(
   Layer.provide(
@@ -33,7 +34,7 @@ describe("the build route", () => {
           Effect.provideService(
             HttpServerRequest.HttpServerRequest,
             HttpServerRequest.fromWeb(
-              new Request(`http://code.gneiss.run${BUILD_PATH}`)
+              new Request("http://code.gneiss.run/api/build")
             )
           )
         )

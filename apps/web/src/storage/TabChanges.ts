@@ -17,7 +17,12 @@
 // taken for lost, and a save patches the stored value (sets and removes this tab's entries only),
 // writing every other entry back exactly as stored. A value unreadable as a whole (not JSON, or
 // another outer shape) is never written over: the tab reads and writes its copy under the value's
-// recovery key (`<key>:recovery`) instead, and the page says it holds entries it cannot show.
+// recovery key (`<key>:recovery`) instead. A tab of this build that sets an entry under the key of
+// one it cannot decode replaces it (a draft written in the same thread): its key is all it knows.
+//
+// The page says once that storage holds what it cannot show (`readShared`): what it told about is
+// written down (`<key>:told`), so an entry no build can read again does not raise the notice on
+// every load, and only an entry not told about yet raises it again.
 
 import type { Equivalence, Stream } from "effect";
 import { Array, Clock, Effect, Option, Record, Schema } from "effect";
@@ -226,14 +231,22 @@ export interface Readable<A, Raw> {
   readonly raw: Raw;
   /** The keys of stored entries this build cannot decode but can still name: present, so not lost. */
   readonly held: ReadonlyArray<string>;
-  /** How many stored entries this build cannot decode. */
-  readonly unread: number;
+  /** One id per stored entry this build cannot decode (`unreadId`), which the page tells about once. */
+  readonly unread: ReadonlyArray<string>;
 }
+
+/** The id of a stored entry this build cannot decode: its key, or its JSON when it has none. */
+export const unreadId = (
+  key: Option.Option<string>,
+  json: Schema.Json
+): string => Option.getOrElse(key, () => `#${JSON.stringify(json)}`);
 
 /** How one shared value is kept as text: read entry by entry, and written as a patch. */
 export interface Persisted<A, Raw, R, E> {
   /** The value when nothing is stored. */
   readonly empty: Readable<A, Raw>;
+  /** True when `raw` holds no entry, read or not. */
+  readonly isEmpty: (raw: Raw) => boolean;
   /** Reads stored text; none when the text is unreadable as a whole. */
   readonly read: (
     text: string
@@ -283,13 +296,41 @@ const findStored = Effect.fnUntraced(function* <A, Raw, R, E>(
   }));
 });
 
+/** The unread id of a value at a key that is unreadable as a whole, its entries uncounted. */
+const UNREADABLE_VALUE = "*unreadable";
+
+/** The unread id of a copy at the recovery key once the value at the key reads again. */
+const LEFT_RECOVERY = "*recovery";
+
 /** What a page loads of a shared value. */
-export interface Loaded<A> {
+export interface Stored<A> {
   /** The entries this build decodes. */
   readonly value: A;
-  /** Storage holds entries this build cannot decode, or a value it cannot read at all, kept as stored. */
-  readonly unread: boolean;
+  /** The ids of what storage holds that this build cannot show, kept as stored. */
+  readonly unread: ReadonlyArray<string>;
 }
+
+/**
+ * Whether the recovery key of `key` holds a copy: once the value at the key reads again, nothing
+ * reads that copy, so the page must say it is there.
+ */
+const recoveryLeft = Effect.fnUntraced(function* <A, Raw, R, E>(
+  key: string,
+  persisted: Persisted<A, Raw, R, E>
+) {
+  const store = yield* KeyValueStore.KeyValueStore;
+  const text = yield* store.get(recoveryKey(key));
+
+  return yield* Option.match(Option.fromUndefinedOr(text), {
+    onNone: () => Effect.succeed(false),
+    onSome: (copy) =>
+      Effect.map(
+        persisted.read(copy),
+        (readable) =>
+          !Option.exists(readable, ({ raw }) => persisted.isEmpty(raw))
+      ),
+  });
+});
 
 /**
  * Reads the shared value at `key` entry by entry. A missing value, or storage refusing, is the empty
@@ -299,20 +340,98 @@ export interface Loaded<A> {
 export const loadShared = <A, Raw, R, E>(
   key: string,
   persisted: Persisted<A, Raw, R, E>
-): Effect.Effect<Loaded<A>, never, R | KeyValueStore.KeyValueStore> =>
-  Effect.map(findStored(key, persisted), (found) =>
-    Option.match(found, {
-      onNone: (): Loaded<A> => ({ value: persisted.empty.value, unread: true }),
-      onSome: ({ at, readable }): Loaded<A> => ({
+): Effect.Effect<Stored<A>, never, R | KeyValueStore.KeyValueStore> =>
+  Effect.gen(function* () {
+    const found = yield* findStored(key, persisted);
+
+    if (Option.isNone(found)) {
+      return { value: persisted.empty.value, unread: [UNREADABLE_VALUE] };
+    }
+
+    const { at, readable } = found.value;
+
+    if (at !== key) {
+      return {
         value: readable.value,
-        unread: at !== key || readable.unread > 0,
-      }),
-    })
-  ).pipe(
-    Effect.orElseSucceed((): Loaded<A> => ({
+        unread: [UNREADABLE_VALUE, ...readable.unread],
+      };
+    }
+
+    const left = yield* recoveryLeft(key, persisted);
+
+    return {
+      value: readable.value,
+      unread: left ? [...readable.unread, LEFT_RECOVERY] : readable.unread,
+    };
+  }).pipe(
+    Effect.orElseSucceed((): Stored<A> => ({
       value: persisted.empty.value,
-      unread: false,
+      unread: [],
     }))
+  );
+
+/** The localStorage key the ids of the unread entries the page last told about are kept under. */
+const toldKey = (key: string): string => `${key}:told`;
+
+// The told ids' shape. A change an older build cannot decode needs a new key (`<key>:told2`): a
+// build that cannot read them reads them as none, tells once more, and writes over them.
+const ToldJson = Schema.fromJsonString(Schema.Array(Schema.String));
+
+const decodeTold = Schema.decodeEffect(ToldJson);
+
+const encodeTold = Schema.encodeEffect(ToldJson);
+
+/**
+ * Whether the page should tell the user about `unread` (the unread ids at `key`): true when one of
+ * them was not told about at the last load. Writes the ids down as told, and forgets those no longer
+ * stored. Storage refusing tells.
+ */
+const tellOnce = (key: string, unread: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const store = yield* KeyValueStore.KeyValueStore;
+    const saved = yield* store.get(toldKey(key));
+
+    const told: ReadonlyArray<string> = yield* Option.match(
+      Option.fromUndefinedOr(saved),
+      {
+        onNone: () => Effect.succeed([]),
+        onSome: (text) =>
+          decodeTold(text).pipe(
+            Effect.orElseSucceed((): ReadonlyArray<string> => [])
+          ),
+      }
+    );
+
+    const ids = Array.dedupe(unread);
+    const tell = ids.some((id) => !told.includes(id));
+
+    if (tell || told.length !== ids.length) {
+      yield* ids.length === 0
+        ? store.remove(toldKey(key))
+        : store.set(toldKey(key), yield* encodeTold(ids));
+    }
+
+    return tell;
+  }).pipe(Effect.orElseSucceed(() => unread.length > 0));
+
+/** What a page loads of a shared value, and whether it tells the user storage holds more. */
+export interface Loaded<A> {
+  /** The entries this build decodes. */
+  readonly value: A;
+  /** Storage holds entries this build cannot show, kept as stored, that no load has told about. */
+  readonly tell: boolean;
+}
+
+/**
+ * `loadShared`, and whether the page should say storage holds entries it cannot show: once for each
+ * such entry (`tellOnce`), so one no build can read does not raise the notice on every load.
+ */
+export const readShared = <A, Raw, R, E>(
+  key: string,
+  persisted: Persisted<A, Raw, R, E>
+): Effect.Effect<Loaded<A>, never, R | KeyValueStore.KeyValueStore> =>
+  Effect.flatMap(loadShared(key, persisted), ({ unread, value }) =>
+    Effect.map(tellOnce(key, unread), (tell) => ({ value, tell }))
   );
 
 /**
@@ -389,7 +508,8 @@ export const persistedRecord = <A>(
   const encodeEntry = Schema.encodeEffect(entry);
 
   return {
-    empty: { value: {}, raw: {}, held: [], unread: 0 },
+    empty: { value: {}, raw: {}, held: [], unread: [] },
+    isEmpty: Record.isEmptyRecord,
     read: (text) =>
       Effect.succeed(
         Option.map(decodeRecordDocument(text), (raw) => {
@@ -400,7 +520,7 @@ export const persistedRecord = <A>(
             value: Record.getSomes(decoded),
             raw,
             held,
-            unread: held.length,
+            unread: held,
           };
         })
       ),
@@ -455,7 +575,8 @@ export const persistedList = <A>(
     });
 
   return {
-    empty: { value: [], raw: [], held: [], unread: 0 },
+    empty: { value: [], raw: [], held: [], unread: [] },
+    isEmpty: (raw) => raw.length === 0,
     read: (text) =>
       Effect.succeed(
         Option.map(decodeListDocument(text), (raw) => {
@@ -465,7 +586,7 @@ export const persistedList = <A>(
             value: Array.getSomes(raw.map((json) => decodeItem(json))),
             raw,
             held: Array.getSomes(unread.map(unreadKey)),
-            unread: unread.length,
+            unread: unread.map((json) => unreadId(unreadKey(json), json)),
           };
         })
       ),

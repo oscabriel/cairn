@@ -16,6 +16,7 @@ import {
   loadShared,
   mergeList,
   mergeStored,
+  unreadId,
 } from "../storage/TabChanges.ts";
 import type { ListChanges, Persisted } from "../storage/TabChanges.ts";
 
@@ -162,7 +163,8 @@ const persistedSaved: Persisted<
   KeyValueStore.KeyValueStore,
   Schema.SchemaError | KeyValueStore.KeyValueStoreError
 > = {
-  empty: { value: {}, raw: {}, held: [], unread: 0 },
+  empty: { value: {}, raw: {}, held: [], unread: [] },
+  isEmpty: (raw) => Object.values(raw).every((refs) => refs.length === 0),
   read: (text) =>
     Effect.gen(function* () {
       const document = decodeSavedDocument(text);
@@ -200,14 +202,14 @@ const persistedSaved: Persisted<
       const unread = Record.toEntries(decoded).flatMap(([draftKey, refs]) =>
         refs
           .filter(({ ref }) => Option.isNone(ref))
-          .map(({ json }) => keyOfJson(draftKey, json))
+          .map(({ json }) => ({ json, key: keyOfJson(draftKey, json) }))
       );
 
       return Option.some({
         value,
         raw,
-        held: Array.getSomes(unread),
-        unread: unread.length,
+        held: Array.getSomes(unread.map(({ key }) => key)),
+        unread: unread.map(({ json, key }) => unreadId(key, json)),
       });
     }),
   write: (raw, merged) =>

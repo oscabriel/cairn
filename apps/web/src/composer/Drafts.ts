@@ -27,9 +27,9 @@ import { KeyValueStore } from "effect/persistence";
 
 import {
   applyRecordChanges,
-  loadShared,
   mergeRecord,
   mergeStored,
+  readShared,
   recordChanges,
   persistedRecord,
 } from "../storage/TabChanges.ts";
@@ -181,22 +181,16 @@ const decodeSettings = Schema.decodeEffect(SettingsJson);
 const encodeSettings = Schema.encodeEffect(SettingsJson);
 
 /**
- * Reads every saved draft this build can decode, and whether storage holds drafts it cannot. Missing
- * storage is no drafts: typing must never wait on it. A draft this build cannot decode, or a value
- * it cannot read at all, is left as stored, and never written over.
+ * Reads every saved draft this build can decode, and whether to tell the user storage holds drafts it
+ * cannot (once for each, `readShared`). Missing storage is no drafts: typing must never wait on it.
+ * A draft this build cannot decode, or a value it cannot read at all, is left as stored; a draft this
+ * tab then writes in the same thread replaces it.
  */
 export const readDrafts: Effect.Effect<
   Loaded<Record<string, Draft>>,
   never,
   KeyValueStore.KeyValueStore
-> = loadShared(DRAFTS_STORAGE_KEY, persistedDrafts);
-
-/** The saved drafts this build can decode (`readDrafts`). */
-export const loadDrafts: Effect.Effect<
-  Record<string, Draft>,
-  never,
-  KeyValueStore.KeyValueStore
-> = Effect.map(readDrafts, ({ value }) => value);
+> = readShared(DRAFTS_STORAGE_KEY, persistedDrafts);
 
 const draftEquivalence = Schema.toEquivalence(Draft);
 

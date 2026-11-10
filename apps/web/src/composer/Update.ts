@@ -20,8 +20,7 @@ import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { Array, Equal, Option, Predicate, Record } from "effect";
 import type { Schema } from "effect";
-import { Command } from "foldkit";
-import type { Update } from "foldkit";
+import { Command, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import { OutMessage as TrayOutMessage } from "../attachments/Message.ts";
@@ -478,10 +477,6 @@ const clearSentDraft = (model: Model): Model =>
       notice: () => Option.none(),
     }
   );
-
-/** The notice raised when storage holds drafts this build cannot decode (another build saved them). */
-export const UNREAD_DRAFTS_NOTICE =
-  "Some saved drafts were written by another version of Cairn and cannot be shown here. They are kept on this device.";
 
 const notice = (model: Model, text: string): UpdateReturn => ({
   model: modifyFields(model, {
@@ -1339,28 +1334,24 @@ const step = (model: Model, message: Message): UpdateReturn =>
     DetectedPlatform: ({ isMac }) => ({
       model: modifyFields(model, { isMac: () => isMac }),
     }),
-    LoadedDrafts: ({ drafts, unread }) => {
+    LoadedDrafts: ({ drafts, tell }) => {
       // Edits made before storage answered win over what was saved.
       const loaded = modifyFields(
         syncDrafts(model, model.storedDrafts, drafts),
-        {
-          draftsLoaded: () => true,
-          notice: (current) =>
-            unread
-              ? Option.some({
-                  draftKey: Option.none(),
-                  text: UNREAD_DRAFTS_NOTICE,
-                })
-              : current,
-        }
+        { draftsLoaded: () => true }
       );
 
-      return {
-        model:
-          !model.draftsLoaded && model.attachments.loaded
-            ? reconcileAttachments(loaded)
-            : loaded,
-      };
+      // The root's notice says so: the composer's own closes when its target changes, as a load of
+      // `/` changes it at once (the hero's new draft moves the URL).
+      return Update.withOutMessage(
+        {
+          model:
+            !model.draftsLoaded && model.attachments.loaded
+              ? reconcileAttachments(loaded)
+              : loaded,
+        },
+        tell ? OutMessage.FoundUnreadDrafts() : undefined
+      );
     },
     LoadedSettings: ({ settings }) => ({
       model: modifyFields(model, { settings: () => settings }),

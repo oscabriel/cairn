@@ -1,21 +1,28 @@
 // The saved drafts across builds: a draft this build cannot decode is kept as stored beside the ones
 // it can, a save writes it back untouched, a value unreadable as a whole is never written over, and
-// the page says when it holds drafts it cannot show.
+// the page says once when it holds drafts it cannot show.
 
+import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Option, Schema } from "effect";
+import { Array, Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
+import { Url } from "foldkit";
 
+import { Message as RootMessage } from "../Message.ts";
+import type { Model as RootModel } from "../Model.ts";
+import {
+  init as rootInit,
+  UNREAD_STORED_NOTICE,
+  update as rootUpdate,
+} from "../Update.ts";
 import {
   DRAFTS_STORAGE_KEY,
-  loadDrafts,
   readDrafts,
   saveDrafts,
   shownNotice,
 } from "./Drafts.ts";
 import { Message } from "./Message.ts";
-import { Draft, emptyDraft, initial } from "./Model.ts";
-import { UNREAD_DRAFTS_NOTICE, update } from "./Update.ts";
+import { Draft, emptyDraft } from "./Model.ts";
 
 const one = { ...emptyDraft, text: "first thought" };
 
@@ -35,11 +42,26 @@ const storedKeys = (text: string | undefined) =>
     )(text ?? "{}")
   ).toSorted();
 
-/** The composer's notice once the drafts load, with or without drafts this build cannot read. */
-const noticeOnLoad = (unread: boolean) =>
-  shownNotice(
-    update(initial, Message.LoadedDrafts({ drafts: {}, unread })).model
+const at = (path: string) =>
+  Option.getOrThrow(Url.fromString(`https://code.gneiss.run${path}`));
+
+/** The page loaded at `path`, then given `messages`. */
+const loadAt = (path: string, messages: ReadonlyArray<RootMessage>) =>
+  Array.reduce(
+    messages,
+    rootInit({ boot: Option.none(), outbox: [], outboxUnread: false }, at(path))
+      .model,
+    (model, message) => rootUpdate(model, message).model
   );
+
+/** The notice the page shows: the root's, or the composer's on its draft. */
+const shown = (model: RootModel) =>
+  Option.orElse(model.notice, () => shownNotice(model.composer));
+
+const loadedDrafts = (tell: boolean) =>
+  RootMessage.GotComposerMessage({
+    message: Message.LoadedDrafts({ drafts: {}, tell }),
+  });
 
 describe("the saved drafts", () => {
   it.effect(
@@ -61,11 +83,12 @@ describe("the saved drafts", () => {
         yield* saveDrafts(read.value, { ...read.value, "thread:c": three });
 
         const after = yield* store.get(DRAFTS_STORAGE_KEY);
+        const reread = yield* readDrafts;
 
         assert.notInclude(older, "envMode");
         assert.deepStrictEqual(read, {
           value: { "thread:a": one },
-          unread: true,
+          tell: true,
         });
         assert.deepStrictEqual(storedKeys(after), [
           "thread:a",
@@ -73,10 +96,11 @@ describe("the saved drafts", () => {
           "thread:c",
         ]);
         assert.include(after, `"thread:b":${older}`);
-        assert.deepStrictEqual(Object.keys(yield* loadDrafts).toSorted(), [
-          "thread:a",
-          "thread:c",
-        ]);
+        // The next load does not tell again about the draft the last one told about.
+        assert.deepStrictEqual(reread, {
+          value: { "thread:a": one, "thread:c": three },
+          tell: false,
+        });
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
@@ -89,18 +113,41 @@ describe("the saved drafts", () => {
       const read = yield* readDrafts;
       const saved = yield* saveDrafts(read.value, { "thread:a": one });
 
-      assert.deepStrictEqual(read, { value: {}, unread: true });
+      assert.deepStrictEqual(read, { value: {}, tell: true });
       assert.deepStrictEqual(saved, Option.some({ "thread:a": one }));
-      assert.deepStrictEqual(yield* loadDrafts, { "thread:a": one });
+      assert.deepStrictEqual(yield* readDrafts, {
+        value: { "thread:a": one },
+        tell: false,
+      });
       assert.strictEqual(yield* store.get(DRAFTS_STORAGE_KEY), "[1, 2");
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
   it("say so when storage holds drafts this build cannot show", () => {
+    const thread = "/t/01890a5d-ac96-774b-bcce-b302099a8057";
+
     assert.deepStrictEqual(
-      noticeOnLoad(true),
-      Option.some(UNREAD_DRAFTS_NOTICE)
+      shown(loadAt(thread, [loadedDrafts(true)])),
+      Option.some(UNREAD_STORED_NOTICE)
     );
-    assert.deepStrictEqual(noticeOnLoad(false), Option.none());
+    assert.deepStrictEqual(
+      shown(loadAt(thread, [loadedDrafts(false)])),
+      Option.none()
+    );
+  });
+
+  it("keep saying so on a load of `/`, where the hero's new draft moves the URL", () => {
+    const draftId = ThreadId.make("01890a5d-ac96-774b-bcce-b302099a8057");
+
+    const loaded = loadAt("/", [
+      loadedDrafts(true),
+      RootMessage.GotComposerMessage({
+        message: Message.MintedHomeDraft({ draftId }),
+      }),
+      RootMessage.ChangedUrl({ url: at(`/new/${draftId}`) }),
+    ]);
+
+    assert.isTrue(Predicate.isTagged(loaded.route, "Draft"));
+    assert.deepStrictEqual(shown(loaded), Option.some(UNREAD_STORED_NOTICE));
   });
 });

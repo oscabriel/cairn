@@ -72,8 +72,8 @@ export const DetectPlatform = Command.define("DetectPlatform", {
 /** Reads the drafts saved on this device. */
 export const LoadDrafts = Command.define("LoadDrafts", {
   messages: [Message.LoadedDrafts],
-  execute: Effect.map(readDrafts, ({ unread, value }) =>
-    Message.LoadedDrafts({ drafts: value, unread })
+  execute: Effect.map(readDrafts, ({ tell, value }) =>
+    Message.LoadedDrafts({ drafts: value, tell })
   ),
 });
 

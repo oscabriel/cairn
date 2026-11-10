@@ -93,7 +93,7 @@ export type Model = typeof Model.Type;
 export const Flags = Schema.Struct({
   boot: Schema.Option(BootData),
   outbox: Schema.Array(OutboxItem),
-  /** Storage also holds outbox items this build cannot decode, kept as they are. */
+  /** Storage also holds outbox items this build cannot decode, kept as they are, not told about yet. */
   outboxUnread: Schema.Boolean,
 });
 

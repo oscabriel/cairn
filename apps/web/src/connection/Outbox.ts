@@ -23,15 +23,8 @@ import {
   ShellCommand,
 } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
-import {
-  Array,
-  Duration,
-  Effect,
-  Match,
-  Option,
-  Predicate,
-  Schema,
-} from "effect";
+import { Array, Duration, Match, Option, Predicate, Schema } from "effect";
+import type { Effect } from "effect";
 import type { KeyValueStore } from "effect/persistence";
 import { defineTaggedUnion } from "foldkit/schema";
 
@@ -39,9 +32,9 @@ import {
   applyListChanges,
   listChanges,
   persistedList,
-  loadShared,
   mergeList,
   mergeStored,
+  readShared,
 } from "../storage/TabChanges.ts";
 import type { Loaded } from "../storage/TabChanges.ts";
 
@@ -178,22 +171,16 @@ const persistedOutbox = persistedList(
 );
 
 /**
- * Reads the saved outbox, and whether storage holds items this build cannot decode. Missing storage
- * is an empty outbox; an item this build cannot decode, or a value it cannot read at all, is left as
- * stored, so the page starts with every item it can read and never writes over the rest.
+ * Reads the saved outbox, and whether to tell the user storage holds items this build cannot decode
+ * (once for each, `readShared`). Missing storage is an empty outbox; an item this build cannot
+ * decode, or a value it cannot read at all, is left as stored, so the page starts with every item it
+ * can read and never writes over the rest.
  */
 export const readOutbox: Effect.Effect<
   Loaded<ReadonlyArray<OutboxItem>>,
   never,
   KeyValueStore.KeyValueStore
-> = loadShared(OUTBOX_STORAGE_KEY, persistedOutbox);
-
-/** The saved outbox's items this build can read (`readOutbox`). */
-export const loadOutbox: Effect.Effect<
-  ReadonlyArray<OutboxItem>,
-  never,
-  KeyValueStore.KeyValueStore
-> = Effect.map(readOutbox, ({ value }) => value);
+> = readShared(OUTBOX_STORAGE_KEY, persistedOutbox);
 
 const outboxChanges = listChanges(outboxKey);
 

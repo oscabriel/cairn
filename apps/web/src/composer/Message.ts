@@ -83,10 +83,13 @@ export const Message = defineMessageUnion({
   ChangedSoftwareKeyboard: { open: Schema.Boolean },
 
   DetectedPlatform: { isMac: Schema.Boolean },
-  /** `unread`: storage also holds drafts this build cannot decode, kept as they are. */
+  /**
+   * `tell`: storage also holds drafts this build cannot decode, kept as they are, that no load told
+   * the user about.
+   */
   LoadedDrafts: {
     drafts: Schema.Record(Schema.String, Draft),
-    unread: Schema.Boolean,
+    tell: Schema.Boolean,
   },
   LoadedSettings: { settings: ComposerSettings },
   MintedHomeDraft: { draftId: ThreadId },
@@ -174,6 +177,8 @@ export const OutMessage = defineMessageUnion({
   RequestedAddProject: {},
   /** The hero's project picker chose this project for the draft; the shell's rail follows it. */
   ChoseDraftProject: { projectId: ProjectId },
+  /** Storage holds drafts this build cannot decode, not told about yet; the root's notice says so. */
+  FoundUnreadDrafts: {},
 });
 
 export type OutMessage = typeof OutMessage.Type;

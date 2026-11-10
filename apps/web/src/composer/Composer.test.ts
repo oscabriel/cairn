@@ -50,7 +50,7 @@ import { composerContext } from "./Context.ts";
 import {
   activeDraft,
   DRAFTS_STORAGE_KEY,
-  loadDrafts,
+  readDrafts,
   saveDrafts,
   shownNotice,
 } from "./Drafts.ts";
@@ -63,6 +63,9 @@ import { pickerRows } from "./Popovers.ts";
 import { menuContents } from "./TriggerMenu.ts";
 import { contextChanged, inform, pickDraftProject, update } from "./Update.ts";
 import type { UpdateReturn } from "./Update.ts";
+
+/** The saved drafts this build can decode. */
+const storedDrafts = Effect.map(readDrafts, ({ value }) => value);
 
 const editor = Scene.testId("composer-editor");
 
@@ -704,13 +707,13 @@ describe("composer drafts", () => {
       Effect.gen(function* () {
         yield* saveDrafts({}, back.drafts);
 
-        return yield* loadDrafts;
+        return yield* storedDrafts;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
     const reloaded = update(
       inform(initial, contextFor(ComposerTarget.Thread({ threadId }))).model,
-      Message.LoadedDrafts({ drafts: saved, unread: false })
+      Message.LoadedDrafts({ drafts: saved, tell: false })
     ).model;
 
     assert.strictEqual(activeDraft(reloaded).text, "half a thought");
@@ -786,10 +789,8 @@ const runSaves = (result: UpdateReturn) =>
 
 /** A tab on `target` whose drafts were read from an empty store. */
 const freshTab = (target: ComposerTarget): Model =>
-  update(
-    composerOn(target),
-    Message.LoadedDrafts({ drafts: {}, unread: false })
-  ).model;
+  update(composerOn(target), Message.LoadedDrafts({ drafts: {}, tell: false }))
+    .model;
 
 /** Types `value` into `tab`'s open draft, lets the saver's pause run out, and takes its answer. */
 const typeAndSave = (tab: Model, value: string) =>
@@ -824,7 +825,7 @@ describe("drafts in two tabs", () => {
       yield* typeAndSave(tabA, "half a thought");
       yield* typeAndSave(tabB, "another");
 
-      const stored = yield* loadDrafts;
+      const stored = yield* storedDrafts;
 
       assert.deepStrictEqual(
         {
@@ -865,7 +866,7 @@ describe("drafts in two tabs", () => {
             heardAgain.drafts[xKey]?.text,
             heardAgain.drafts[yKey]?.text,
           ],
-          stored: Object.keys(yield* loadDrafts),
+          stored: Object.keys(yield* storedDrafts),
         },
         {
           heard: ["half a thought", "mine"],
@@ -901,7 +902,7 @@ describe("drafts in two tabs", () => {
         assert.deepStrictEqual(
           {
             open: activeDraft(heard).text,
-            stored: Object.keys(yield* loadDrafts).toSorted(),
+            stored: Object.keys(yield* storedDrafts).toSorted(),
           },
           { open: "hello", stored: [xKey, yKey].toSorted() }
         );
@@ -913,8 +914,8 @@ describe("drafts in two tabs", () => {
 const reload = (model: Model, traysFirst: boolean) =>
   Effect.gen(function* () {
     const drafts = Message.LoadedDrafts({
-      drafts: yield* loadDrafts,
-      unread: false,
+      drafts: yield* storedDrafts,
+      tell: false,
     });
 
     const tray = Message.GotAttachmentsMessage({
@@ -988,7 +989,7 @@ describe("drafts after a reload", () => {
         yield* saveDrafts({ [key]: old }, { [key]: { ...old, text: "newer" } });
         yield* runSaves(update(reloaded, Message.HidPage()));
 
-        assert.strictEqual((yield* loadDrafts)[key]?.text, "newer");
+        assert.strictEqual((yield* storedDrafts)[key]?.text, "newer");
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
@@ -1090,7 +1091,7 @@ describe("drafts after a reload", () => {
             launching: (sent.commands ?? []).some(
               ({ name }) => name === PrepareLaunch.name
             ),
-            saved: (yield* loadDrafts)[`draft:${draftId}`]?.text,
+            saved: (yield* storedDrafts)[`draft:${draftId}`]?.text,
           },
           { launching: true, saved: "start the migration" }
         );

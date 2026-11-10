@@ -158,11 +158,11 @@ describe("two builds in two tabs", () => {
               x: { text: "x", kind: "pinned" },
               y: { text: "y", kind: "plain" },
             },
-            unread: false,
+            unread: [],
           },
           seenByOlder: {
             value: { y: { text: "y", kind: "plain" } },
-            unread: true,
+            unread: ["x"],
           },
         });
       }).pipe(Effect.provide(KeyValueStore.layerMemory))

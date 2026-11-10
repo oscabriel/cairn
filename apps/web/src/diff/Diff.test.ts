@@ -1,6 +1,7 @@
-// Scene tests for the changed-files card and the diff panel, driven as the user drives them: the
-// card under a turn opens the panel at a file, the patch arrives and shows as files and numbered
-// lines, the scope switch asks again, a failure offers Retry, and Close empties the panel.
+// Scene tests for the diff panel, driven as the user drives it: opening a turn's diff at a file
+// (what a changed-files card's row sends while the panel is on), the patch arrives and shows as
+// files and numbered lines, the scope switch asks again, a failure offers Retry, Close empties the
+// panel, and the chat header's toggle opens the whole diff and closes it.
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Option } from "effect";
@@ -8,22 +9,16 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 import { describe, expect, it } from "vitest";
 
-import { changedFilesCard, formatCompactCount } from "./Card.ts";
+import { formatCompactCount } from "./Card.ts";
 import { FetchDiff, ScrollToFile } from "./Command.ts";
 import { Message } from "./Message.ts";
 import { initial, isOpen } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { diffToggle } from "./Toggle.ts";
+import { diffToggle } from "./ToggleView.ts";
 import { update } from "./Update.ts";
 import { languageOfPath, view as panelView } from "./View.ts";
 
 const threadId = ThreadId.make("0199f0c2-6a4e-7d4c-8a6b-000000000001");
-
-const files = [
-  { path: "notes/a.txt", additions: 1, deletions: 1 },
-  { path: "notes/deep/c.txt", additions: 2, deletions: 0 },
-  { path: "b.txt", additions: 1, deletions: 0 },
-];
 
 const patch = [
   "diff --git a/b.txt b/b.txt",
@@ -44,17 +39,27 @@ const patch = [
   "",
 ].join("\n");
 
-/** The card as the transcript draws it for turn 2, beside the panel the thread page mounts. */
+/**
+ * A button that sends what a changed-files card's row for `notes/a.txt` in turn 2 sends, beside the
+ * panel the thread page mounts.
+ */
 const testView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
     [],
     [
-      changedFilesCard(h, {
-        turn: 2,
-        files,
-        moreFiles: 0,
-        onOpen: (path) => Message.RequestedOpen({ threadId, turn: 2, path }),
-      }),
+      h.button(
+        [
+          h.Type("button"),
+          h.OnClick(
+            Message.RequestedOpen({
+              threadId,
+              turn: 2,
+              path: Option.some("notes/a.txt"),
+            })
+          ),
+        ],
+        ["Open notes/a.txt"]
+      ),
       h.submodel({
         slotId: "diff",
         model,
@@ -69,38 +74,12 @@ const config = { update, view: testView };
 const fetchFor = (version: number, scope: "turn" | "full") =>
   FetchDiff({ version, threadId, turn: 2, scope, ignoreWhitespace: false });
 
-describe("the changed-files card", () => {
-  it("lists the turn's files as a tree with the summed stat", () => {
-    Scene.scene(
-      config,
-      Scene.given(initial),
-      Scene.expect(
-        Scene.selector('[data-testid="changed-files-card"]')
-      ).toContainText("3 changed files"),
-      Scene.expect(
-        Scene.selector('[data-testid="changed-files-card"] [role="group"]')
-      ).toHaveText("+4-1"),
-      Scene.expect(
-        Scene.selector('[data-changed-files-directory="notes"]')
-      ).toContainText("notes"),
-      Scene.expect(
-        Scene.selector('[data-changed-files-directory="notes/deep"]')
-      ).toContainText("deep"),
-      Scene.expect(
-        Scene.selector('[data-changed-files-file="notes/deep/c.txt"]')
-      ).toContainText("c.txt"),
-      Scene.expect(Scene.selector('[data-testid="diff-panel"]')).toBeAbsent(),
-      Scene.tap(({ commands }) => {
-        expect(commands).toHaveLength(0);
-      })
-    );
-  });
-
+describe("the diff panel", () => {
   it("opens the diff at a file, shows it, switches scope, retries and closes", () => {
     Scene.scene(
       config,
       Scene.given(initial),
-      Scene.click(Scene.selector('[data-changed-files-file="notes/a.txt"]')),
+      Scene.click(Scene.role("button", { name: "Open notes/a.txt" })),
       Scene.expect(Scene.selector('[data-testid="diff-status"]')).toHaveText(
         "Loading the diff..."
       ),
@@ -165,7 +144,7 @@ describe("the changed-files card", () => {
       h.div(
         [],
         [
-          diffToggle(h, { open: isOpen(model), onToggle: Option.some(toggle) }),
+          diffToggle(h, isOpen(model), Option.some(toggle)),
           h.submodel({
             slotId: "diff",
             model,
@@ -205,7 +184,7 @@ describe("the changed-files card", () => {
       {
         update,
         view: (_model: Model, h: HtmlBuilder<Message>) =>
-          diffToggle(h, { open: false, onToggle: Option.none() }),
+          diffToggle(h, false, Option.none()),
       },
       Scene.given(initial),
       Scene.expect(

@@ -1,6 +1,6 @@
 // The client's routes: the hero at `/`, a thread at `/t/<threadId>`, a new draft at
-// `/new/<draftId>`, the settings page and the usage page (drawn by the views only). Every link and navigation prints its path through these
-// routers, so a path is written once.
+// `/new/<draftId>`, the settings page and the usage page. Every link and navigation prints its
+// path through these routers, so a path is written once.
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import { pipe, Schema } from "effect";
@@ -50,7 +50,7 @@ export const settingsRouter = pipe(
   Route.mapTo(AppRoute.Settings)
 );
 
-/** `/usage`: what threads and workflows spent (the views' foot links to it). */
+/** `/usage`: what threads and workflows spent (the sidebar's foot links to it). */
 export const usageRouter = pipe(literal("usage"), Route.mapTo(AppRoute.Usage));
 
 const routeParser = oneOf(

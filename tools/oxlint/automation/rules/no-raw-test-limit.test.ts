@@ -1,5 +1,6 @@
 // Judges `automation/no-raw-test-limit` on every place a Vitest limit can be written (a test's, a
-// suite's, a hook's, through a modifier or `each`, in an options object), on every spelling of a
+// suite's, a hook's, through a modifier or `each` (a call or a tagged template), in an options
+// object, in the options of `@effect/vitest`'s `layer`), on every spelling of a
 // limit that does not scale (a number, arithmetic, a `const` holding them, an import), and on what
 // it must leave alone: scaled limits, a `const` holding one, and numbers that are not a limit.
 
@@ -35,6 +36,10 @@ const cases: RuleTester.TestCases = {
     "assert.strictEqual(value, 30_000);",
     'it.each([1, 2])("row %i", (row) => {});',
     "expect(1).toBe(1);",
+    // `@effect/vitest`'s shared layer takes its limit in its options, and a tagged `each` its third.
+    'layer(Live, { timeout: testLimit(60_000), excludeTestServices: true })("suite", (it) => {});',
+    'layer(Live)("suite", (it) => {});',
+    'it.each`\n  row\n  one\n`("row $row", ({ row }) => {}, testLimit(2000));',
   ],
   invalid: [
     {
@@ -64,6 +69,14 @@ const cases: RuleTester.TestCases = {
     {
       code: 'it.each([1, 2])("row %i", (row) => {}, 2000);',
       errors: [raw("2000")],
+    },
+    {
+      code: 'it.each`\n  row\n  one\n`("row $row", ({ row }) => {}, 2000);',
+      errors: [raw("2000")],
+    },
+    {
+      code: 'layer(Live, { timeout: 60_000, excludeTestServices: true })("suite", (it) => {});',
+      errors: [raw("60_000")],
     },
     {
       code: 'it("waits", { timeout: 30_000 }, () => {});',

@@ -327,3 +327,31 @@ export const rebaseSaved = (
   mine: SavedAttachments,
   stored: SavedAttachments
 ): SavedAttachments => applySavedChanges(stored, savedChanges(written, mine));
+
+const keysOf = (saved: SavedAttachments): ReadonlySet<string> =>
+  new Set(entriesOf(saved).map(entryKey));
+
+/** The attachments of `saved` that `other` does not hold: from a save's base to what it wrote, its removals. */
+export const savedWithout = (
+  saved: SavedAttachments,
+  other: SavedAttachments
+): SavedAttachments => {
+  const others = keysOf(other);
+
+  return savedOf(
+    entriesOf(saved).filter((entry) => !others.has(entryKey(entry)))
+  );
+};
+
+/** The attachments of `saved` that `other` holds too. */
+export const savedWithin = (
+  saved: SavedAttachments,
+  other: SavedAttachments
+): SavedAttachments => savedWithout(saved, savedWithout(saved, other));
+
+/** The attachments of either. */
+export const savedUnion = (
+  saved: SavedAttachments,
+  other: SavedAttachments
+): SavedAttachments =>
+  savedOf([...entriesOf(saved), ...entriesOf(savedWithout(other, saved))]);

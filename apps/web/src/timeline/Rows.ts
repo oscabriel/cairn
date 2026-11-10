@@ -63,7 +63,7 @@ export interface PendingItem {
   readonly message: TimelineMessage;
 }
 
-/** One item of the scroll list; the subagent items only on the views (`Subagents.ts`). */
+/** One item of the scroll list, the subagent items (`Subagents.ts`) among them. */
 export type ListItem =
   | Exclude<TimelineRow, { readonly kind: "message" }>
   | MessageItem

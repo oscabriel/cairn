@@ -21,6 +21,12 @@ const HOOKS: ReadonlySet<string> = new Set([
   "beforeEach",
 ]);
 
+/**
+ * `@effect/vitest`'s shared layer: `layer(X, { timeout })(name, (it) => ...)` takes its limit only in
+ * the options object, which also bounds building the layer.
+ */
+const LAYER = "layer";
+
 /** Where a Vitest function takes its limit: the third argument of a test, the second of a hook. */
 const positionOf = (name: string): number | undefined => {
   if (TESTS.has(name)) {
@@ -33,7 +39,10 @@ const positionOf = (name: string): number | undefined => {
 /** The function that scales a limit by the test slack (`apps/server/src/EventuallyTestKit.ts`). */
 const SCALER = "testLimit";
 
-/** The name a callee chain starts from: `it` for `it.live`, `it.each(rows)` and `it.skip.each`. */
+/**
+ * The name a callee chain starts from: `it` for `it.live`, `it.each(rows)`, `it.skip.each` and the
+ * tagged template `` it.each`rows` ``, `layer` for `layer(X, options)(name, body)`.
+ */
 const rootName = (node: ESTree.Node): string | undefined => {
   if (node.type === "Identifier") {
     return node.name;
@@ -41,6 +50,10 @@ const rootName = (node: ESTree.Node): string | undefined => {
 
   if (node.type === "MemberExpression") {
     return rootName(node.object);
+  }
+
+  if (node.type === "TaggedTemplateExpression") {
+    return rootName(node.tag);
   }
 
   return node.type === "CallExpression" ? rootName(node.callee) : undefined;
@@ -152,8 +165,9 @@ const timeoutOf = (node: ESTree.Node | undefined): ESTree.Node | undefined => {
 
 /**
  * Bans a Vitest limit that does not scale by the test slack, in a test file: the limit argument of
- * `it`, `test`, `describe` or one of their modifiers (`it.live(name, body, limit)`), of a hook
- * (`beforeAll(body, limit)`), or the `timeout` of an options object passed to one. A limit is
+ * `it`, `test`, `describe` or one of their modifiers (`it.live(name, body, limit)`, `` it.each`rows` ``),
+ * of a hook (`beforeAll(body, limit)`), or the `timeout` of an options object passed to one or to
+ * `@effect/vitest`'s `layer(X, { timeout })`. A limit is
  * judged by what it is: `testLimit(30_000)` (`apps/server/src/EventuallyTestKit.ts`), or a `const`
  * of the same file holding one, passes; a number, arithmetic, a `const` holding them, an import or
  * anything else the file cannot show scales is reported. Such a limit holds on a quiet machine and
@@ -193,6 +207,14 @@ export const noRawTestLimitRule = defineRule({
         const name = rootName(node.callee);
 
         if (name === undefined) {
+          return;
+        }
+
+        if (name === LAYER) {
+          for (const argument of node.arguments) {
+            judge(timeoutOf(argument));
+          }
+
           return;
         }
 

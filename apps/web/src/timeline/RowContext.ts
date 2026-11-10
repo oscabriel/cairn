@@ -46,7 +46,7 @@ export interface RowContext {
   /** For the history control. */
   readonly history: HistoryState;
   readonly historyCursor: Option.Option<EntryId>;
-  /** For a subagent group and the way back, on the views: the shell rows they read. */
+  /** For a subagent group and the way back: the shell rows they read. */
   readonly subagents: Option.Option<SubagentShells>;
 }
 

@@ -3,7 +3,7 @@
 // (`page/thread/`, its Model, Messages and update unchanged). L6's layout draws the chat header
 // and the hold banner above it and the composer lane below; its header controls (the diff toggle)
 // come from `headerControls` here. The panel and its toggle are off while `DIFF_PANEL_ENABLED`
-// is false (`../diff/Panel.ts`).
+// is false (`../../diff/Panel.ts`).
 
 import type { Entry } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";

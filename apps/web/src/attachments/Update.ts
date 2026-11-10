@@ -29,7 +29,7 @@ import {
 import { Message, OutMessage } from "./Message.ts";
 import { AttachmentStatus, initial } from "./Model.ts";
 import type { Item, Model, SendIntent } from "./Model.ts";
-import { rebaseSaved } from "./Saved.ts";
+import { rebaseSaved, savedUnion, savedWithin, savedWithout } from "./Saved.ts";
 import type { SavedAttachments } from "./Saved.ts";
 import { MAX_CONCURRENT_UPLOADS } from "./UploadQueue.ts";
 
@@ -492,14 +492,19 @@ const isIn = (saved: SavedAttachments, item: Item, ref: AttachmentRef) =>
  * The tray once storage holds `stored`: the base of the next save becomes `stored` with what this
  * tab asked for in the saves still on their way since `written`, and the ready items follow every
  * attachment this tab did not add or remove since `written`, so one another tab removed goes and
- * one it added comes in. Items still on their way stay.
+ * one it added comes in. Items still on their way stay. One this tab took out in a refused save
+ * never comes back: a save asked before the refusal answered did not write its removal, so storage
+ * may still hold it until a later save does. One this tab holds again (a turn put back into its
+ * draft) is no longer a removal.
  */
 const syncSaved = (
   model: Model,
   written: SavedAttachments,
   stored: SavedAttachments
 ) => {
-  const target = rebaseSaved(written, savedFrom(model.items), stored);
+  const mine = savedFrom(model.items);
+  const refused = savedWithout(model.refusedRemovals, mine);
+  const target = savedWithout(rebaseSaved(written, mine, stored), refused);
 
   const isGone = (item: Item): boolean =>
     Option.exists(readyRef(item), (ref) => !isIn(target, item, ref));
@@ -511,7 +516,10 @@ const syncSaved = (
   // still on their way since `written`.
   const next = modifyFields(
     restoreSaved(modifyFields(model, { items: () => kept }), target),
-    { stored: () => rebaseSaved(written, model.stored, stored) }
+    {
+      stored: () => rebaseSaved(written, model.stored, stored),
+      refusedRemovals: () => savedWithin(refused, stored),
+    }
   );
 
   return { model: next, commands: revokeCommands(dropped) };
@@ -651,8 +659,11 @@ export const update = (
         onNone: () => {
           // Nothing was written: the base goes back to `base`, with what this tab asked for in
           // the saves still on their way since, so the next save writes this one's changes again.
+          // What it took out stays out of the tray until storage no longer holds it.
           const unsaved = modifyFields(model, {
             stored: () => rebaseSaved(written, model.stored, base),
+            refusedRemovals: (refused) =>
+              savedUnion(refused, savedWithout(base, written)),
           });
 
           return Option.match(context.draftKey, {

@@ -243,7 +243,7 @@ const REFUSAL_STATUS: Record<
   oauth_unavailable: {
     state: "missing",
     detail: (provider) =>
-      `This brain could not take Cairn's OAuth lock when it started, so it keeps no ${signInName(provider)} sign-in. Check that flock is installed and the state directory is writable, then restart the brain.`,
+      `This brain could not set up Cairn's OAuth store when it started, so it keeps no ${signInName(provider)} sign-in. Check that flock is installed and that the state and data directories are writable and owned by you, then restart the brain.`,
   },
   oauth: {
     state: "refused",

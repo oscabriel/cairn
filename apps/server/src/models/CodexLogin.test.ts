@@ -493,7 +493,7 @@ describe("the Codex sign-in against a fake OpenAI", () => {
         );
 
         assert.notInclude(message.join("\n"), "Another Cairn brain");
-        assert.include(message.join("\n"), "could not take its OAuth lock");
+        assert.include(message.join("\n"), "could not set up its OAuth store");
 
         const refused = yield* brain.login.logout.pipe(Effect.flip);
 

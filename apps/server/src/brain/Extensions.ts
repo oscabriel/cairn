@@ -75,7 +75,8 @@ export type SteerHook = (
 /**
  * A Stop all's hold on the stopped thread's wakes, in its own commit, before any child stops: their
  * stopped results must not wake it (ADR 0028). `stopped` is the generation the stop aborted or
- * followed, which the hold is written against; none when the stop found no run live.
+ * followed, which the hold is written against; none when the stop found no run live or cleared
+ * the queue (the hold is then written against the newest run).
  */
 export type WakeHoldHook = (
   tx: Tx,

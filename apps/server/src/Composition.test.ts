@@ -31,6 +31,7 @@ import { MainLayer } from "./MainLayer.ts";
 import { BridgeCwd } from "./models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "./models/BridgeProvider.ts";
 import { ModelHealth } from "./models/ModelHealth.ts";
+import { isolatePiSetup } from "./models/PiConfigTestKit.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
@@ -47,6 +48,9 @@ import { SpendLedger } from "./usage/SpendLedger.ts";
 import { GoalBook } from "./verdicts/GoalBook.ts";
 import { WorkflowPushes } from "./workflows/WorkflowPushes.ts";
 import { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
+
+// The composition builds the brain's own pi setup: an empty one, never the user's.
+isolatePiSetup();
 
 /** The memo map's brand, which `Layer.MemoMap` declares and Effect does not export. */
 const MEMO_MAP = "~effect/Layer/MemoMap";

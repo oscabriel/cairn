@@ -8,7 +8,8 @@
 // - `model {label, hold?, text?, toolCalls?, stopReason?, errorMessage?}`: the next model answer,
 //   consumed in order by whichever request comes next. `hold` keeps it until `release {label}`.
 // - `input {step, ...}`: `ensure {runtimeMode?}` (full access by default), `ensure_race`,
-//   `subscribe`, `configure {runtimeMode}`, `message` (with `whenBusy`), `steer`, `follow_up`,
+//   `subscribe`, `configure {runtimeMode}`, `message` (with `whenBusy`, and `repeat` to send its
+//   `text` that many times over), `steer`, `follow_up`,
 //   `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision, reason?}`, `compact`,
 //   `restart`. `subscribe` opens the client's one subscription now, before any ensure,
 //   as a page opened on a launch does: it waits on `whenEnsured`, then watches, and is never
@@ -34,7 +35,10 @@
 // - `expect_history {before, limit, entries, hasMore}`: `history` up to `limit` entries before the
 //   one at `before` reads `entries` (hidden placeholders left out, as each harness writes its own
 //   prompt deltas; `limit` counts them) and `hasMore`.
-// - `expect_entry {at, equals, truncated}`: `entry` reads the entry at `at` whole.
+// - `expect_entry {at, equals, truncated}`: `entry` reads the entry at `at` whole, or, past the
+//   full-entry limit (256 KiB), as the stream cuts it with `truncated`. A text past 8192
+//   characters is written as its head, its length and its tail (`normalizeText`), so a text cut at
+//   the wire's 32 KiB reads apart from a whole one.
 // - `expect_entry_image {at, index, mimeType, base64}`: `entryImage` reads that image's bytes.
 // - `expect_inspect {threads}`: `inspect` lists exactly `threads`, in alias order, each as
 //   `{thread, running, queueLength, pending}`, its pending records oldest first as
@@ -89,6 +93,8 @@ const inputFields = {
   thread: Schema.optionalKey(Schema.String),
   requestId: Schema.optionalKey(Schema.String),
   text: Schema.optionalKey(Schema.String),
+  /** A message's `text` sent this many times over, for a text past the wire's limits. */
+  repeat: Schema.optionalKey(Schema.Int),
   image: Schema.optionalKey(Schema.Boolean),
   whenBusy: Schema.optionalKey(
     Schema.Literals(["steer", "followUp", "reject"])
@@ -243,14 +249,6 @@ export type EntryImageLine = Extract<
   TranscriptLine,
   { readonly type: "expect_entry_image" }
 >;
-
-/** Every line type that reads the seam's history, entries or inspection. */
-export const READ_LINE_TYPES = [
-  "expect_history",
-  "expect_entry",
-  "expect_entry_image",
-  "expect_inspect",
-] as const satisfies ReadonlyArray<TranscriptLine["type"]>;
 
 /** A parsed scenario. */
 export interface Scenario {

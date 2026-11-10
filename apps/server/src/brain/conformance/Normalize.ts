@@ -3,7 +3,8 @@
 // and bookkeeping can be held to the same expectations.
 //
 // - `transcript`: the visible entries in order (hidden placeholders left out), each with its kind,
-//   role, text, tool calls, tool name, error flag and image count.
+//   role, text, tool calls, tool name, error flag and image count. A text past 8192 characters is
+//   written as its head, its length and its tail (`normalizeText`).
 // - `queue`: queued inputs with their mode and text; `queueLength`.
 // - `running`: whether `pi.live` has a run.
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
@@ -44,23 +45,38 @@ const isRecord = (value: Json | undefined): value is Schema.JsonObject =>
 const isList = (value: Json | undefined): value is Schema.JsonArray =>
   Array.isArray(value);
 
+/** Texts longer than this are written short: far past any scenario's ordinary text. */
+const LONG_TEXT_CHARS = 8192;
+
+/**
+ * A text as expectations and goldens write it: whole, or, past `LONG_TEXT_CHARS`, its first 16
+ * characters, its length and its last 40, so a text cut for the wire (which ends with the
+ * truncation marker) and a whole one read differently without either being written out.
+ */
+export const normalizeText = (text: string) =>
+  text.length <= LONG_TEXT_CHARS
+    ? text
+    : `${text.slice(0, 16)}…[${String(text.length)} chars]…${text.slice(-40)}`;
+
 /** Text blocks of a content value, joined; a plain string is its own text. */
 const textOf = (content: Json | undefined): string => {
   if (Predicate.isString(content)) {
-    return content;
+    return normalizeText(content);
   }
 
   if (!isList(content)) {
     return "";
   }
 
-  return content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && Predicate.isString(part.text)
-        ? [part.text]
-        : []
-    )
-    .join("");
+  return normalizeText(
+    content
+      .flatMap((part) =>
+        isRecord(part) && part.type === "text" && Predicate.isString(part.text)
+          ? [part.text]
+          : []
+      )
+      .join("")
+  );
 };
 
 const countImages = (content: Json | undefined) =>

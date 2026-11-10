@@ -7,7 +7,8 @@
 //
 // The doc must also not lie about what ships (review C-5):
 // - A label map cell may say "Not shown yet" only while no client module (`packages/client-logic`,
-//   `apps/web`) imports the union's type: a module that reads it is where its words live.
+//   `apps/web`) imports the union's type or an export that holds it directly (`ProviderUsage` for
+//   `UsageReading`): a module that reads it is where its words live.
 // - For a union whose words a client module computes (`LIVE_WORDS`, read from the live label tables
 //   by import: the settled-record lines, the budget and criterion words, the steps panel's node
 //   words and a child's settled label), each value's cell quotes those words.
@@ -169,18 +170,19 @@ const childrenOf = (
   return encoded;
 };
 
+/** Every schema the protocol exports, by export name. */
+const schemas = Object.values(MODULES).flatMap((module) =>
+  Object.entries<unknown>(module).filter(
+    (entry): entry is [string, Schema.Top] => Schema.isSchema(entry[1])
+  )
+);
+
 /**
  * Every literal union the protocol's exported schemas reach, by name: an exported union by its
  * export name, an inline one by the first export and property path that reach it.
  */
 const protocolUnions = (): ReadonlyMap<string, ReadonlyArray<string>> => {
   const names = new Map<SchemaAST.Union<SchemaAST.Literal>, string>();
-
-  const schemas = Object.values(MODULES).flatMap((module) =>
-    Object.entries<unknown>(module).filter(
-      (entry): entry is [string, Schema.Top] => Schema.isSchema(entry[1])
-    )
-  );
 
   for (const [name, schema] of schemas) {
     if (isLiteralUnion(schema.ast) && !names.has(schema.ast)) {
@@ -250,6 +252,63 @@ const rowsOf = (doc: string, heading: string): ReadonlySet<string> => {
 };
 
 const unions = protocolUnions();
+
+/** A literal union's values as one key, so a copy of a union finds the union's name. */
+const literalKey = (ast: SchemaAST.Union<SchemaAST.Literal>) =>
+  literalsOf(ast).join("|");
+
+/**
+ * The exports that hold each union directly, by union name: a struct whose fields reach the union
+ * through no other export (`ProviderUsage` holds `UsageReading`). A client reading the holder reads
+ * the union, as the settings page reads `UsageReading` through `ProviderUsage`.
+ */
+const directHolders = (): ReadonlyMap<string, ReadonlySet<string>> => {
+  const byLiterals = new Map(
+    [...unions].map(([name, values]) => [values.join("|"), name] as const)
+  );
+
+  const exported = new Set(schemas.map(([, schema]) => schema.ast));
+  const holders = new Map<string, Set<string>>();
+
+  for (const [holder, schema] of schemas) {
+    const visited = new Set<SchemaAST.AST>();
+
+    const visit = (ast: SchemaAST.AST) => {
+      if (visited.has(ast)) {
+        return;
+      }
+
+      visited.add(ast);
+
+      const union = isLiteralUnion(ast)
+        ? byLiterals.get(literalKey(ast))
+        : undefined;
+
+      if (union !== undefined && union !== holder) {
+        const held = holders.get(union) ?? new Set<string>();
+
+        held.add(holder);
+        holders.set(union, held);
+      }
+
+      for (const [, child] of childrenOf(ast)) {
+        if (!exported.has(child) || isLiteralUnion(child)) {
+          visit(child);
+        }
+      }
+    };
+
+    for (const [, child] of childrenOf(schema.ast)) {
+      if (!exported.has(child) || isLiteralUnion(child)) {
+        visit(child);
+      }
+    }
+  }
+
+  return holders;
+};
+
+const HOLDERS = directHolders();
 
 const statuses = [...unions].filter(
   ([name]) => !Object.hasOwn(NOT_STATUSES, name)
@@ -480,12 +539,17 @@ const CLIENT_MODULES = [
   ...clientModules(path.join(root, "apps", "web", "src")),
 ];
 
-/** The client modules that import the type holding `union` from the protocol. */
+/**
+ * The client modules that import, from the protocol, the union's own type (an inline union's
+ * export) or an export that holds it directly.
+ */
 const readersOf = (union: string): ReadonlyArray<string> => {
-  const type = union.split(".")[0] ?? union;
+  const own = union.split(".")[0] ?? union;
+  const holders = HOLDERS.get(union) ?? new Set<string>();
+  const types = [own, ...holders].join("|");
 
   const imports = new RegExp(
-    String.raw`import(?:\s+type)?\s*\{[^}]*\b${type}\b[^}]*\}\s*from\s*"@cairn/protocol/`,
+    String.raw`import(?:\s+type)?\s*\{[^}]*\b(?:${types})\b[^}]*\}\s*from\s*"@cairn/protocol/`,
     "u"
   );
 
@@ -629,10 +693,20 @@ describe("thread states doc", () => {
 
     const wrongSymbol = `${doc}\n- Wrong: \`apps/server/src/shell/ShellProjector.ts\` (\`noSuchProjection\`).\n`;
 
+    // No client imports `UsageReading` itself: the settings page reads it through `ProviderUsage`.
+    const heldNotShown = doc.replace(
+      '| `UsageReading` | `unsupported` | "This plan publishes no windows Cairn can read." |',
+      "| `UsageReading` | `unsupported` | Not shown yet; the meters (6G). |"
+    );
+
     assert.notStrictEqual(notShown, doc);
     assert.deepStrictEqual(labelLies(notShown), [
       'NodeState held says "Not shown yet", but packages/client-logic/src/WorkflowSteps.ts reads NodeState',
       'NodeState held: the UI shows "held", which the label map does not quote',
+    ]);
+    assert.notStrictEqual(heldNotShown, doc);
+    assert.deepStrictEqual(labelLies(heldNotShown), [
+      'UsageReading unsupported says "Not shown yet", but apps/web/src/next/settings/View.ts reads UsageReading',
     ]);
     assert.deepStrictEqual(citationLies(deletedPath), [
       "apps/web/src/sidebar/Row.ts: no such file",

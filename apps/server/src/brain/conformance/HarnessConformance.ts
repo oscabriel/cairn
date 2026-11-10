@@ -56,6 +56,7 @@ import {
   normalizeEntries,
   normalizeEntry,
   normalizeInspection,
+  normalizeText,
   normalizeView,
   pendingApprovalIds,
   statusesIn,
@@ -193,7 +194,7 @@ const maskEvent = (
         Option.some<Masked>({
           event: found._tag,
           role: found.role,
-          text: found.text,
+          text: normalizeText(found.text),
         }),
       QueueChanged: () => Option.none<Masked>(),
       RuntimeRequestUpdated: (found) =>
@@ -227,7 +228,10 @@ const describeLine = (index: number, line: TranscriptLine) =>
 
 /** The user input a message line sends. */
 const turnInput = (line: InputLine): HarnessTurnInput => {
-  const text = { type: "text" as const, text: line.text ?? "" };
+  const text = {
+    type: "text" as const,
+    text: (line.text ?? "").repeat(line.repeat ?? 1),
+  };
 
   let whenBusy: HarnessTurnInput["whenBusy"] = line.whenBusy ?? "followUp";
 

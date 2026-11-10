@@ -332,13 +332,13 @@ const CASES = {
     "a provider's credential, on the settings page"
   ),
   "UsageReading read": elsewhere(
-    "a provider's plan windows, on the usage page (`thread-states.test.ts` holds its words)"
+    'a provider\'s plan windows, on the usage page (`thread-states.test.ts` fails a "Not shown yet" cell)'
   ),
   "UsageReading unreadable": elsewhere(
-    "a provider's plan windows, on the usage page (`thread-states.test.ts` holds its words)"
+    'a provider\'s plan windows, on the usage page (`thread-states.test.ts` fails a "Not shown yet" cell)'
   ),
   "UsageReading unsupported": elsewhere(
-    "a provider's plan windows, on the usage page (`thread-states.test.ts` holds its words)"
+    'a provider\'s plan windows, on the usage page (`thread-states.test.ts` fails a "Not shown yet" cell)'
   ),
   "BudgetState none": elsewhere(
     "a budget card on the usage page and the budget notice (`thread-states.test.ts` holds its words)"

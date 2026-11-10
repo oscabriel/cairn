@@ -2,18 +2,24 @@
 // clone; docs/phase-1/notes/brain.md, "Footguns") held as pins over the source of every server
 // module, not only `brain/`: phase 2 commits from `subagents/`, `approvals/`, `workflows/`,
 // `verdicts/` and `models/ResultTool.ts` too (S42's folders), so the whole of `apps/server/src` is
-// scanned. Each rule a scan can pin:
+// scanned.
 //
-// - Reads inside a commit: nothing inside a `commit(` callback reads through the Session, the
-//   Harness or the runtime (`snapshot`, `documentState`, `watchDoc`, `getTask`, `waitForTask`,
-//   `inspect`, `conversation`, the scans) on anything but its `tx`: such a read can queue on the line
-//   the callback holds and hang.
-// - Long transactions: every `await` inside a commit callback is a `tx.` call or a helper given `tx`
-//   as its first argument, and no commit nests another.
-// - Detached draft work: no fire-and-forget (`void`, `.then(`, a timer, a fork) inside a commit
-//   callback.
-// - Writing to a busy conversation, and raw head writes into the past: a raw `tx.appendEntry(` is
-//   allowed only at the reviewed sites in `RAW_APPENDS`, each guarded by hand against a live run.
+// A commit body is any code that runs on a commit's line: a `commit(` call's callback (inline, or
+// passed by a name the module declares), a callback passed inline to a commit wrapper
+// (`io.commitDocs(`, any `commit…(` call), and every function whose first parameter is typed `Tx`
+// (`meterCommit(tx, …)` and the other helpers given the transaction). Each rule a scan can pin:
+//
+// - Reads inside a commit: nothing in a commit body reads through the Session, the Harness or the
+//   runtime (`snapshot`, `documentState`, `watchDoc`, `getTask`, `waitForTask`, `inspect`,
+//   `conversation`, the scans) on any receiver but its transaction (`harness.`, `api?.`,
+//   `brain().` alike): such a read can queue on the line the body holds and hang.
+// - Long transactions: every `await` in a commit body is a call on the transaction, a helper given
+//   it as its first argument, one of the body's own async functions, or a combinator over such
+//   work, and no commit nests another.
+// - Detached draft work: no fire-and-forget (`void`, `.then(`, a timer, a fork) in a commit body.
+// - Writing to a busy conversation, and raw head writes into the past: a raw `appendEntry(` on a
+//   transaction (`tx`, or the name a commit body gives it) is allowed only at the reviewed sites in
+//   `RAW_APPENDS`, each guarded by hand against a live run.
 // - Hook memo names: every `memo(` name carries a namespace prefix (`cairn.`).
 // - Checkpoint starvation: `checkpointWhen: () => false` only on the reviewed documents in
 //   `NEVER_CHECKPOINTED`, each tiny and written once.
@@ -28,8 +34,9 @@
 // `failed_run_keeps_queue`; buffered watches by the `skip_snapshot` mutation and
 // `one_subscription_past_100_entries`; fatal storage errors by `Brain.test.ts`.
 //
-// No scan can pin these, since each is about behaviour or data flow, not a call's shape: detached
-// work outside a commit's text (a helper that forks), read after write (the 1.5 `Tx` has no table
+// No scan can pin these, since each is about behaviour or data flow, not a call's shape: work
+// reached from a commit body through a helper that is not given the transaction as its first
+// parameter (it may read, await or fork unseen), read after write (the 1.5 `Tx` has no table
 // API), compaction spend, heads and edits during compaction, summary timestamps, double-counted
 // subagent spend, owned work holding its owner, work created by hooks, compensation in abort
 // handlers, explicit creation, family initialization, wrong fork setting, schema stability (a kind
@@ -125,94 +132,243 @@ const closing = (source: string, open: number) => {
   return source.length - 1;
 };
 
-/** One commit callback: its text and the name it gives the transaction. */
+/** The end of the balanced brace block opening at `open`. */
+const blockEnd = (source: string, open: number) => {
+  let depth = 0;
+
+  for (let at = open; at < source.length; at += 1) {
+    const char = source[at];
+
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+
+      if (depth === 0) {
+        return at;
+      }
+    }
+  }
+
+  return source.length - 1;
+};
+
+const OPENERS = new Set(["(", "[", "{"]);
+
+const CLOSERS = new Set([")", "]", "}"]);
+
+/** An arrow's expression body from `start`: up to the end of its statement or argument. */
+const expressionAt = (source: string, start: number) => {
+  let depth = 0;
+
+  for (let at = start; at < source.length; at += 1) {
+    const char = source[at] ?? "";
+
+    if (OPENERS.has(char)) {
+      depth += 1;
+    } else if (CLOSERS.has(char)) {
+      if (depth === 0) {
+        return source.slice(start, at);
+      }
+
+      depth -= 1;
+    } else if (depth === 0 && (char === ";" || char === ",")) {
+      return source.slice(start, at);
+    }
+  }
+
+  return source.slice(start);
+};
+
+/**
+ * The body of the function whose parameter list closes at `close`, past any return type: a block,
+ * or an arrow's expression; none for a signature without one (an interface's method).
+ */
+const bodyAfter = (source: string, close: number): Option.Option<string> => {
+  let angle = 0;
+
+  for (let at = close + 1; at < source.length; at += 1) {
+    const char = source[at];
+
+    if (angle === 0 && source.startsWith("=>", at)) {
+      const start = at + 2 + Math.max(0, source.slice(at + 2).search(/\S/u));
+
+      return Option.some(
+        source[start] === "{"
+          ? source.slice(start, blockEnd(source, start) + 1)
+          : expressionAt(source, start)
+      );
+    }
+
+    if (char === "<") {
+      angle += 1;
+    } else if (char === ">") {
+      angle -= 1;
+    } else if (angle === 0 && char === "{") {
+      return Option.some(source.slice(at, blockEnd(source, at) + 1));
+    } else if (angle === 0 && (char === ";" || char === "," || char === ")")) {
+      return Option.none();
+    }
+  }
+
+  return Option.none();
+};
+
+/** One body that runs on a commit's line: where its parameters open, its text and its `tx`. */
 interface CommitBody {
+  readonly at: number;
   readonly text: string;
   readonly tx: string;
 }
 
 /** A callback's first parameter: `async (tx) =>`, `(tx: Tx) =>`, `async function (tx)`. */
 const FIRST_PARAM =
-  /^\s*(?:async\s+)?(?:function\s*\w*\s*)?\(\s*(?<tx>[\w$]+)/u;
-
-/**
- * Each `commit(` call's callback. An inline callback is read in place; one passed by name is read
- * from the same module's `const <name> = ...` when it is there.
- */
-const commitBodies = (source: string): ReadonlyArray<CommitBody> =>
-  [...source.matchAll(/\.commit\(/gu)].flatMap((match) => {
-    const open = match.index + ".commit".length;
-    const args = source.slice(open + 1, closing(source, open));
-    const inline = FIRST_PARAM.exec(args);
-
-    if (inline?.groups?.tx !== undefined) {
-      return [{ text: args, tx: inline.groups.tx }];
-    }
-
-    const named = /^\s*(?<name>[\w$]+)\s*,/u.exec(args)?.groups?.name;
-
-    if (named === undefined) {
-      return [{ text: args, tx: "tx" }];
-    }
-
-    const declared = new RegExp(
-      String.raw`(?:const|function)\s+${named}\b[^=(]*(?:=\s*)?`,
-      "u"
-    ).exec(source);
-
-    if (declared === null) {
-      return [{ text: args, tx: "tx" }];
-    }
-
-    const start = declared.index + declared[0].length;
-    const paren = source.indexOf("(", start);
-    const tx = FIRST_PARAM.exec(source.slice(start))?.groups?.tx ?? "tx";
-    const arrow = source.indexOf("=>", closing(source, paren));
-    const brace = source.indexOf("{", arrow === -1 ? paren : arrow);
-    let depth = 0;
-    let end = brace;
-
-    for (; end < source.length; end += 1) {
-      if (source[end] === "{") {
-        depth += 1;
-      } else if (source[end] === "}") {
-        depth -= 1;
-
-        if (depth === 0) {
-          break;
-        }
-      }
-    }
-
-    return [{ text: source.slice(start, end + 1), tx }];
-  });
+  /^\s*(?:async\s+)?(?:function\s*[\w$]*\s*)?\(\s*(?<tx>[\w$]+)/u;
 
 const escape = (text: string) => text.replaceAll(/[$]/gu, String.raw`\$`);
+
+/** The function whose text starts at `start`, as a commit body; none when no function starts there. */
+const functionAt = (
+  source: string,
+  start: number
+): Option.Option<CommitBody> => {
+  const head = FIRST_PARAM.exec(source.slice(start));
+  const tx = head?.groups?.tx;
+
+  if (head === null || tx === undefined) {
+    return Option.none();
+  }
+
+  const at = start + head[0].lastIndexOf("(");
+
+  return Option.map(bodyAfter(source, closing(source, at)), (text) => ({
+    at,
+    text,
+    tx,
+  }));
+};
+
+/** The callback a `commit(` call is passed by name, as the module declares it. */
+const namedCallback = (
+  source: string,
+  args: string
+): Option.Option<CommitBody> => {
+  const named = /^\s*(?<name>[\w$]+)\s*,/u.exec(args)?.groups?.name;
+
+  if (named === undefined) {
+    return Option.none();
+  }
+
+  const declared = new RegExp(
+    String.raw`const\s+${escape(named)}\s*(?::[^=]*)?=|(?:async\s+)?function\s+${escape(named)}\b`,
+    "u"
+  ).exec(source);
+
+  if (declared === null) {
+    return Option.none();
+  }
+
+  return functionAt(
+    source,
+    declared[0].startsWith("const")
+      ? declared.index + declared[0].length
+      : declared.index
+  );
+};
+
+/**
+ * Every body that runs inside a commit, each once:
+ * - each `commit(` call's callback, inline or passed by a name the module declares;
+ * - each callback passed inline to a commit wrapper (`io.commitDocs(`, any `commit…(` call);
+ * - each function whose first parameter is typed `Tx` (`meterCommit(tx, …)`): a helper given the
+ *   transaction runs on the commit's line as its caller does.
+ */
+const commitBodies = (source: string): ReadonlyArray<CommitBody> => {
+  const calls = [...source.matchAll(/\.commit\(|\bcommit[A-Z][\w$]*\(/gu)]
+    .filter(
+      (match) =>
+        !/\bfunction\s+$/u.test(
+          source.slice(Math.max(0, match.index - 16), match.index)
+        )
+    )
+    .flatMap((match) => {
+      const open = match.index + match[0].length - 1;
+      const inline = functionAt(source, open + 1);
+
+      if (Option.isSome(inline) || match[0] !== ".commit(") {
+        return Option.toArray(inline);
+      }
+
+      const args = source.slice(open + 1, closing(source, open));
+
+      return [
+        Option.getOrElse(namedCallback(source, args), () => ({
+          at: open,
+          text: args,
+          tx: "tx",
+        })),
+      ];
+    });
+
+  const helpers = [
+    ...source.matchAll(/\(\s*(?<tx>[\w$]+)\s*:\s*Tx\b/gu),
+  ].flatMap((match) =>
+    Option.toArray(
+      Option.map(bodyAfter(source, closing(source, match.index)), (text) => ({
+        at: match.index,
+        text,
+        tx: match.groups?.tx ?? "tx",
+      }))
+    )
+  );
+
+  const seen = new Set<number>();
+
+  return [...calls, ...helpers].filter((body) => {
+    if (seen.has(body.at)) {
+      return false;
+    }
+
+    seen.add(body.at);
+
+    return true;
+  });
+};
 
 /** Awaited expressions that only combine other work: a conditional, `Promise.all`, `Option.match`. */
 const COMBINATOR = /^(?:\(|Promise\.all\(|Option\.match\()/u;
 
-/** Every commit-callback footgun in one module's code, described. */
+/** Every commit-body footgun in one module's code, described. */
 const commitFootguns = (code: string): ReadonlyArray<string> => {
   const found: Array<string> = [];
 
   for (const { text, tx } of commitBodies(code)) {
+    // A read on any receiver but the transaction: `harness.`, `api?.`, `brain().`.
     const reads = new RegExp(
-      String.raw`(?<receiver>[\w$]+)\s*\.\s*(?<read>${SESSION_READS.join("|")})\(`,
+      String.raw`(?<receiver>[\w$]*)(?<call>[)\]]?)\s*\??\.\s*(?<read>${SESSION_READS.join("|")})\(`,
       "gu"
     );
 
     for (const read of text.matchAll(reads)) {
-      if (read.groups?.receiver !== tx) {
+      if (read.groups?.receiver !== tx || read.groups.call !== "") {
         found.push(`calls ${read.groups?.read ?? ""} inside a commit`);
       }
     }
 
+    // Async functions the body declares (a paging `scan` over `tx`): their own text is part of the
+    // body, so their awaits are checked here too.
+    const locals = [
+      ...text.matchAll(
+        /(?:const\s+(?<arrow>[\w$]+)\s*(?::[^=]*)?=\s*async\b|async\s+function\s+(?<declared>[\w$]+))/gu
+      ),
+    ].map((local) => local.groups?.arrow ?? local.groups?.declared ?? "");
+
     // An awaited expression that stays on the commit's line: `tx.…`, `helper(tx, …)` (also
-    // `conversation?.submit(tx, …)`), a resolved value, or a combinator over `tx` work (a
-    // conditional, `Promise.all`, `Option.match`), whose own inner awaits are checked in turn.
+    // `conversation?.submit(tx, …)`), a call of one of the body's own async functions, a resolved
+    // value, or a combinator over `tx` work (a conditional, `Promise.all`, `Option.match`), whose
+    // own inner awaits are checked in turn.
     const onTx = new RegExp(
-      String.raw`^(?:${escape(tx)}\.|[\w$.?]+\(\s*${escape(tx)}\b|Promise\.resolve\()`,
+      String.raw`^(?:${escape(tx)}\??\.|[\w$.?]+\(\s*${escape(tx)}\b|Promise\.resolve\(${locals.map((local) => String.raw`|${escape(local)}\(`).join("")})`,
       "u"
     );
 
@@ -231,7 +387,7 @@ const commitFootguns = (code: string): ReadonlyArray<string> => {
       }
     }
 
-    if (text.slice(1).includes(".commit(")) {
+    if (text.includes(".commit(")) {
       found.push("nests a commit inside a commit");
     }
 
@@ -324,7 +480,24 @@ const footguns = (
 const count = (source: string, pattern: RegExp) =>
   [...codeOf(source).matchAll(pattern)].length;
 
-const RAW_APPEND = /\btx\.appendEntry\(/gu;
+/**
+ * How many raw `appendEntry(` calls a module makes on a transaction: on `tx`, or on whatever name
+ * a commit body there gives it.
+ */
+const rawAppends = (source: string) => {
+  const names = new Set([
+    "tx",
+    ...commitBodies(codeOf(source)).map((body) => body.tx),
+  ]);
+
+  return count(
+    source,
+    new RegExp(
+      String.raw`(?<![\w$.])(?:${[...names].map(escape).join("|")})\s*\??\.\s*appendEntry\(`,
+      "gu"
+    )
+  );
+};
 
 const NEVER_CHECKPOINT = /checkpointWhen:\s*\(\)\s*=>\s*false/gu;
 
@@ -349,11 +522,11 @@ const modules = new Map(
   ])
 );
 
-/** The modules where `pattern` occurs, with their counts. */
-const sites = (pattern: RegExp) =>
+/** The modules where `counted` finds something, with their counts. */
+const sites = (counted: (source: string) => number) =>
   Object.fromEntries(
     [...modules].flatMap(([name, source]) => {
-      const found = count(source, pattern);
+      const found = counted(source);
 
       return found > 0 ? [[name, found] as const] : [];
     })
@@ -409,6 +582,51 @@ describe("pi-durable footguns", () => {
         "awaits session.harness.inspect inside a commit",
       ]
     );
+    // A callback handed to a commit wrapper (`io.commitDocs(`) is a commit body.
+    assert.deepStrictEqual(
+      footguns(
+        "await io.commitDocs(async (tx) => { await session.harness.snapshot(Approvals, child, ctx); void fetch(url); });"
+      ),
+      [
+        "calls snapshot inside a commit",
+        "awaits session.harness.snapshot inside a commit",
+        String.raw`starts detached work (\bvoid\s+[\w(]) inside a commit`,
+      ]
+    );
+    // So is every function whose first parameter is the transaction: it runs inside a commit.
+    assert.deepStrictEqual(
+      footguns(
+        "export const meterCommit = async (\n  tx: Tx,\n  id: string\n): Promise<Option.Option<number>> => {\n  await session.harness.snapshot(Doc, ctx);\n  setTimeout(tick, 10);\n  return Option.none();\n};"
+      ),
+      [
+        "calls snapshot inside a commit",
+        "awaits session.harness.snapshot inside a commit",
+        String.raw`starts detached work (\bsetTimeout\() inside a commit`,
+      ]
+    );
+    assert.deepStrictEqual(
+      footguns(
+        "async function owned(tx: Tx, id: number) { const found = await harness.inspect(ctx); return found; }"
+      ),
+      [
+        "calls inspect inside a commit",
+        "awaits harness.inspect inside a commit",
+      ]
+    );
+    // A function the body declares may be awaited; its own awaits are checked in turn.
+    assert.deepStrictEqual(
+      footguns(
+        "const owned = async (tx: Tx, id: number) => { const scan = async (cursor) => { await fetch(id); const page = await tx.scanEntries({}, 10, cursor); return page.next === undefined ? page : await scan(page.next); }; return await scan(); };"
+      ),
+      ["awaits fetch inside a commit"]
+    );
+    // A read on any receiver but the transaction, through `?.` or a call's result too.
+    assert.deepStrictEqual(
+      footguns(
+        "await harness.commit(async (tx) => { const p = brain().snapshot(Doc, ctx); return api?.snapshot(Doc, ctx); }, ctx);"
+      ),
+      ["calls snapshot inside a commit", "calls snapshot inside a commit"]
+    );
     assert.deepStrictEqual(
       footguns("await conversation.configure({ extensions: [guard] }, ctx);"),
       ["writes an array extension selection"]
@@ -437,11 +655,17 @@ describe("pi-durable footguns", () => {
       ["names a memo without a namespace prefix (MARK)"]
     );
     assert.deepStrictEqual(
-      count(
-        "await harness.commit(async (tx) => { await tx.appendEntry(id, draft); }, ctx);",
-        RAW_APPEND
+      rawAppends(
+        "await harness.commit(async (tx) => { await tx.appendEntry(id, draft); }, ctx);"
       ),
       1
+    );
+    // The transaction's own name, whatever the callback calls it.
+    assert.deepStrictEqual(
+      rawAppends(
+        "await harness.commit(async (t) => { await t.appendEntry(id, draft); }, ctx);\nconst place = async (head: Tx) => { await head?.appendEntry(id, draft); };"
+      ),
+      2
     );
     assert.deepStrictEqual(
       count(
@@ -456,6 +680,8 @@ describe("pi-durable footguns", () => {
         [
           "await harness.commit(async (tx) => { const doc = await tx.doc(Doc); await record(tx, id); await tx.conversation(id); }, ctx);",
           "await runtime.commit(async (tx) => { await (stopped ? admitNote(tx, id) : conversation?.submit(tx, draft)); const all = await Promise.all(ids.map(async (id) => await owned(tx, id))); const at = await Option.match(found, { onNone: async () => await Promise.resolve(none), onSome: async (x) => await latest(tx, x) }); }, ctx);",
+          "const owned = async (tx: Tx, id: number) => { const scan = async (cursor) => { const page = await tx.scanEntries({}, 10, cursor); return page.next === undefined ? page : await scan(page.next); }; return await scan(); };",
+          "export interface Reactor { handle(tx: Tx, event: EventRecord): Promise<void>; }",
           "await harness.snapshot(Doc, ctx);",
           "const PLACED = (id) => `cairn.placed:` + id;",
           "await api.memo(PLACED(id), true, context);",
@@ -481,6 +707,20 @@ describe("pi-durable footguns", () => {
     ]) {
       assert.include(committing, folder);
     }
+
+    // Modules that never call `commit(` but hold helpers given the transaction are scanned too.
+    for (const name of [
+      "brain/NoteAdmission.ts",
+      "subagents/BrainCap.ts",
+      "subagents/Delivery.ts",
+      "verdicts/Verdicts.ts",
+      "workflows/WorkflowLaunch.ts",
+    ]) {
+      const source = modules.get(name) ?? "";
+
+      assert.notInclude(source, ".commit(", name);
+      assert.isAbove(commitBodies(codeOf(source)).length, 0, name);
+    }
   });
 
   it("finds none in the server's modules", () => {
@@ -494,10 +734,13 @@ describe("pi-durable footguns", () => {
   });
 
   it("finds raw appends only at the reviewed sites", () => {
-    assert.deepStrictEqual(sites(RAW_APPEND), RAW_APPENDS);
+    assert.deepStrictEqual(sites(rawAppends), RAW_APPENDS);
   });
 
   it("finds never-checkpointed documents only where reviewed", () => {
-    assert.deepStrictEqual(sites(NEVER_CHECKPOINT), NEVER_CHECKPOINTED);
+    assert.deepStrictEqual(
+      sites((source) => count(source, NEVER_CHECKPOINT)),
+      NEVER_CHECKPOINTED
+    );
   });
 });

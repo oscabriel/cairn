@@ -67,6 +67,8 @@ const recordingSdk = (log: Ref.Ref<ReadonlyArray<Opened>>) =>
 
             return {
               ...query,
+              // The bridge writes a first prompt with `push` and a later turn's with `send` (since
+              // f064cb6, 2026-10-25), so both are recorded.
               input: {
                 ...query.input,
                 push: (message) =>
@@ -75,6 +77,13 @@ const recordingSdk = (log: Ref.Ref<ReadonlyArray<Opened>>) =>
                       opened.prompts.push(blocksText(message.blocks))
                     ),
                     query.input.push(message)
+                  ),
+                send: (message) =>
+                  Effect.andThen(
+                    Effect.sync(() =>
+                      opened.prompts.push(blocksText(message.blocks))
+                    ),
+                    query.input.send(message)
                   ),
               },
             };

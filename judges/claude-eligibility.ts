@@ -1,7 +1,9 @@
 // J6 and J7, live, against the `claude` binary's own login on this machine.
 //   node judges/claude-eligibility.ts [--part all|probe|eligibility] [--model claude-haiku-5-5]
 //
-// J6 (probe): the usage probe reads the plan's windows within 1 s with the subscription type; with
+// J6 (probe): the usage probe reads the plan's windows within 1 s with the subscription type (every
+// window Claude Code's answer carries with a number, the weekly one always; `five_hour` can be null,
+// and then there is no session window to read); with
 // ANTHROPIC_API_KEY set in the brain's environment the probe child still reports
 // `apiKeySource: "none"` (the bridge strips it); with HOME pointing at an empty directory it reports
 // not logged in. The probe sends no prompt and costs nothing.
@@ -69,6 +71,32 @@ const DUMMY_API_KEY = "sk-ant-api03-cairn-judge-not-a-key";
 // --- J6: the probe ---
 
 /** One probe; `strip` false is the negative control that skips the bridge's env stripping. */
+const AnsweredWindow = Schema.Struct({ utilization: Schema.Finite });
+
+const AnsweredUsage = Schema.Struct({
+  rate_limits: Schema.Struct({
+    five_hour: Schema.optional(Schema.Unknown),
+    seven_day: Schema.optional(Schema.Unknown),
+  }),
+});
+
+/** The plan windows a probe's raw usage answer carries with a numeric utilization. */
+const answeredWindows = (
+  usage: Option.Option<unknown>
+): ReadonlyArray<"five_hour" | "seven_day"> =>
+  Option.match(
+    Option.flatMap(usage, Schema.decodeUnknownOption(AnsweredUsage)),
+    {
+      onNone: () => [],
+      onSome: ({ rate_limits }) =>
+        (["five_hour", "seven_day"] as const).filter((id) =>
+          Option.isSome(
+            Schema.decodeUnknownOption(AnsweredWindow)(rate_limits[id])
+          )
+        ),
+    }
+  );
+
 const probeOnce = (
   env: Readonly<Record<string, string | undefined>>,
   strip = true
@@ -93,7 +121,7 @@ const probeOnce = (
 
     const ended = yield* Clock.currentTimeMillis;
 
-    return { ms: ended - started, reading: readProbe(raw, ended) };
+    return { ms: ended - started, raw, reading: readProbe(raw, ended) };
   });
 
 const probePart = Effect.gen(function* () {
@@ -115,10 +143,16 @@ const probePart = Effect.gen(function* () {
   });
 
   const ids = new Set(normal.reading.windows.map((window) => window.id));
+  // The plan windows Claude Code's answer carries with a number. Claude answers `five_hour: null`
+  // at times (seen 2026-11-10 on the Max plan, with `seven_day` a number), and the product rightly
+  // shows no session window then; so every window the answer carries must be read, and the weekly
+  // one must always be there.
+  const answered = answeredWindows(normal.raw.usage);
 
   const checks = {
     windowsWithinBudget: normal.ms < PROBE_BUDGET_MS,
-    fiveHourAndWeekly: ids.has("five_hour") && ids.has("seven_day"),
+    weeklyAnswered: answered.includes("seven_day"),
+    answeredWindowsRead: answered.every((id) => ids.has(id)),
     subscriptionType: Option.isSome(normal.reading.plan),
     loggedIn: normal.reading.login.kind === "firstParty",
     apiKeyStripped:
@@ -138,6 +172,7 @@ const probePart = Effect.gen(function* () {
       control: control.ms,
       emptyHome: loggedOut.ms,
     },
+    answered,
     windows: normal.reading.windows.map(
       (window) => `${window.id}=${Math.round(window.usedPercent)}%`
     ),

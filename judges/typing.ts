@@ -15,8 +15,8 @@
 // While the typist types, Foldkit's slow-view warnings (dev builds, views over 16 ms) are counted
 // and summed, with the Message tags that triggered them, as `slowViews`.
 // Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
-// intact, the price was sent, the transcript streamed (at least half the judge's own exchanges
-// landed, `stream: ok`), and the page logged no error.
+// intact, the price was sent (with --url only typed, `price: skipped`), the transcript streamed
+// (at least half the judge's own exchanges landed, `stream: ok`), and the page logged no error.
 /* oxlint-disable no-await-in-loop -- the typist sends one key after another, on purpose */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -576,7 +576,9 @@ if (menuValue !== MENU_TEXT) {
 }
 
 // The price case (t3code's 1ee02417): a message ending in `$5` opens no skill menu, and Enter sends
-// it: the composer empties and the words show in the transcript.
+// it: the composer empties and the words show in the transcript. With --url the thread is not the
+// judge's, so nothing is sent there: only the menu is checked, the words are cleared again, and the
+// send is reported `skipped`.
 await composer.fill("");
 
 await page.waitForTimeout(200);
@@ -589,27 +591,31 @@ const priceMenus = await page
   .locator('[data-testid="composer-menu"][data-trigger="skill"]')
   .count();
 
-await page.keyboard.press("Enter");
+const priceSent = values.url === undefined;
 
-const priceShown = await page
-  .getByTestId("user-message")
-  .filter({ hasText: PRICE_TEXT })
-  .first()
-  .waitFor({ state: "attached", timeout: PRICE_WAIT_MS })
-  .then(
-    () => true,
-    () => false
-  );
+await (priceSent ? page.keyboard.press("Enter") : composer.fill(""));
+
+const priceShown =
+  priceSent &&
+  (await page
+    .getByTestId("user-message")
+    .filter({ hasText: PRICE_TEXT })
+    .first()
+    .waitFor({ state: "attached", timeout: PRICE_WAIT_MS })
+    .then(
+      () => true,
+      () => false
+    ));
 
 const priceLeft = await composer.inputValue();
 
-let price = "ok";
+let price = priceSent ? "ok" : "skipped";
 
 if (priceMenus > 0) {
   price = "the skill menu opened on a price";
 } else if (priceLeft !== "") {
   price = `not sent: ${JSON.stringify(priceLeft)}`;
-} else if (!priceShown) {
+} else if (priceSent && !priceShown) {
   price = "sent, but not shown in the transcript";
 }
 
@@ -659,7 +665,7 @@ process.exitCode =
   result.match &&
   ime === "ok" &&
   menu === "ok" &&
-  price === "ok" &&
+  (price === "ok" || price === "skipped") &&
   stream !== "dead" &&
   errors.length === 0
     ? 0

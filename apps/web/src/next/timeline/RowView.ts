@@ -1,8 +1,9 @@
 // The `next` transcript's rows (plan look track L7, surfaces note S12), in the Stone look round 1
 // drew: the user's words in a raised bubble with its time, the model's answer as plain prose, the
 // work as quiet lines in the faint ink with their glyphs, an input the brain wrote (a wake, a
-// subagent's question) as one more quiet line, never a bubble, a send still in the outbox as the
-// user's bubble marked "Not sent yet", and a settled turn folded behind one line that says how
+// subagent's question) as one more quiet line, never a bubble, a send whose own row has not come
+// yet as the user's bubble marked "Not sent yet" (or "Sent", once the brain has it), and a settled
+// turn folded behind one line that says how
 // long it worked and what it did ("Worked for 3m 41s · 4 edits · 9 reads · 2 commands"). Colour
 // is left to status: a failed call's glyph and words take the failed tone, and nothing else has a
 // hue. The rows are classic's (`timeline/RowView.ts`, a port of t3code's
@@ -211,17 +212,22 @@ const TEXT_BUTTON_CLASS = classNames(
 /** Under a send still in the outbox, in place of its time and copy button. */
 const NOT_SENT = "Not sent yet";
 
+/** Under a send the brain acknowledged whose own row has not come yet. */
+const SENT = "Sent";
+
 /**
- * The user's message in its bubble, with its time and copy button below; a send still waiting in
- * the outbox (`pending`) draws the same bubble, dimmed, marked "Not sent yet" in their place.
+ * The user's message in its bubble, with its time and copy button below; a send whose own row has
+ * not come yet draws the same bubble, dimmed, with `pendingLabel` ("Not sent yet" while it waits in
+ * the outbox, "Sent" once the brain has it) in their place.
  */
 const userMessageView = (
   h: HtmlBuilder<Message>,
   rowId: string,
   message: TimelineMessage,
   context: RowContext,
-  pending = false
+  pendingLabel: Option.Option<string> = Option.none()
 ): Html => {
+  const pending = Option.isSome(pendingLabel);
   const collapsible = shouldCollapseUserMessage(message.text);
   const collapsed = collapsible && !context.expanded;
   const chips = userChips(h, message);
@@ -312,10 +318,10 @@ const userMessageView = (
               ? [
                   h.span(
                     [
-                      h.DataAttribute("testid", "not-sent"),
+                      h.DataAttribute("testid", "pending-state"),
                       h.Class(classNames("text-ink-3", TYPE.micro)),
                     ],
-                    [NOT_SENT]
+                    [Option.getOrElse(pendingLabel, () => NOT_SENT)]
                   ),
                 ]
               : [
@@ -1141,7 +1147,14 @@ export const rowView = (
           ? userMessageView(h, row.id, row.message, context)
           : assistantMessageView(h, row, context),
       "brain-input": (row) => brainInputView(h, row, context),
-      pending: (row) => userMessageView(h, row.id, row.message, context, true),
+      pending: (row) =>
+        userMessageView(
+          h,
+          row.id,
+          row.message,
+          context,
+          Option.some(row.sent ? SENT : NOT_SENT)
+        ),
       "assistant-meta": (row) =>
         frame(h, "assistant-meta", "pb-(--space-4)", [
           metaView(

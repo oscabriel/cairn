@@ -26,8 +26,9 @@ export const ThreadUi = Schema.Struct({
 export type ThreadUi = typeof ThreadUi.Type;
 
 /**
- * A send to the shown thread waiting in the outbox (a launch's first message among them): the
- * transcript draws it as a pending row, marked not yet sent, until the brain has it.
+ * A send to the shown thread whose own row has not reached the transcript yet (a launch's first
+ * message among them): waiting in the outbox, or acknowledged by the brain and on its way. The
+ * transcript draws it as a pending row until its own row, or the brain's queue, shows it.
  */
 export const QueuedSend = Schema.Struct({
   /** The outbox key it is acknowledged by. */
@@ -38,6 +39,8 @@ export const QueuedSend = Schema.Struct({
   /** Their names, when this tab queued the send; "Attachment" for one another tab queued. */
   attachmentNames: Schema.Array(Schema.String),
   skillRefs: Schema.Array(Schema.String),
+  /** True once the brain acknowledged it: the row says "Sent", not "Not sent yet". */
+  sent: Schema.Boolean,
 });
 
 export type QueuedSend = typeof QueuedSend.Type;
@@ -120,13 +123,20 @@ export const promptKey = (
     skillRefs.filter((skill) => skill.trim() !== ""),
   ]);
 
-/** Two lists of queued sends are the same when they hold the same sends in order; a send never changes. */
+/**
+ * Two lists of queued sends are the same when they hold the same sends in order, each as far along;
+ * a send's words never change.
+ */
 export const sameSends = (
   left: ReadonlyArray<QueuedSend>,
   right: ReadonlyArray<QueuedSend>
 ): boolean =>
   left.length === right.length &&
-  left.every((send, index) => send.requestId === right[index]?.requestId);
+  left.every(
+    (send, index) =>
+      send.requestId === right[index]?.requestId &&
+      send.sent === right[index]?.sent
+  );
 
 /** Whether a send of this prompt waits in the outbox. */
 export const isQueuedPrompt = (

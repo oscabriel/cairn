@@ -67,6 +67,18 @@ const userTexts = (
 
 const NO_PROMPTS: ReadonlyArray<ComposerPromptHistoryEntry> = [];
 
+const decodeSender = Schema.decodeUnknownOption(
+  Schema.Struct({ from: Schema.NonEmptyString })
+);
+
+/**
+ * Whether `entry` is the user's own input: a `cairn.user` entry naming its sender, as the
+ * transcript reads it (`TimelineEntries.ts`). A wake or a subagent's question is the brain's, and
+ * is not recalled as if the user had typed it.
+ */
+const isUsersOwn = (entry: Entry): boolean =>
+  entry.kind === "cairn.user" && Option.isSome(decodeSender(entry.data));
+
 /** The prompts read from each entries array, so a view whose entries did not change is not re-read. */
 const promptsByEntries = new WeakMap<
   ReadonlyArray<Entry>,
@@ -85,10 +97,12 @@ const promptsOf = (
 
   const prompts = buildComposerPromptHistoryEntries(
     Array.flatMap(entries, (entry) =>
-      Array.getSomes((entry.model ?? []).map(userTexts)).map((message) => ({
-        ...message,
-        id: String(entry.id),
-      }))
+      isUsersOwn(entry)
+        ? Array.getSomes((entry.model ?? []).map(userTexts)).map((message) => ({
+            ...message,
+            id: String(entry.id),
+          }))
+        : []
     )
   );
 

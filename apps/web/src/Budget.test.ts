@@ -28,9 +28,11 @@ import type { Rolldown } from "vite";
  * and its fix, deferring what a cold load never draws, has to bring this back down. Package C5's
  * transcript fixes (brain inputs as quiet lines, pending rows for queued sends, the outbox's lanes,
  * parked history, Cairn's tool names in words) are all drawn or run on a thread's first page, so
- * nothing of them could load later: 326,040 B, and the ceiling moved two more KiB.
+ * nothing of them could load later: 326,040 B, and the ceiling moved two more KiB. Its review fixes
+ * (a pending row kept until its own row comes, in the root's update that runs on every message)
+ * came to 327,076 B, and the ceiling moved half a KiB more.
  */
-export const ENTRY_JS_BUDGET = 326_656;
+export const ENTRY_JS_BUDGET = 327_168;
 
 /**
  * The plan's entry target (D46: 200 KB gzip). Not met by wave 3's client: effect, foldkit and

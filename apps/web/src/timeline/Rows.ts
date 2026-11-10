@@ -1,7 +1,7 @@
 // The list the transcript scrolls: client-logic's timeline rows for the page's thread view, kept
 // stable across derivations (an unchanged row keeps its object, so its keyed lazy view is reused),
-// with the "Load earlier turns" control first while older entries remain and the sends still waiting
-// in the outbox last, each a pending row until the brain has it. Also each row's estimated
+// with the "Load earlier turns" control first while older entries remain and the sends whose own
+// row has not come yet last, each a pending row. Also each row's estimated
 // height before it is measured, bucketed by length as t3code's `getItemType` does
 // (github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.tsx:1616-1627 at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92), so one long reply does not skew every estimate.
@@ -50,13 +50,16 @@ export type MessageItem = Extract<TimelineRow, { readonly kind: "message" }> & {
 };
 
 /**
- * A send waiting in the outbox, drawn as the user's message it will become and marked not yet sent,
- * until the brain acknowledges it and the thread's own row takes its place.
+ * A send whose own row has not come yet, drawn as the user's message it will become: marked not yet
+ * sent while it waits in the outbox, and sent once the brain acknowledged it, until the thread's own
+ * row (or the brain's queue) takes its place.
  */
 export interface PendingItem {
   readonly kind: "pending";
   /** `pending:<requestId>`. */
   readonly id: string;
+  /** The brain acknowledged it. */
+  readonly sent: boolean;
   readonly message: TimelineMessage;
 }
 
@@ -133,8 +136,9 @@ const messageItem = (
 
 /**
  * The answer a changed-files row belongs to: the last assistant message of its turn, found walking
- * back from the card and stopping at the turn's user message. t3code keys the card by its turn's
- * assistant message, so tool rows between that answer and the card do not separate them.
+ * back from the card and stopping at the turn's input (the user's message or a brain input). t3code
+ * keys the card by its turn's assistant message, so tool rows between that answer and the card do
+ * not separate them.
  */
 const answerIndexOf = (
   rows: ReadonlyArray<TimelineRow>,
@@ -142,6 +146,10 @@ const answerIndexOf = (
 ): Option.Option<number> => {
   for (let index = cardIndex - 1; index >= 0; index -= 1) {
     const row = rows[index];
+
+    if (row?.kind === "brain-input") {
+      return Option.none();
+    }
 
     if (row?.kind === "message") {
       return row.message.role === "assistant"
@@ -331,7 +339,7 @@ const pendingItems = new Map<string, PendingItem>();
 const pendingItemOf = (send: QueuedSend): PendingItem => {
   const known = pendingItems.get(send.requestId);
 
-  if (known !== undefined) {
+  if (known !== undefined && known.sent === send.sent) {
     return known;
   }
 
@@ -340,6 +348,7 @@ const pendingItemOf = (send: QueuedSend): PendingItem => {
   const item: PendingItem = {
     kind: "pending",
     id,
+    sent: send.sent,
     message: {
       id,
       role: "user",
@@ -373,8 +382,9 @@ const withPending = new WeakMap<
 >();
 
 /**
- * The transcript with the sends still waiting in the outbox after its rows, each a pending row. A
- * send the brain has acknowledged is no longer queued, so its pending row goes as its own row comes.
+ * The transcript with the sends whose own row has not come yet after its rows, each a pending row.
+ * The root takes a send out of the list when its own row or the brain's queue shows it, not when the
+ * brain acknowledges it, so the row never blinks out between the two.
  */
 export const withPendingSends = (
   transcript: Transcript,

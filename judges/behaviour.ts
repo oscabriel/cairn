@@ -2125,8 +2125,8 @@ try {
         await page.keyboard.press("Enter");
         await page.waitForURL(/\/t\/[0-9a-f-]{36}$/u, { timeout: 10_000 });
 
-        // While the socket holds the launch, its words wait in the outbox: a pending row, marked
-        // not yet sent, shows them before the brain has them.
+        // While the launch waits (in the outbox, then behind its workspace), a pending row shows
+        // its words until the thread's own row takes its place.
         const pendingFirst = await page
           .getByTestId("pending-message")
           .filter({ hasText: words })

@@ -40,6 +40,8 @@ export const connectingModel: Model = {
   outboxAttempt: {},
   outboxResend: [],
   sentTurns: {},
+  outboxSince: {},
+  outboxEchoes: [],
   outboxAdopted: [],
   outboxLeft: [],
   notice: Option.none(),

@@ -19,6 +19,7 @@ import { AppRoute } from "./Route.ts";
 import { Model as SettingsModel } from "./settings/Model.ts";
 import { BootData } from "./shell/ShellStore.ts";
 import { Model as SidebarModel } from "./sidebar/Model.ts";
+import { QueuedSend } from "./timeline/Model.ts";
 
 /**
  * A turn handed to the outbox, kept until the brain has it so a refusal can put it back in the
@@ -35,6 +36,22 @@ export const SentTurn = Schema.Struct({
 });
 
 export type SentTurn = typeof SentTurn.Type;
+
+/**
+ * A send (or a launch's first message) the brain acknowledged whose own row has not reached its
+ * thread's transcript yet: its pending row stays, marked sent, until that row or the brain's queue
+ * shows it, or the page leaves the thread.
+ */
+export const AwaitedSend = Schema.Struct({
+  threadId: Schema.String,
+  send: QueuedSend,
+  /** The newest entry its thread showed before it was sent: its own row comes after it. */
+  since: Schema.Option(Schema.Int),
+  /** A launch's first message: it goes if the launch fails, since no row will come. */
+  launch: Schema.Boolean,
+});
+
+export type AwaitedSend = typeof AwaitedSend.Type;
 
 /** The root Model. */
 export const Model = Schema.Struct({
@@ -59,6 +76,14 @@ export const Model = Schema.Struct({
   outboxResend: Schema.Array(Schema.String),
   /** Turns not yet settled by the brain, by outbox key. Kept in memory only. */
   sentTurns: Schema.Record(Schema.String, SentTurn),
+  /**
+   * The newest entry id each queued send's thread showed when this tab first saw the send queued, by
+   * outbox key: its own row is a user row past it, so an earlier row with the same words is not it.
+   * Kept in memory only.
+   */
+  outboxSince: Schema.Record(Schema.String, Schema.Int),
+  /** Acknowledged sends still drawn as pending rows, oldest first. Kept in memory only. */
+  outboxEchoes: Schema.Array(AwaitedSend),
   /**
    * Keys of the items another tab queued, folded in from storage after this page started. This tab
    * sends them too, but a refused turn is the queuing tab's to put back: it alone has the record.

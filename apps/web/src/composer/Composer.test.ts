@@ -397,7 +397,8 @@ const viewWith = (live: string) =>
       {
         id: 1,
         conversationId: 1,
-        kind: "pi.user",
+        kind: "cairn.user",
+        data: { from: "owner@loopback", attachments: [] },
         model: [
           {
             role: "user",
@@ -412,6 +413,24 @@ const viewWith = (live: string) =>
         kind: "pi.assistant",
         model: [
           { role: "assistant", content: [{ type: "text", text: "Done." }] },
+        ],
+      },
+      {
+        // A brain input: a subagent's question, which the user never typed.
+        id: 3,
+        conversationId: 1,
+        kind: "pi.user",
+        model: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: 'Subagent "Probe" asks: which port?\nAnswer with subagent_reply, or escalate it to the user.',
+              },
+            ],
+            timestamp: 3,
+          },
         ],
       },
     ],
@@ -432,7 +451,7 @@ const contextOf = (conversation: ConversationView) =>
   });
 
 describe("prompt history", () => {
-  it("recalls the user's prompt from the thread's view with the up arrow", () => {
+  it("recalls the user's own prompt from the thread's view with the up arrow, not a brain input after it", () => {
     const informed = inform(onThread, contextOf(viewWith(""))).model;
 
     const recalled = update(

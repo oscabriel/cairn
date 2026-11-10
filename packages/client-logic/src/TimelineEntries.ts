@@ -814,6 +814,47 @@ const readEntry = (entry: Entry): EntryReading => {
   return reading;
 };
 
+/** One of the user's own prompts as a send carries it: its words, attachment ids and skills. */
+export interface UserPrompt {
+  readonly entryId: number;
+  readonly text: string;
+  readonly attachments: ReadonlyArray<string>;
+  readonly skills: ReadonlyArray<string>;
+}
+
+/**
+ * The user's own prompts (`cairn.user` entries naming their sender) among `entries` past entry
+ * `after`, newest first: what a queued send's own row is found by. It reads from the newest entry
+ * back and stops at `after`, so it costs only the entries written since.
+ */
+export const userPromptsAfter = (
+  entries: ReadonlyArray<Entry>,
+  after: number
+): ReadonlyArray<UserPrompt> => {
+  const prompts: Array<UserPrompt> = [];
+
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+
+    if (entry === undefined || entry.id <= after) {
+      break;
+    }
+
+    const reading = readEntry(entry);
+
+    if (Predicate.isTagged(reading, "User") && reading.sender === "user") {
+      prompts.push({
+        entryId: entry.id,
+        text: reading.reading.text,
+        attachments: reading.attachments.map(({ id }) => id),
+        skills: reading.reading.skills,
+      });
+    }
+  }
+
+  return prompts;
+};
+
 const assistantText = (message: AssistantMessage): string =>
   Array.getSomes(message.content.map((part) => decodeText(part)))
     .map((part) => part.text)

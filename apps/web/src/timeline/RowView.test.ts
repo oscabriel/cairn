@@ -135,7 +135,7 @@ const brainInputs = Schema.decodeSync(ConversationView)({
   docs: {},
 });
 
-const pendingRow = (): ListItem => {
+const pendingRow = (sent = false): ListItem => {
   const item = withPendingSends(
     transcriptOf(
       THREAD_ID,
@@ -150,6 +150,7 @@ const pendingRow = (): ListItem => {
         attachments: [],
         attachmentNames: [],
         skillRefs: [],
+        sent,
       },
     ]
   ).items.at(-1);
@@ -222,10 +223,23 @@ describe("a pending row", () => {
       Scene.expect(Scene.selector("[data-user-message-body]")).toHaveText(
         "keep the budget under $5"
       ),
-      Scene.expect(Scene.testId("not-sent")).toHaveText("Not sent yet"),
+      Scene.expect(Scene.testId("pending-state")).toHaveText("Not sent yet"),
       Scene.expectAll(Scene.all.testId("pending-message")).toHaveCount(1),
       Scene.expectAll(Scene.all.testId("user-message")).toHaveCount(0),
       Scene.expectAll(Scene.all.testId("message-copy")).toHaveCount(0),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
+
+  it("says the words are sent once the brain has them and their own row has not come", () => {
+    Scene.scene(
+      nextConfig(pendingRow(true)),
+      Scene.given(null),
+      Scene.expect(Scene.testId("pending-state")).toHaveText("Sent"),
+      Scene.expectAll(Scene.all.testId("pending-message")).toHaveCount(1),
+      Scene.expectAll(Scene.all.testId("user-message")).toHaveCount(0),
       Scene.tap(({ commands }) => {
         expect(commands).toHaveLength(0);
       })

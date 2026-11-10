@@ -41,8 +41,9 @@
 //   drafts-separate  a thread's draft stays with the thread and out of the hero;
 //   hero-launch      20 sends from the hero, each started without a project (every seeded project
 //                    has a project thread by then, which the hero opens rather than replaces, ADR
-//                    0048), each land on `/t/<id>` and show the sent words in a
-//                    user row, and "This thread does not exist." never appears, not even for one
+//                    0048), each land on `/t/<id>` and show the sent words first in a pending
+//                    row while the launch is held, then in a user row the brain echoed, and
+//                    "This thread does not exist." never appears, not even for one
 //                    mutation (a DOM observer watches the whole time; the seed's flash was short).
 //                    The socket holds each `thread.launch` frame for 500 ms, so the page always
 //                    subscribes before the launch reaches the in-process brain, as on a slow link;
@@ -2092,6 +2093,7 @@ try {
 
       const launches = 20;
       let landed = 0;
+      let pending = 0;
 
       const missingSeen = async () =>
         await page.locator("html").getAttribute("data-cairn-judge-missing");
@@ -2123,6 +2125,22 @@ try {
         await page.keyboard.press("Enter");
         await page.waitForURL(/\/t\/[0-9a-f-]{36}$/u, { timeout: 10_000 });
 
+        // While the launch waits (in the outbox, then behind its workspace), a pending row shows
+        // its words until the thread's own row takes its place.
+        const pendingFirst = await page
+          .getByTestId("pending-message")
+          .filter({ hasText: words })
+          .first()
+          .waitFor({ state: "visible", timeout: 450 })
+          .then(
+            () => true,
+            () => false
+          );
+
+        if (pendingFirst) {
+          pending += 1;
+        }
+
         const shown = await page
           .locator('[data-message-role="user"]', { hasText: words })
           .first()
@@ -2139,9 +2157,10 @@ try {
         landed += 1;
       }
 
-      return `${landed}/${launches} landed, missing seen ${await missingSeen()} times`;
+      return `${landed}/${launches} landed, ${pending}/${launches} pending first, missing seen ${await missingSeen()} times`;
     },
-    (detail) => detail === "20/20 landed, missing seen 0 times"
+    (detail) =>
+      detail === "20/20 landed, 20/20 pending first, missing seen 0 times"
   );
 
   await check(

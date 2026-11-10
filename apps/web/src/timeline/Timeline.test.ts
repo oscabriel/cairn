@@ -8,19 +8,20 @@ import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
 
 import coding from "../../../../judges/fixtures/transcripts/coding.json" with { type: "json" };
-import { OutboxItem } from "../connection/Outbox.ts";
+import { OutboxItem, outboxKey } from "../connection/Outbox.ts";
 import { latestCheckpointTurn } from "../diff/Toggle.ts";
 import { Message as RootMessage } from "../Message.ts";
+import type { Model as RootModel } from "../Model.ts";
 import { Message as ThreadMessage } from "../page/thread/Message.ts";
 import { AppRoute } from "../Route.ts";
-import { connectingModel } from "../TestFixtures.ts";
+import { connectingModel, launchItem } from "../TestFixtures.ts";
 import { update as rootUpdate } from "../Update.ts";
 import { growReply, startReply, syntheticThread } from "./harness/Fixture.ts";
 import { Message as ListMessage } from "./list/Message.ts";
 import { Message } from "./Message.ts";
 import { initial, isFollowingEnd } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { itemKeys, transcriptOf } from "./Rows.ts";
+import { itemKeys, transcriptOf, withPendingSends } from "./Rows.ts";
 import { afterView, switchThread, update } from "./Update.ts";
 
 const codingState: ThreadViewState = {
@@ -341,6 +342,223 @@ describe("paging and Retry", () => {
   });
 });
 
+/** The user's own `text` as the brain records it, as entry `id`. */
+const userEntry = (id: number, text: string): Entry =>
+  Schema.decodeSync(Entry)({
+    id,
+    conversationId: 3,
+    kind: "cairn.user",
+    data: { from: "owner@loopback", attachments: [] },
+    model: [
+      {
+        role: "user",
+        content: [{ type: "text", text }],
+        timestamp: 1_792_673_900_000 + id,
+      },
+    ],
+  });
+
+/** The coding thread's view with `entries` after its own. */
+const viewWith = (...entries: ReadonlyArray<Entry>): ThreadViewState => ({
+  ...codingState,
+  view: {
+    ...codingState.view,
+    entries: [...codingState.view.entries, ...entries],
+  },
+});
+
+/** The page after its thread's view became `state`. */
+const showing = (model: RootModel, state: ThreadViewState): RootModel =>
+  rootUpdate(
+    { ...model, thread: { ...model.thread, view: Option.some(state) } },
+    RootMessage.DismissedNotice()
+  ).model;
+
+const acknowledge = (model: RootModel, key: string): RootModel =>
+  rootUpdate(model, RootMessage.AcknowledgedOutboxItem({ epoch: 0, key }))
+    .model;
+
+/** Each pending send the thread page was told of, and whether the brain has it. */
+const sendsOf = (model: RootModel) =>
+  model.thread.timeline.queuedSends.map((send) => [send.requestId, send.sent]);
+
+describe("a send waiting in the outbox", () => {
+  const threadId = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+  const queued = OutboxItem.Send({
+    input: SendInput.make({
+      threadId: ThreadId.make(threadId),
+      input: {
+        requestId: RequestId.make("req-pending-1"),
+        text: "keep the budget under $5",
+        attachments: [],
+        skillRefs: [],
+      },
+      whenBusy: "followUp",
+    }),
+  });
+
+  // The same words sent once before: the queued send is not that row.
+  const sentBefore = userEntry(55, "keep the budget under $5");
+  const echo = userEntry(60, "keep the budget under $5");
+
+  /** The page on the thread showing `state`, with the send in the outbox. */
+  const onThread = (state: Option.Option<ThreadViewState>): RootModel =>
+    rootUpdate(
+      {
+        ...connectingModel,
+        route: AppRoute.Thread({ threadId: ThreadId.make(threadId) }),
+        thread: {
+          ...connectingModel.thread,
+          threadId: Option.some(ThreadId.make(threadId)),
+          view: state,
+        },
+        outbox: [queued],
+        outboxStored: [queued],
+      },
+      RootMessage.DismissedNotice()
+    ).model;
+
+  it("shows as a pending user row after the thread's rows", () => {
+    // The socket is down: the send waits in the outbox, and the thread page is told of it.
+    const waiting = rootUpdate(
+      {
+        ...connectingModel,
+        route: AppRoute.Thread({ threadId: ThreadId.make(threadId) }),
+        outbox: [queued],
+        outboxStored: [queued],
+      },
+      RootMessage.DismissedNotice()
+    ).model;
+
+    const sends = waiting.thread.timeline.queuedSends;
+
+    const transcript = withPendingSends(
+      transcriptOf(
+        threadId,
+        Option.some(codingState),
+        initial.ui,
+        Option.none()
+      ),
+      sends
+    );
+
+    const last = transcript.items.at(-1);
+
+    assert.deepStrictEqual(
+      last?.kind === "pending"
+        ? [
+            last.id,
+            last.sent,
+            last.message.role,
+            last.message.sender,
+            last.message.text,
+          ]
+        : [],
+      [
+        "pending:req-pending-1",
+        false,
+        "user",
+        "user",
+        "keep the budget under $5",
+      ]
+    );
+  });
+
+  it("stays past the acknowledgement, marked sent, until its own row reaches the transcript", () => {
+    const waiting = onThread(Option.some(viewWith(sentBefore)));
+
+    assert.deepStrictEqual(sendsOf(waiting), [["req-pending-1", false]]);
+
+    const acknowledged = acknowledge(waiting, "req-pending-1");
+
+    assert.deepStrictEqual(sendsOf(acknowledged), [["req-pending-1", true]]);
+
+    const echoed = showing(acknowledged, viewWith(sentBefore, echo));
+
+    assert.deepStrictEqual(sendsOf(echoed), []);
+    assert.deepStrictEqual(echoed.outboxEchoes, []);
+  });
+
+  it("goes when its own row comes before the acknowledgement, and the acknowledgement brings nothing back", () => {
+    const waiting = onThread(Option.some(viewWith(sentBefore)));
+    const echoed = showing(waiting, viewWith(sentBefore, echo));
+
+    assert.deepStrictEqual(sendsOf(echoed), []);
+    assert.deepStrictEqual(sendsOf(acknowledge(echoed, "req-pending-1")), []);
+  });
+
+  it("goes once acknowledged when the brain queues it behind a busy run, where the composer lists it", () => {
+    const acknowledged = acknowledge(
+      onThread(Option.some(codingState)),
+      "req-pending-1"
+    );
+
+    const queuedByBrain = showing(acknowledged, {
+      ...codingState,
+      view: {
+        ...codingState.view,
+        docs: {
+          ...codingState.view.docs,
+          "pi.inbox": {
+            items: [
+              {
+                id: 7,
+                mode: "followUp",
+                content: [{ type: "text", text: "keep the budget under $5" }],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    assert.deepStrictEqual(sendsOf(queuedByBrain), []);
+    assert.deepStrictEqual(queuedByBrain.outboxEchoes, []);
+  });
+
+  it("keeps a launch's first message past the acknowledgement while the thread prepares, until its row comes", () => {
+    const launch = launchItem(threadId);
+
+    const waiting = rootUpdate(
+      {
+        ...connectingModel,
+        route: AppRoute.Thread({ threadId: ThreadId.make(threadId) }),
+        outbox: [launch],
+        outboxStored: [launch],
+      },
+      RootMessage.DismissedNotice()
+    ).model;
+
+    assert.deepStrictEqual(sendsOf(waiting), [[outboxKey(launch), false]]);
+
+    const acknowledged = acknowledge(waiting, outboxKey(launch));
+
+    assert.deepStrictEqual(sendsOf(acknowledged), [[outboxKey(launch), true]]);
+
+    const started = showing(
+      acknowledged,
+      viewWith(userEntry(60, "start here"))
+    );
+
+    assert.deepStrictEqual(sendsOf(started), []);
+  });
+
+  it("is forgotten once acknowledged when the page leaves its thread", () => {
+    const acknowledged = acknowledge(
+      onThread(Option.some(codingState)),
+      "req-pending-1"
+    );
+
+    const left = rootUpdate(
+      { ...acknowledged, route: AppRoute.Hero() },
+      RootMessage.DismissedNotice()
+    ).model;
+
+    assert.deepStrictEqual(left.outboxEchoes, []);
+  });
+});
+
 describe("rows", () => {
   it("lists the recorded coding thread with the history control first", () => {
     const transcript = transcriptOf(
@@ -526,6 +744,88 @@ describe("the changed-files card", () => {
     assert.isTrue(
       transcript.items.some(
         (item) => item.kind === "message" && Option.isSome(item.changedFiles)
+      )
+    );
+  });
+
+  it("stays out of the turn before when a brain input started its turn and no answer ends it", () => {
+    // A wake turn that edits a file and ends on a tool call: its card has no answer of its own.
+    const wake = Schema.decodeSync(Entry)({
+      id: 60,
+      conversationId: 3,
+      kind: "pi.user",
+      model: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Subagent finished." }],
+          timestamp: 1_792_673_900_000,
+        },
+      ],
+    });
+
+    const toolsOnly = Schema.decodeSync(Entry)({
+      id: 61,
+      conversationId: 3,
+      kind: "pi.assistant",
+      model: [
+        {
+          ...coding.entries.find((entry) => entry.id === 43)?.model?.[0],
+          content: [
+            {
+              type: "toolCall",
+              id: "toolu_wake",
+              name: "edit",
+              arguments: { path: "src/wake.ts" },
+            },
+          ],
+          timestamp: 1_792_673_900_001,
+        },
+      ],
+    });
+
+    const wakeCheckpoint = Schema.decodeSync(Entry)({
+      ...checkpointOf(60),
+      id: 62,
+      data: {
+        turn: 2,
+        ref: "refs/cairn/checkpoints/x/turn/2",
+        headOid: null,
+        capturedAt: 2,
+        files: [{ path: "src/wake.ts", additions: 1, deletions: 0 }],
+        moreFiles: 0,
+        userEntryId: 60,
+      },
+    });
+
+    const wakeTurn: ThreadViewState = {
+      ...codingState,
+      view: {
+        ...codingState.view,
+        entries: [...codingState.view.entries, wake, toolsOnly, wakeCheckpoint],
+      },
+    };
+
+    const transcript = transcriptOf(
+      "wake-turn",
+      Option.some(wakeTurn),
+      shown("wake-turn").ui,
+      Option.none()
+    );
+
+    assert.isFalse(
+      transcript.items.some(
+        (item) =>
+          item.kind === "message" &&
+          Option.exists(item.changedFiles, (card) =>
+            card.files.some((file) => file.path === "src/wake.ts")
+          )
+      )
+    );
+    assert.isTrue(
+      transcript.items.some(
+        (item) =>
+          item.kind === "changed-files" &&
+          item.files.some((file) => file.path === "src/wake.ts")
       )
     );
   });

@@ -24,9 +24,16 @@ import type {
   SubagentsItem,
 } from "../../timeline/Subagents.ts";
 
-/** A list item's time, for placing a group; none for the history control and the way back. */
+/**
+ * A list item's time, for placing a group; none for the history control, the way back and a send
+ * not yet sent.
+ */
 const timeOf = (item: ListItem): Option.Option<number> => {
-  if (item.kind === "history" || item.kind === "parent-link") {
+  if (
+    item.kind === "history" ||
+    item.kind === "parent-link" ||
+    item.kind === "pending"
+  ) {
     return Option.none();
   }
 

@@ -99,6 +99,163 @@ const fromNewerBuild = (item: OutboxItem) =>
       )
   );
 
+/** The thread `sendItem` and `visit` name. */
+const THREAD = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+const OTHER_THREAD = "01890a5d-ac96-774b-bcce-b302099a9999";
+
+/** A send of `requestId` to the thread `threadId`. */
+const sendTo = (threadId: string, requestId: string): OutboxItem =>
+  OutboxItem.match(sendItem(requestId), {
+    Send: ({ input }) =>
+      OutboxItem.Send({
+        input: { ...input, threadId: ThreadId.make(threadId) },
+      }),
+    Dispatch: (item) => OutboxItem.Dispatch(item),
+    Launch: (item) => OutboxItem.Launch(item),
+  });
+
+describe("the outbox's lanes", () => {
+  const held = launchItem(OTHER_THREAD);
+
+  const heldKey = outboxKey(held);
+
+  it("sends to another thread while a launch is held, and keeps one item in flight per thread", () => {
+    const later = sendTo(OTHER_THREAD, "request-9");
+
+    const queued = update(
+      {
+        ...liveModel(0),
+        outbox: [held],
+        outboxStored: [held],
+        outboxInFlight: [heldKey],
+      },
+      Message.QueuedOutboxItem({ item: first })
+    );
+
+    // A send to the held thread waits behind its launch.
+    const behind = update(
+      queued.model,
+      Message.QueuedOutboxItem({ item: later })
+    );
+
+    const acknowledged = update(
+      behind.model,
+      Message.AcknowledgedOutboxItem({ epoch: 0, key: heldKey })
+    );
+
+    expect({
+      queued: names(queued),
+      queuedInFlight: queued.model.outboxInFlight,
+      behind: names(behind),
+      acknowledged: names(acknowledged),
+      acknowledgedInFlight: acknowledged.model.outboxInFlight,
+    }).toStrictEqual({
+      queued: [SaveOutbox.name, SendOutboxItem.name],
+      queuedInFlight: [heldKey, "request-1"],
+      behind: [SaveOutbox.name],
+      acknowledged: [SaveOutbox.name, SendOutboxItem.name],
+      acknowledgedInFlight: ["request-1", "request-9"],
+    });
+  });
+
+  it("sends a shell command beside a thread's send, and holds one naming a launching thread behind its launch", () => {
+    const launching = launchItem(THREAD);
+
+    const visitIt = OutboxItem.Dispatch({
+      command: visit(
+        "01890a5d-ac96-774b-bcce-b302099a0000",
+        "2026-10-24T10:00:00Z"
+      ),
+    });
+
+    const elsewhere = OutboxItem.Dispatch({
+      command: ThreadVisit.make({
+        commandId: CommandId.make("01890a5d-ac96-774b-bcce-b302099a0001"),
+        threadId: ThreadId.make(OTHER_THREAD),
+        at: DateTime.makeUnsafe("2026-10-24T10:00:01Z"),
+      }),
+    });
+
+    // The shell stream's item gives the outbox its turn to send.
+    const woken = update(
+      {
+        ...liveModel(0),
+        outbox: [launching, visitIt, elsewhere],
+        outboxStored: [launching, visitIt, elsewhere],
+        outboxInFlight: [outboxKey(launching)],
+      },
+      Message.ReceivedShellItem({ epoch: 0, item: synchronizedItem })
+    );
+
+    expect(woken.model.outboxInFlight).toStrictEqual([
+      outboxKey(launching),
+      outboxKey(elsewhere),
+    ]);
+
+    const acknowledged = update(
+      woken.model,
+      Message.AcknowledgedOutboxItem({ epoch: 0, key: outboxKey(launching) })
+    );
+
+    // The launch is in: the visit joins the shell's lane, behind the command in flight there.
+    expect(acknowledged.model.outboxInFlight).toStrictEqual([
+      outboxKey(elsewhere),
+    ]);
+
+    const next = update(
+      acknowledged.model,
+      Message.AcknowledgedOutboxItem({ epoch: 0, key: outboxKey(elsewhere) })
+    );
+
+    expect(next.model.outboxInFlight).toStrictEqual([outboxKey(visitIt)]);
+  });
+
+  it("holds only the lane the brain answered 'not now' in, while its resend waits", () => {
+    const failed = update(
+      {
+        ...liveModel(0),
+        outbox: [first],
+        outboxStored: [first],
+        outboxInFlight: ["request-1"],
+      },
+      Message.FailedOutboxItem({
+        epoch: 0,
+        key: "request-1",
+        retryable: true,
+        transport: false,
+        message: "The brain is starting.",
+      })
+    );
+
+    const other = sendTo(OTHER_THREAD, "request-9");
+
+    const queued = update(
+      failed.model,
+      Message.QueuedOutboxItem({ item: other })
+    );
+
+    const same = update(
+      queued.model,
+      Message.QueuedOutboxItem({ item: second })
+    );
+
+    expect({
+      failed: names(failed),
+      queued: names(queued),
+      same: names(same),
+      inFlight: same.model.outboxInFlight,
+      resend: same.model.outboxResend,
+    }).toStrictEqual({
+      failed: [WaitToResend.name],
+      queued: [SaveOutbox.name, SendOutboxItem.name],
+      same: [SaveOutbox.name],
+      inFlight: ["request-9"],
+      resend: ["request-1"],
+    });
+  });
+});
+
 describe("the outbox", () => {
   it("sends a queued item while live, and drops it when the brain acknowledges it", () => {
     story(
@@ -107,7 +264,7 @@ describe("the outbox", () => {
       message(Message.QueuedOutboxItem({ item: first })),
       model((current) => {
         expect(current.outbox).toStrictEqual([first]);
-        expect(current.outboxInFlight).toStrictEqual(Option.some("request-1"));
+        expect(current.outboxInFlight).toStrictEqual(["request-1"]);
       }),
       Command.expectExact(
         SaveOutbox({ base: [], outbox: [first] }),
@@ -120,7 +277,7 @@ describe("the outbox", () => {
       ),
       model((current) => {
         expect(current.outbox).toStrictEqual([]);
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       }),
       Command.expectExact(SaveOutbox({ base: [first], outbox: [] })),
       Command.resolve(SaveOutbox, savedAs([]))
@@ -134,7 +291,7 @@ describe("the outbox", () => {
         ...liveModel(0),
         outbox: [first],
         outboxStored: [first],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       }),
       message(Message.QueuedOutboxItem({ item: second })),
       Command.expectExact(
@@ -168,7 +325,7 @@ describe("the outbox", () => {
       message(Message.AcquiredConnection()),
       Command.resolve(SayHello, Message.SucceededHello({ epoch: 0, hello })),
       model((current) => {
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       })
     );
   });
@@ -198,7 +355,7 @@ describe("the outbox", () => {
       ),
       model((current) => {
         expect(current.outbox).toStrictEqual([first]);
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       }),
       message(Message.AcquiredConnection()),
       Command.resolve(SayHello, Message.SucceededHello({ epoch: 1, hello })),
@@ -223,7 +380,7 @@ describe("the outbox", () => {
         ...liveModel(0),
         outbox: [first, second],
         outboxStored: [first, second],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       }),
       message(
         Message.FailedOutboxItem({
@@ -257,7 +414,7 @@ describe("the outbox", () => {
       ),
       model((current) => {
         expect(current.outbox).toStrictEqual([second]);
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       }),
       // Nothing else is queued and the socket stays up: the item is sent again on its own.
       Command.expectExact(
@@ -273,7 +430,7 @@ describe("the outbox", () => {
         Message.AcknowledgedOutboxItem({ epoch: 0, key: "request-2" })
       ),
       model((current) => {
-        expect([current.outbox, current.outboxAttempt]).toStrictEqual([[], 0]);
+        expect([current.outbox, current.outboxAttempt]).toStrictEqual([[], {}]);
       }),
       Command.resolve(SaveOutbox, savedAs([]))
     );
@@ -285,7 +442,7 @@ describe("the outbox", () => {
         ...liveModel(0),
         outbox: [first],
         outboxStored: [first],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       },
       Message.FailedOutboxItem({
         epoch: 0,
@@ -324,14 +481,14 @@ describe("the outbox", () => {
       given({
         ...liveModel(0),
         outbox: [second],
-        outboxInFlight: Option.some("request-2"),
+        outboxInFlight: ["request-2"],
       }),
       message(Message.ElapsedResend({ epoch: 0, key: "request-1" })),
       Command.expectNone(),
       message(Message.ElapsedResend({ epoch: 0, key: "request-2" })),
       Command.expectNone(),
       model((current) => {
-        expect(current.outboxInFlight).toStrictEqual(Option.some("request-2"));
+        expect(current.outboxInFlight).toStrictEqual(["request-2"]);
       })
     );
   });
@@ -352,10 +509,10 @@ describe("the outbox", () => {
       "2026-10-24T10:00:08Z"
     );
 
-    const inFlight = Option.some<string>(sent.commandId);
+    const inFlight: ReadonlyArray<string> = [sent.commandId];
 
     const queued = enqueueDispatch(
-      enqueueDispatch([first], sent, Option.none()),
+      enqueueDispatch([first], sent, []),
       stale,
       inFlight
     );
@@ -659,7 +816,7 @@ describe("the outbox in two tabs", () => {
 
         const heardAgain = yield* hear({
           ...heard.model,
-          outboxInFlight: Option.none(),
+          outboxInFlight: [],
         });
 
         return {
@@ -846,7 +1003,7 @@ describe("this tab's turns in two tabs", () => {
           })
         );
 
-        return refused.model.thread.timeline.queuedPrompts;
+        return refused.model.thread.timeline.queuedSends;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
@@ -1061,7 +1218,7 @@ describe("a turn the brain refuses", () => {
         ...liveModel(0),
         outbox: [first],
         outboxStored: [first],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       }),
       message(
         Message.FailedOutboxItem({

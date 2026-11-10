@@ -236,6 +236,25 @@ describe("labels", () => {
       "Read src/a.ts"
     );
   });
+
+  it.each([
+    ["workflow_plan", "Planned a workflow"],
+    ["ask_user", "Asked you"],
+    ["ask_parent", "Asked the parent"],
+    ["subagent_spawn", "Proposed a subagent"],
+    ["subagent_status", "Checked on subagents"],
+    ["goal_check", "Checked a criterion"],
+    ["submit_result", "Handed in the result"],
+    ["models", "Listed the models"],
+  ])("names Cairn's own %s in words", (name, label) => {
+    assert.strictEqual(
+      workEntryDisplayLabel(
+        entry("c", { toolName: Option.some(name), action: "other" }),
+        Option.none()
+      ),
+      label
+    );
+  });
 });
 
 describe(liveThoughtLine, () => {

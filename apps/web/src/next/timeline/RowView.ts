@@ -1,9 +1,12 @@
 // The `next` transcript's rows (plan look track L7, surfaces note S12), in the Stone look round 1
 // drew: the user's words in a raised bubble with its time, the model's answer as plain prose, the
-// work as quiet lines in the faint ink with their glyphs, and a settled turn folded behind one line
-// that says how long it worked and what it did ("Worked for 3m 41s · 4 edits · 9 reads · 2
-// commands"). Colour is left to status: a failed call's glyph and words take the failed tone, and
-// nothing else has a hue. The rows are classic's (`timeline/RowView.ts`, a port of t3code's
+// work as quiet lines in the faint ink with their glyphs, an input the brain wrote (a wake, a
+// subagent's question) as one more quiet line, never a bubble, a send whose own row has not come
+// yet as the user's bubble marked "Not sent yet" (or "Sent", once the brain has it), and a settled
+// turn folded behind one line that says how
+// long it worked and what it did ("Worked for 3m 41s · 4 edits · 9 reads · 2 commands"). Colour
+// is left to status: a failed call's glyph and words take the failed tone, and nothing else has a
+// hue. The rows are classic's (`timeline/RowView.ts`, a port of t3code's
 // `MessagesTimeline.tsx` and `WorkLog.tsx`): the same items, Messages and hooks
 // (`data-timeline-row-kind`, `data-message-role`, the test ids), so the list, the judges and the
 // update read them unchanged.
@@ -38,6 +41,7 @@ import {
   Eye,
   FilePen,
   Globe,
+  Info,
   Minimize2,
   Paperclip,
   RotateCcw,
@@ -205,27 +209,50 @@ const TEXT_BUTTON_CLASS = classNames(
   FOCUS_RING
 );
 
+/** Under a send still in the outbox, in place of its time and copy button. */
+const NOT_SENT = "Not sent yet";
+
+/** Under a send the brain acknowledged whose own row has not come yet. */
+const SENT = "Sent";
+
+/**
+ * The user's message in its bubble, with its time and copy button below; a send whose own row has
+ * not come yet draws the same bubble, dimmed, with `pendingLabel` ("Not sent yet" while it waits in
+ * the outbox, "Sent" once the brain has it) in their place.
+ */
 const userMessageView = (
   h: HtmlBuilder<Message>,
   rowId: string,
   message: TimelineMessage,
-  context: RowContext
+  context: RowContext,
+  pendingLabel: Option.Option<string> = Option.none()
 ): Html => {
+  const pending = Option.isSome(pendingLabel);
   const collapsible = shouldCollapseUserMessage(message.text);
   const collapsed = collapsible && !context.expanded;
   const chips = userChips(h, message);
 
   return frame(
     h,
-    "message",
+    pending ? "pending" : "message",
     "pb-(--space-4)",
     [
       h.div(
-        [h.Class("group flex flex-col items-end gap-(--space-1)")],
+        [
+          h.Class(
+            classNames(
+              "group flex flex-col items-end gap-(--space-1)",
+              pending ? "opacity-60" : ""
+            )
+          ),
+        ],
         [
           h.div(
             [
-              h.DataAttribute("testid", "user-message"),
+              h.DataAttribute(
+                "testid",
+                pending ? "pending-message" : "user-message"
+              ),
               h.Class(
                 "relative max-w-[85%] rounded-(--radius-large) border border-stroke-1 bg-surface-raised px-(--space-3) py-(--space-2) text-ink-1 sm:max-w-[78%]"
               ),
@@ -287,20 +314,31 @@ const userMessageView = (
                 "flex items-center justify-end gap-(--space-1) pe-(--space-1)"
               ),
             ],
-            [
-              time(h, message.createdAt),
-              copyButton(
-                h,
-                rowId,
-                message.text,
-                Option.contains(context.copiedRowId, rowId)
-              ),
-            ]
+            pending
+              ? [
+                  h.span(
+                    [
+                      h.DataAttribute("testid", "pending-state"),
+                      h.Class(classNames("text-ink-3", TYPE.micro)),
+                    ],
+                    [Option.getOrElse(pendingLabel, () => NOT_SENT)]
+                  ),
+                ]
+              : [
+                  time(h, message.createdAt),
+                  copyButton(
+                    h,
+                    rowId,
+                    message.text,
+                    Option.contains(context.copiedRowId, rowId)
+                  ),
+                ]
           ),
         ]
       ),
     ],
-    Option.some("user")
+    // A pending send is not yet the thread's: the judges' user rows are the ones the brain echoed.
+    pending ? Option.none() : Option.some("user")
   );
 };
 
@@ -889,6 +927,73 @@ const compactionView = (
     ),
   ]);
 
+/**
+ * An input the brain wrote on its own (a wake, a subagent's question, a brief): a quiet line in
+ * the notice row's frame, with its time and no copy button, never the user's bubble. A long one
+ * folds as a long user message does.
+ */
+const brainInputView = (
+  h: HtmlBuilder<Message>,
+  row: Extract<TimelineRow, { readonly kind: "brain-input" }>,
+  context: RowContext
+): Html => {
+  const collapsible = shouldCollapseUserMessage(row.message.text);
+  const collapsed = collapsible && !context.expanded;
+
+  return frame(h, "brain-input", "", [
+    workLogBlock(h, "standalone", false, [
+      h.div(
+        [
+          h.DataAttribute("testid", "brain-input"),
+          h.Class("flex flex-col gap-(--space-1)"),
+        ],
+        [
+          h.div(
+            [h.Class(STILL_CLASS)],
+            [
+              workLine(
+                h,
+                glyph(h, [Info, "info"], false),
+                h.span(
+                  [
+                    h.Class(
+                      classNames(
+                        "block whitespace-pre-wrap text-ink-3",
+                        collapsed
+                          ? "max-h-[8rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"
+                          : ""
+                      )
+                    ),
+                  ],
+                  [row.message.text]
+                ),
+                [time(h, row.createdAt)],
+                true
+              ),
+            ]
+          ),
+          collapsible
+            ? h.div(
+                [h.Class("ms-(--space-6)")],
+                [
+                  h.button(
+                    [
+                      h.Type("button"),
+                      h.AriaExpanded(!collapsed),
+                      h.OnClick(Message.ToggledUserMessage({ rowId: row.id })),
+                      h.Class(TEXT_BUTTON_CLASS),
+                    ],
+                    [collapsed ? "Show more" : "Show less"]
+                  ),
+                ]
+              )
+            : h.empty,
+        ]
+      ),
+    ]),
+  ]);
+};
+
 const RETRY_CLASS = classNames(
   "inline-flex h-7 cursor-pointer items-center gap-(--space-1-5) rounded-(--radius-small) border border-stroke-2 bg-select-1 px-(--space-2) text-ink-1 hover:bg-select-2 [&_svg]:size-3.5",
   TYPE.small,
@@ -1041,6 +1146,15 @@ export const rowView = (
         row.message.role === "user"
           ? userMessageView(h, row.id, row.message, context)
           : assistantMessageView(h, row, context),
+      "brain-input": (row) => brainInputView(h, row, context),
+      pending: (row) =>
+        userMessageView(
+          h,
+          row.id,
+          row.message,
+          context,
+          Option.some(row.sent ? SENT : NOT_SENT)
+        ),
       "assistant-meta": (row) =>
         frame(h, "assistant-meta", "pb-(--space-4)", [
           metaView(

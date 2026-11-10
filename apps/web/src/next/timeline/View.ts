@@ -18,11 +18,16 @@ import { icon } from "../../composer/Icon.ts";
 import * as List from "../../timeline/list/View.ts";
 import { Message } from "../../timeline/Message.ts";
 import type { Model } from "../../timeline/Model.ts";
-import { isFollowingEnd, promptKey } from "../../timeline/Model.ts";
+import {
+  isFollowingEnd,
+  isQueuedPrompt,
+  promptKey,
+} from "../../timeline/Model.ts";
 import {
   estimatedHeightOf,
   setRecent,
   transcriptOf,
+  withPendingSends,
 } from "../../timeline/Rows.ts";
 import type { ListItem, Transcript } from "../../timeline/Rows.ts";
 import type { RowContext } from "../../timeline/RowView.ts";
@@ -127,7 +132,8 @@ const itemView = (
       ? Option.filter(
           Option.fromUndefinedOr(transcript.prompts.get(item.entry.turnId)),
           (message) =>
-            !model.queuedPrompts.includes(
+            !isQueuedPrompt(
+              model.queuedSends,
               promptKey(
                 message.text,
                 message.attachments.map(({ id }) => id),
@@ -243,9 +249,13 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
       inputs.workspaceRoot
     );
 
-    const transcript: Transcript = Option.isSome(inputs.subagents)
-      ? withSubagents(derived, inputs.state, model)
-      : derived;
+    // The sends still in the outbox come last, as pending rows, until the brain has them.
+    const transcript: Transcript = withPendingSends(
+      Option.isSome(inputs.subagents)
+        ? withSubagents(derived, inputs.state, model)
+        : derived,
+      model.queuedSends
+    );
 
     const expandedRows = new Set([
       ...model.ui.expandedUserMessageIds,

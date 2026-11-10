@@ -1,6 +1,7 @@
 // The list the transcript scrolls: client-logic's timeline rows for the page's thread view, kept
 // stable across derivations (an unchanged row keeps its object, so its keyed lazy view is reused),
-// with the "Load earlier turns" control first while older entries remain. Also each row's estimated
+// with the "Load earlier turns" control first while older entries remain and the sends whose own
+// row has not come yet last, each a pending row. Also each row's estimated
 // height before it is measured, bucketed by length as t3code's `getItemType` does
 // (github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.tsx:1616-1627 at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92), so one long reply does not skew every estimate.
@@ -24,7 +25,7 @@ import {
 } from "@cairn/client-logic/TimelineRows";
 import { Option } from "effect";
 
-import type { ThreadUi } from "./Model.ts";
+import type { QueuedSend, ThreadUi } from "./Model.ts";
 import { SAVED_THREAD_LIMIT } from "./Model.ts";
 import type { ParentLinkItem, SubagentsItem } from "./Subagents.ts";
 
@@ -48,11 +49,26 @@ export type MessageItem = Extract<TimelineRow, { readonly kind: "message" }> & {
   readonly changedFiles: Option.Option<ChangedFilesRow>;
 };
 
+/**
+ * A send whose own row has not come yet, drawn as the user's message it will become: marked not yet
+ * sent while it waits in the outbox, and sent once the brain acknowledged it, until the thread's own
+ * row (or the brain's queue) takes its place.
+ */
+export interface PendingItem {
+  readonly kind: "pending";
+  /** `pending:<requestId>`. */
+  readonly id: string;
+  /** The brain acknowledged it. */
+  readonly sent: boolean;
+  readonly message: TimelineMessage;
+}
+
 /** One item of the scroll list; the subagent items only on the `next` views (`Subagents.ts`). */
 export type ListItem =
   | Exclude<TimelineRow, { readonly kind: "message" }>
   | MessageItem
   | HistoryItem
+  | PendingItem
   | SubagentsItem
   | ParentLinkItem;
 
@@ -120,8 +136,9 @@ const messageItem = (
 
 /**
  * The answer a changed-files row belongs to: the last assistant message of its turn, found walking
- * back from the card and stopping at the turn's user message. t3code keys the card by its turn's
- * assistant message, so tool rows between that answer and the card do not separate them.
+ * back from the card and stopping at the turn's input (the user's message or a brain input). t3code
+ * keys the card by its turn's assistant message, so tool rows between that answer and the card do
+ * not separate them.
  */
 const answerIndexOf = (
   rows: ReadonlyArray<TimelineRow>,
@@ -129,6 +146,10 @@ const answerIndexOf = (
 ): Option.Option<number> => {
   for (let index = cardIndex - 1; index >= 0; index -= 1) {
     const row = rows[index];
+
+    if (row?.kind === "brain-input") {
+      return Option.none();
+    }
 
     if (row?.kind === "message") {
       return row.message.role === "assistant"
@@ -223,7 +244,9 @@ const toggleSet = (ids: ReadonlyArray<string>): ReadonlySet<string> => {
 const promptsOf = (timeline: Timeline): ReadonlyMap<string, TimelineMessage> =>
   new Map(
     timeline.entries.flatMap((entry) =>
-      entry.kind === "message" && entry.message.role === "user"
+      entry.kind === "message" &&
+      entry.message.role === "user" &&
+      entry.message.sender === "user"
         ? [[entry.message.turnId, entry.message] as const]
         : []
     )
@@ -310,6 +333,89 @@ export const transcriptOf = (
   return transcript;
 };
 
+/** One pending item per queued send, kept by request id so an unchanged send keeps its item. */
+const pendingItems = new Map<string, PendingItem>();
+
+const pendingItemOf = (send: QueuedSend): PendingItem => {
+  const known = pendingItems.get(send.requestId);
+
+  if (known !== undefined && known.sent === send.sent) {
+    return known;
+  }
+
+  const id = `pending:${send.requestId}`;
+
+  const item: PendingItem = {
+    kind: "pending",
+    id,
+    sent: send.sent,
+    message: {
+      id,
+      role: "user",
+      sender: "user",
+      text: send.text,
+      turnId: id,
+      entryId: Option.none(),
+      // Not sent yet, so it has no time: the row says so instead.
+      createdAt: 0,
+      updatedAt: 0,
+      streaming: false,
+      attachments: [],
+      attachmentNames: send.attachmentNames,
+      images: [],
+      skills: send.skillRefs,
+    },
+  };
+
+  pendingItems.set(send.requestId, item);
+
+  return item;
+};
+
+/** Each transcript with the sends it was last shown with, so an unchanged pair keeps one copy. */
+const withPending = new WeakMap<
+  Transcript,
+  {
+    readonly sends: ReadonlyArray<QueuedSend>;
+    readonly transcript: Transcript;
+  }
+>();
+
+/**
+ * The transcript with the sends whose own row has not come yet after its rows, each a pending row.
+ * The root takes a send out of the list when its own row or the brain's queue shows it, not when the
+ * brain acknowledges it, so the row never blinks out between the two.
+ */
+export const withPendingSends = (
+  transcript: Transcript,
+  sends: ReadonlyArray<QueuedSend>
+): Transcript => {
+  if (sends.length === 0) {
+    return transcript;
+  }
+
+  const known = withPending.get(transcript);
+
+  if (known?.sends === sends) {
+    return known.transcript;
+  }
+
+  for (const requestId of pendingItems.keys()) {
+    if (!sends.some((send) => send.requestId === requestId)) {
+      pendingItems.delete(requestId);
+    }
+  }
+
+  const pending: Transcript = {
+    ...transcript,
+    items: [...transcript.items, ...sends.map(pendingItemOf)],
+  };
+
+  withPending.set(transcript, { sends, transcript: pending });
+
+  return pending;
+};
+
 /** Every item's key, in order. */
 export const itemKeys = (transcript: Transcript): ReadonlyArray<string> =>
   transcript.items.map((item) => item.id);
@@ -381,7 +487,10 @@ const SUBAGENT_ROW_PX = 48;
 
 const FIXED_HEIGHTS: Readonly<
   Record<
-    Exclude<ListItem["kind"], "message" | "changed-files" | "subagents">,
+    Exclude<
+      ListItem["kind"],
+      "message" | "brain-input" | "pending" | "changed-files" | "subagents"
+    >,
     number
   >
 > = {
@@ -420,6 +529,16 @@ export const estimatedHeightOf = (
 
   if (item.kind === "changed-files") {
     return cardHeight(item, expanded);
+  }
+
+  if (item.kind === "pending") {
+    return messageHeight(item.message, true);
+  }
+
+  if (item.kind === "brain-input") {
+    const lines = bucketLines(textLines(item.message));
+
+    return 8 + LINE_PX * (expanded ? lines : Math.min(lines, 6));
   }
 
   if (item.kind === "subagents") {

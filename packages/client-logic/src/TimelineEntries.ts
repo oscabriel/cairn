@@ -8,6 +8,12 @@
 // - A turn is one user message (`pi.user` or `cairn.user`) through the assistant and tool messages
 //   before the next user message. Entries before any user message (a compacted thread's head)
 //   belong to the turn `turn:start`.
+// - A user message says who sent it. The user's own words are a `cairn.user` entry, which names
+//   its sender in `data.from` (`TurnContent.ts` writes every send that way). Every other input is a
+//   brain input: a `pi.user` entry (a wake, a subagent's question, the brief that starts a child, a
+//   nudge, a parent's or a workflow's input) or a brief's answer. A brain input shows without the
+//   instructions meant only for the model, and a wake names the subagent row, not the note the
+//   model reads (`brainInputText`).
 // - A turn's elapsed time is the end of its last assistant message (`timestamp + durationMs`) or
 //   tool result, whichever is later, minus the user message's `timestamp`.
 // - A turn is interrupted when an assistant message stopped with `aborted`, or a tool result
@@ -80,11 +86,18 @@ export interface NestedCall {
   readonly path: Option.Option<string>;
 }
 
+/**
+ * Who wrote a user-role message: `user` for the user's own words, `brain` for an input the brain
+ * wrote on its own (GLOSSARY "Brain input"). An answer is always `brain`'s.
+ */
+export type MessageSender = "user" | "brain";
+
 /** A message the transcript shows: the user's input or the assistant's text. */
 export interface TimelineMessage {
   /** The row key: `user:<entryId>` or `msg:<turnId>:<n>`. */
   readonly id: string;
   readonly role: "user" | "assistant";
+  readonly sender: MessageSender;
   /** What the message says, without attachment and skill blocks. */
   readonly text: string;
   readonly turnId: string;
@@ -223,6 +236,11 @@ const decodeNotice = Schema.decodeUnknownOption(NoticeEntryData);
 
 const decodeAttachments = Schema.decodeUnknownOption(
   Schema.Struct({ attachments: Schema.Array(AttachmentRefSchema) })
+);
+
+/** The sender a `cairn.user` entry names (`CairnUserData.from`, the sender's login). */
+const decodeSender = Schema.decodeUnknownOption(
+  Schema.Struct({ from: Schema.NonEmptyString })
 );
 
 const UserMessage = Schema.Struct({
@@ -581,6 +599,53 @@ const readUserContent = (message: UserMessage): UserReading => {
   return { text: texts.join("\n\n"), images, attachmentNames, skills };
 };
 
+// The words the brain's inputs are written in (apps/server/src/brain/SubagentText.ts and
+// models/ResultTool.ts); `SubagentText.test.ts` holds these readings to the server's own renderers.
+const WAKE =
+  /^Subagent "(?<title>[\s\S]*)" reported; its result is in the note above\.$/u;
+
+const QUESTION_INSTRUCTION =
+  "\nAnswer with subagent_reply, or escalate it to the user.";
+
+const BRIEF_INSTRUCTION =
+  "\n\nFinish by calling submit_result with your result, which must match its schema, and how it differs from the brief.";
+
+const NUDGE =
+  "Your brief asked for a typed result and you have not submitted one. Call submit_result now with your result and its divergence from the brief.";
+
+/**
+ * What the transcript shows of an input the brain wrote: its words without the instructions meant
+ * only for the model. A wake names the subagent row its result shows on (the model reads the
+ * settlement note, which the transcript draws as that row), a question loses "Answer with
+ * subagent_reply...", a typed child's brief its `submit_result` line, and the nudge says what Cairn
+ * asked. Any other input shows as written.
+ */
+export const brainInputText = (text: string): string => {
+  const wake = WAKE.exec(text)?.groups?.title;
+
+  if (wake !== undefined) {
+    return `Subagent "${wake}" reported; its result is on its subagent row above.`;
+  }
+
+  if (text === NUDGE) {
+    return "Cairn asked the subagent for the typed result its brief names.";
+  }
+
+  for (const instruction of [QUESTION_INSTRUCTION, BRIEF_INSTRUCTION]) {
+    if (text.endsWith(instruction)) {
+      return text.slice(0, -instruction.length);
+    }
+  }
+
+  return text;
+};
+
+/** A brain input's reading: the words it shows. */
+const asBrainInput = (reading: UserReading): UserReading => ({
+  ...reading,
+  text: brainInputText(reading.text),
+});
+
 // ---------------------------------------------------------------------------------------------
 // The committed reading
 
@@ -589,6 +654,7 @@ type EntryReading = Data.TaggedEnum<{
   User: {
     readonly entry: Entry;
     readonly message: UserMessage;
+    readonly sender: MessageSender;
     readonly reading: UserReading;
     readonly attachments: ReadonlyArray<AttachmentRef>;
   };
@@ -629,13 +695,22 @@ const readEntryUncached = (entry: Entry): EntryReading => {
   switch (entry.kind) {
     case "pi.user":
     case "cairn.user": {
+      const sender: MessageSender =
+        entry.kind === "cairn.user" && Option.isSome(decodeSender(entry.data))
+          ? "user"
+          : "brain";
+
       return Option.match(Option.flatMap(firstModel(entry), decodeUser), {
         onNone: () => EntryReading.Skip({ kind: entry.kind }),
         onSome: (message) =>
           EntryReading.User({
             entry,
             message,
-            reading: readUserContent(message),
+            sender,
+            reading:
+              sender === "user"
+                ? readUserContent(message)
+                : asBrainInput(readUserContent(message)),
             attachments: Option.match(decodeAttachments(entry.data), {
               onNone: () => [],
               onSome: (data) => data.attachments,
@@ -704,7 +779,8 @@ const readEntryUncached = (entry: Entry): EntryReading => {
             EntryReading.User({
               entry,
               message,
-              reading: readUserContent(message),
+              sender: "brain",
+              reading: asBrainInput(readUserContent(message)),
               attachments: [],
             }),
         }
@@ -736,6 +812,47 @@ const readEntry = (entry: Entry): EntryReading => {
   readings.set(entry, reading);
 
   return reading;
+};
+
+/** One of the user's own prompts as a send carries it: its words, attachment ids and skills. */
+export interface UserPrompt {
+  readonly entryId: number;
+  readonly text: string;
+  readonly attachments: ReadonlyArray<string>;
+  readonly skills: ReadonlyArray<string>;
+}
+
+/**
+ * The user's own prompts (`cairn.user` entries naming their sender) among `entries` past entry
+ * `after`, newest first: what a queued send's own row is found by. It reads from the newest entry
+ * back and stops at `after`, so it costs only the entries written since.
+ */
+export const userPromptsAfter = (
+  entries: ReadonlyArray<Entry>,
+  after: number
+): ReadonlyArray<UserPrompt> => {
+  const prompts: Array<UserPrompt> = [];
+
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+
+    if (entry === undefined || entry.id <= after) {
+      break;
+    }
+
+    const reading = readEntry(entry);
+
+    if (Predicate.isTagged(reading, "User") && reading.sender === "user") {
+      prompts.push({
+        entryId: entry.id,
+        text: reading.reading.text,
+        attachments: reading.attachments.map(({ id }) => id),
+        skills: reading.reading.skills,
+      });
+    }
+  }
+
+  return prompts;
 };
 
 const assistantText = (message: AssistantMessage): string =>
@@ -867,6 +984,7 @@ const assistantEntries = (
       message: {
         id: key,
         role: "assistant",
+        sender: "brain",
         text,
         turnId: turn.id,
         entryId,
@@ -1069,6 +1187,7 @@ const readCommitted = (
         message: {
           id: key,
           role: "user",
+          sender: found.sender,
           text: found.reading.text,
           turnId: id,
           entryId: Option.some(found.entry.id),

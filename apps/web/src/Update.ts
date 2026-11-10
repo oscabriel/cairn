@@ -3,18 +3,12 @@
 // stream follows both without the root reaching into the page's state.
 
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
+import { userPromptsAfter } from "@cairn/client-logic/TimelineEntries";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ShellCommand } from "@cairn/protocol/ShellCommands";
-import {
-  Array,
-  Equal,
-  Equivalence,
-  Option,
-  Predicate,
-  Record,
-  Schema,
-} from "effect";
+import type { TurnInput } from "@cairn/protocol/Thread";
+import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
 import type { Runtime } from "foldkit";
 import { UrlRequest } from "foldkit/navigation";
@@ -36,13 +30,14 @@ import { composerContext } from "./composer/Context.ts";
 import { draftProject, isDraftTarget } from "./composer/Drafts.ts";
 import { OutMessage as ComposerOutMessage } from "./composer/Message.ts";
 import type { Message as ComposerMessage } from "./composer/Message.ts";
+import { queuedInputs } from "./composer/Queue.ts";
 import * as Composer from "./composer/Update.ts";
 import {
   enqueue,
   enqueueDispatch,
-  nextToSend,
   OutboxItem,
   outboxKey,
+  readyToSend,
   rebaseOutbox,
   remove,
 } from "./connection/Outbox.ts";
@@ -118,7 +113,8 @@ import {
   update as updateSidebar,
 } from "./sidebar/Update.ts";
 import { threadRowOf } from "./ThreadRow.ts";
-import { promptKey } from "./timeline/Model.ts";
+import type { QueuedSend } from "./timeline/Model.ts";
+import { promptKey, sameSends } from "./timeline/Model.ts";
 
 type UpdateReturn = Update.Return<Model, Message, Services>;
 
@@ -172,39 +168,253 @@ const isLaunching = (model: Model, threadId: ThreadId): boolean =>
     )
   );
 
-/** The prompts (`promptKey`) of the sends to `threadId` waiting in the outbox. */
-const queuedPromptsFor = (
-  model: Model,
-  threadId: Option.Option<ThreadId>
-): ReadonlyArray<string> =>
-  Option.match(threadId, {
-    onNone: () => [],
-    onSome: (id) =>
-      outboxSent(model).flatMap((item) =>
-        Predicate.isTagged(item, "Send") && item.input.threadId === id
-          ? [
-              promptKey(
-                item.input.input.text,
-                item.input.input.attachments,
-                item.input.input.skillRefs
-              ),
-            ]
-          : []
-      ),
+/** The turn an outbox item sends to `threadId`: a send's, or a launch's first message. */
+const turnTo = (
+  item: OutboxItem,
+  threadId: ThreadId
+): Option.Option<TurnInput> => {
+  if (Predicate.isTagged(item, "Send") && item.input.threadId === threadId) {
+    return Option.some(item.input.input);
+  }
+
+  return Predicate.isTagged(item, "Launch") && item.input.threadId === threadId
+    ? Option.some(item.input.initialMessage)
+    : Option.none();
+};
+
+/** The thread an outbox item sends a turn to, with that turn; none for a shell command. */
+const turnOf = (
+  item: OutboxItem
+): Option.Option<{ readonly threadId: ThreadId; readonly turn: TurnInput }> =>
+  OutboxItem.match(item, {
+    Send: ({ input }) =>
+      Option.some({ threadId: input.threadId, turn: input.input }),
+    Launch: ({ input }) =>
+      Option.some({ threadId: input.threadId, turn: input.initialMessage }),
+    Dispatch: () => Option.none(),
   });
 
-const samePrompts = Array.makeEquivalence(Equivalence.strictEqual<string>());
+/** A turn as the transcript draws it, with the names of the attachments this tab knows. */
+const queuedSendOf = (
+  model: Model,
+  item: OutboxItem,
+  turn: TurnInput,
+  sent: boolean
+): QueuedSend => {
+  const refs = model.sentTurns[outboxKey(item)]?.attachments ?? [];
+
+  return {
+    requestId: outboxKey(item),
+    text: turn.text,
+    attachments: turn.attachments,
+    attachmentNames: turn.attachments.map(
+      (attachmentId) =>
+        refs.find((ref) => ref.id === attachmentId)?.name ?? "Attachment"
+    ),
+    skillRefs: turn.skillRefs,
+    sent,
+  };
+};
+
+/**
+ * Where a queued turn's own row will come after: a launch's anywhere in its new thread, a send's
+ * past the newest entry its thread showed when this tab first saw it queued (`outboxSince`).
+ */
+const sinceOf = (model: Model, item: OutboxItem): Option.Option<number> =>
+  Predicate.isTagged(item, "Launch")
+    ? Option.some(0)
+    : Record.get(model.outboxSince, outboxKey(item));
+
+/** The view `page` shows of `threadId`, when it shows that thread and its view arrived. */
+const shownView = (
+  page: Thread.Model.Model,
+  threadId: string
+): Option.Option<Thread.Model.ThreadViewModel> =>
+  Option.exists(page.threadId, (id) => id === threadId)
+    ? page.view
+    : Option.none();
+
+/**
+ * Whether `send`'s own row has come in `state`: a user row past `since` with its words,
+ * attachments and skills, or, once the brain acknowledged it, its words in the brain's queue
+ * (`pi.inbox`), which the composer lists from then on. A send first seen before its thread's view
+ * arrived has no `since`: it is matched only once acknowledged, then against any row, so it never
+ * waits for a row that came before it was seen.
+ */
+const hasCome = (
+  state: Thread.Model.ThreadViewModel,
+  send: QueuedSend,
+  since: Option.Option<number>
+): boolean => {
+  if (Option.isNone(since) && !send.sent) {
+    return false;
+  }
+
+  const key = promptKey(send.text, send.attachments, send.skillRefs);
+
+  return (
+    userPromptsAfter(
+      state.view.entries,
+      Option.getOrElse(since, () => -1)
+    ).some(
+      (prompt) =>
+        promptKey(prompt.text, prompt.attachments, prompt.skills) === key
+    ) ||
+    (send.sent &&
+      queuedInputs(Record.get(state.view.docs, "pi.inbox")).some(
+        (input) => input.text === send.text.trim()
+      ))
+  );
+};
+
+/**
+ * The sends to `threadId` whose own row `page` does not show yet: those the brain acknowledged
+ * (`outboxEchoes`), then those still in the outbox.
+ */
+const queuedSendsFor = (
+  model: Model,
+  page: Thread.Model.Model,
+  threadId: Option.Option<ThreadId>
+): ReadonlyArray<QueuedSend> =>
+  Option.match(threadId, {
+    onNone: () => [],
+    onSome: (id) => {
+      const state = shownView(page, id);
+
+      const pending = (send: QueuedSend, since: Option.Option<number>) =>
+        !Option.exists(state, (shown) => hasCome(shown, send, since));
+
+      const echoes = model.outboxEchoes.flatMap((awaited) =>
+        awaited.threadId === id && pending(awaited.send, awaited.since)
+          ? [awaited.send]
+          : []
+      );
+
+      const queued = outboxSent(model).flatMap((item) =>
+        Option.match(turnTo(item, id), {
+          onNone: () => [],
+          onSome: (turn) => {
+            const send = queuedSendOf(model, item, turn, false);
+
+            return pending(send, sinceOf(model, item)) ? [send] : [];
+          },
+        })
+      );
+
+      return [...echoes, ...queued];
+    },
+  });
+
+/**
+ * Keeps the pending rows' bookkeeping for the thread `page` shows: notes where each newly seen send
+ * to it starts (`outboxSince`), forgets the records of items gone from the outbox, and drops the
+ * acknowledged sends whose row came or whose launch failed. `left` is the thread the page is leaving,
+ * whose acknowledged sends are dropped: their rows show as the brain's once the page is back.
+ */
+const trackSends = (
+  model: Model,
+  page: Thread.Model.Model,
+  left: Option.Option<string>
+): Model => {
+  const newest = Option.flatMap(page.threadId, (id) =>
+    Option.flatMap(shownView(page, id), (state) =>
+      Option.fromUndefinedOr(state.view.entries.at(-1)?.id)
+    )
+  );
+
+  const noted: { [key: string]: number } = Record.filter(
+    model.outboxSince,
+    (_, key) => model.outbox.some((item) => outboxKey(item) === key)
+  );
+
+  for (const item of model.outbox) {
+    if (
+      Option.isSome(newest) &&
+      Predicate.isTagged(item, "Send") &&
+      Option.contains(page.threadId, item.input.threadId) &&
+      !Record.has(noted, outboxKey(item))
+    ) {
+      noted[outboxKey(item)] = newest.value;
+    }
+  }
+
+  const failed = (threadId: string): boolean =>
+    Option.exists(model.shell, (shell) =>
+      shell.threads.some(
+        (thread) => thread.id === threadId && thread.activity === "failed"
+      )
+    );
+
+  const echoes = model.outboxEchoes.filter(
+    (awaited) =>
+      !Option.contains(left, awaited.threadId) &&
+      !(awaited.launch && failed(awaited.threadId)) &&
+      !Option.exists(shownView(page, awaited.threadId), (state) =>
+        hasCome(state, awaited.send, awaited.since)
+      )
+  );
+
+  const sameSince =
+    Record.size(noted) === Record.size(model.outboxSince) &&
+    Record.every(noted, (value, key) => model.outboxSince[key] === value);
+
+  return sameSince && echoes.length === model.outboxEchoes.length
+    ? model
+    : modifyFields(model, {
+        outboxSince: () => (sameSince ? model.outboxSince : noted),
+        outboxEchoes: () => echoes,
+      });
+};
+
+/**
+ * Keeps an acknowledged send (or launch) to a thread a page shows as a pending row, marked sent,
+ * until its own row comes (`hasCome`): the acknowledgement and the row reach the page in either
+ * order, and a launch's first message waits behind its workspace for as long as that takes.
+ */
+const awaitEcho = (model: Model, key: string): Model["outboxEchoes"] => {
+  const awaited = Option.flatMap(
+    Array.findFirst(model.outbox, (item) => outboxKey(item) === key),
+    (item) =>
+      Option.map(
+        Option.filter(turnOf(item), ({ threadId }) =>
+          [model.thread, model.scratchThread].some((page) =>
+            Option.contains(page.threadId, threadId)
+          )
+        ),
+        ({ threadId, turn }) => ({
+          threadId,
+          send: queuedSendOf(model, item, turn, true),
+          since: sinceOf(model, item),
+          launch: Predicate.isTagged(item, "Launch"),
+        })
+      )
+  );
+
+  return Option.isSome(awaited) &&
+    !model.outboxEchoes.some(({ send }) => send.requestId === key)
+    ? [...model.outboxEchoes, awaited.value]
+    : model.outboxEchoes;
+};
 
 /** Tells the thread page the routed thread and the connection; a no-op when nothing changed. */
-const syncThread: Step = (model) => {
-  const threadId = routedThreadId(model.route);
+const syncThread: Step = (current) => {
+  const threadId = routedThreadId(current.route);
+
+  const model = trackSends(
+    current,
+    current.thread,
+    Option.filter(
+      current.thread.threadId,
+      (id) => !Option.contains(threadId, id)
+    )
+  );
 
   const context: Thread.PageContext = {
     threadId,
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
-    queuedPrompts: queuedPromptsFor(model, threadId),
+    queuedSends: queuedSendsFor(model, model.thread, threadId),
   };
 
   const unchanged =
@@ -212,7 +422,7 @@ const syncThread: Step = (model) => {
     model.thread.epoch === context.epoch &&
     model.thread.hasClient === context.hasClient &&
     model.thread.launching === context.launching &&
-    samePrompts(model.thread.timeline.queuedPrompts, context.queuedPrompts);
+    sameSends(model.thread.timeline.queuedSends, context.queuedSends);
 
   return unchanged ? { model } : informThread(model, context);
 };
@@ -224,29 +434,34 @@ const persist: Step = (model) => ({
 });
 
 /**
- * Sends the outbox's head when the connection is live, nothing is in flight, and no item is
- * waiting out its resend backoff.
+ * Sends each lane's head when the connection is live, unless that lane has an item in flight or
+ * waiting out its resend backoff (`readyToSend`).
  */
-const sendNext: Step = (model) =>
-  Option.match(
-    Option.filter(
-      nextToSend(
-        outboxSent(model),
-        model.outboxInFlight,
-        isLive(model.connection)
-      ),
-      () => Option.isNone(model.outboxResend)
-    ),
-    {
-      onNone: () => ({ model }),
-      onSome: (item) => ({
-        model: modifyFields(model, {
-          outboxInFlight: () => Option.some(outboxKey(item)),
-        }),
-        commands: [SendOutboxItem({ epoch: model.connection.epoch, item })],
-      }),
-    }
+const sendNext: Step = (model) => {
+  const ready = readyToSend(
+    outboxSent(model),
+    model.outboxInFlight,
+    model.outboxResend,
+    isLive(model.connection)
   );
+
+  return ready.length === 0
+    ? { model }
+    : {
+        model: modifyFields(model, {
+          outboxInFlight: (inFlight) => [...inFlight, ...ready.map(outboxKey)],
+        }),
+        commands: ready.map((item) =>
+          SendOutboxItem({ epoch: model.connection.epoch, item })
+        ),
+      };
+};
+
+/** `keys` without `key`. */
+const without = (
+  keys: ReadonlyArray<string>,
+  key: string
+): ReadonlyArray<string> => Array.filter(keys, (other) => other !== key);
 
 /** The thread page's Messages; a Retry from the transcript joins the outbox. */
 const foldThreadMessage = Update.foldChild({
@@ -276,9 +491,9 @@ const enterBackoff: Step = (model) => {
     model: modifyFields(model, {
       connection: () => next.connection,
       hello: () => Option.none(),
-      outboxInFlight: () => Option.none(),
-      // The next connection sends the head at once.
-      outboxResend: () => Option.none(),
+      outboxInFlight: () => [],
+      // The next connection sends each lane's head at once.
+      outboxResend: () => [],
     }),
     commands: Option.match(next.wait, {
       onNone: () => [],
@@ -1063,16 +1278,25 @@ const foldScratchThreadMessage = Update.foldChild({
  * Tells the scratch thread's page which thread the `next` shell's overlay shows: its scratch thread
  * while the overlay is open, none while it is hidden, so a hidden overlay holds no stream.
  */
-const syncScratchThread: Step = (model) => {
-  const { scratch } = model.nextShell;
+const syncScratchThread: Step = (current) => {
+  const { scratch } = current.nextShell;
   const threadId = scratch.isOpen ? scratch.threadId : Option.none();
+
+  const model = trackSends(
+    current,
+    current.scratchThread,
+    Option.filter(
+      current.scratchThread.threadId,
+      (id) => !Option.contains(threadId, id)
+    )
+  );
 
   const context: Thread.PageContext = {
     threadId,
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
-    queuedPrompts: queuedPromptsFor(model, threadId),
+    queuedSends: queuedSendsFor(model, model.scratchThread, threadId),
   };
 
   const unchanged =
@@ -1080,10 +1304,7 @@ const syncScratchThread: Step = (model) => {
     model.scratchThread.epoch === context.epoch &&
     model.scratchThread.hasClient === context.hasClient &&
     model.scratchThread.launching === context.launching &&
-    samePrompts(
-      model.scratchThread.timeline.queuedPrompts,
-      context.queuedPrompts
-    );
+    sameSends(model.scratchThread.timeline.queuedSends, context.queuedSends);
 
   return unchanged ? { model } : informScratchThread(model, context);
 };
@@ -1184,13 +1405,12 @@ const step = (received: Message): Step =>
           modifyFields(model, {
             outbox: (outbox) => remove(outbox, key),
             outboxInFlight: (inFlight) =>
-              isCurrentEpoch(model, epoch) && Option.contains(inFlight, key)
-                ? Option.none()
-                : inFlight,
-            outboxAttempt: () => 0,
-            outboxResend: (waiting) =>
-              Option.filter(waiting, (waitingKey) => waitingKey !== key),
+              isCurrentEpoch(model, epoch) ? without(inFlight, key) : inFlight,
+            outboxAttempt: (attempts) => Record.remove(attempts, key),
+            outboxResend: (waiting) => without(waiting, key),
             sentTurns: (turns) => settleAcknowledged(turns, key),
+            // Its pending row stays until its own row comes, not only until this answer.
+            outboxEchoes: () => awaitEcho(model, key),
           }),
           [persist, sendNext, followLaunches]
         ),
@@ -1202,22 +1422,24 @@ const step = (received: Message): Step =>
         }
 
         if (retryable && transport) {
-          // Left at the head; the connection reports the loss and the next live one sends it.
+          // Left at its lane's head; the connection reports the loss and the next live one sends it.
           return {
-            model: modifyFields(model, { outboxInFlight: () => Option.none() }),
+            model: modifyFields(model, {
+              outboxInFlight: (inFlight) => without(inFlight, key),
+            }),
           };
         }
 
         if (retryable) {
           // The brain answered "not now" on a socket that stays up: sent again after a backoff
-          // (or by the next connection, if this one drops first).
-          const attempt = model.outboxAttempt + 1;
+          // (or by the next connection, if this one drops first); its lane waits, the others go on.
+          const attempt = (model.outboxAttempt[key] ?? 0) + 1;
 
           return {
             model: modifyFields(model, {
-              outboxInFlight: () => Option.none(),
-              outboxAttempt: () => attempt,
-              outboxResend: () => Option.some(key),
+              outboxInFlight: (inFlight) => without(inFlight, key),
+              outboxAttempt: (attempts) => Record.set(attempts, key, attempt),
+              outboxResend: (waiting) => [...without(waiting, key), key],
             }),
             commands: [WaitToResend({ epoch, key, attempt })],
           };
@@ -1238,8 +1460,8 @@ const step = (received: Message): Step =>
         ) {
           return sendNext(
             modifyFields(model, {
-              outboxInFlight: () => Option.none(),
-              outboxAttempt: () => 0,
+              outboxInFlight: (inFlight) => without(inFlight, key),
+              outboxAttempt: (attempts) => Record.remove(attempts, key),
               outboxLeft: (left) => [...left, key],
               notice: () => Option.some(message),
             })
@@ -1249,8 +1471,8 @@ const step = (received: Message): Step =>
         return Update.combine(
           modifyFields(model, {
             outbox: (outbox) => remove(outbox, key),
-            outboxInFlight: () => Option.none(),
-            outboxAttempt: () => 0,
+            outboxInFlight: (inFlight) => without(inFlight, key),
+            outboxAttempt: (attempts) => Record.remove(attempts, key),
             notice: () => Option.some(message),
           }),
           [
@@ -1268,8 +1490,12 @@ const step = (received: Message): Step =>
       (model) =>
         // A timer from an earlier epoch, or for an item no longer waiting, sends nothing; the wait
         // over, the head goes (this item, unless another tab's answer removed it meanwhile).
-        isCurrentEpoch(model, epoch) && Option.contains(model.outboxResend, key)
-          ? sendNext(modifyFields(model, { outboxResend: () => Option.none() }))
+        isCurrentEpoch(model, epoch) && model.outboxResend.includes(key)
+          ? sendNext(
+              modifyFields(model, {
+                outboxResend: (waiting) => without(waiting, key),
+              })
+            )
           : { model },
     // Saving merges into what the other tab wrote, and its answer brings those items here.
     ChangedStoredOutbox: () => persist,
@@ -1385,10 +1611,12 @@ export const init: Runtime.RoutingApplicationInit<
       shell: Option.map(flags.boot, (boot) => boot.shell),
       outbox: flags.outbox,
       outboxStored: flags.outbox,
-      outboxInFlight: Option.none(),
-      outboxAttempt: 0,
-      outboxResend: Option.none(),
+      outboxInFlight: [],
+      outboxAttempt: {},
+      outboxResend: [],
       sentTurns: {},
+      outboxSince: {},
+      outboxEchoes: [],
       outboxAdopted: [],
       outboxLeft: [],
       notice: flags.outboxUnread

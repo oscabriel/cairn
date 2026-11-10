@@ -5,6 +5,13 @@
 // request trigger is gone (Cairn has no pull request context), a skill trigger is a literal `$`
 // only, not t3code's any-currency-symbol rule (plan D29), and "no trigger" is `Option.none()`.
 //
+// `isCurrencyAmountQuery` follows t3code 1ee02417, "fix(composer): typing a price no longer opens
+// the skill menu (#21519)", packages/shared/src/composerTrigger.ts. The pinned sparse clone at
+// ~/Developer/clones/github.com/pingdotgg/t3code does not hold that commit, so this is a port of
+// the fix as the product review describes it (findings/10-inspirations.md, I-2), not of its text:
+// a `$` word whose query starts with a digit is a price, so `$5`, `$0.25`, `$1,200`, `$30?` and
+// `$10/month` open no menu and Enter sends.
+//
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
@@ -97,6 +104,14 @@ export const isPathWord = (
   return text.slice(wordStart + 1, wordEnd).includes("/");
 };
 
+/**
+ * Whether a skill query is a dollar amount: it starts with a digit, as `5`, `0.25`, `1,200`, `5k` and
+ * `30?` do. A skill whose name starts with a digit cannot be picked through the menu, which no
+ * price should open.
+ */
+export const isCurrencyAmountQuery = (query: string): boolean =>
+  /^\d/u.test(query);
+
 const trigger = (
   kind: ComposerTriggerKind,
   query: string,
@@ -179,12 +194,11 @@ export const detectComposerTrigger = (
   }
 
   if (token.startsWith(SKILL_TRIGGER)) {
-    return trigger(
-      "skill",
-      token.slice(SKILL_TRIGGER.length),
-      tokenStart,
-      cursor
-    );
+    const query = token.slice(SKILL_TRIGGER.length);
+
+    return isCurrencyAmountQuery(query)
+      ? Option.none()
+      : trigger("skill", query, tokenStart, cursor);
   }
 
   return token.startsWith("@")

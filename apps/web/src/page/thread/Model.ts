@@ -53,6 +53,14 @@ export const Model = Schema.Struct({
   retries: Schema.Int,
   status: ThreadStatus,
   view: Schema.Option(ThreadViewModel),
+  /**
+   * The last view of threads left with history paged in, most recently left last, at most
+   * `PARKED_VIEW_LIMIT`: coming back, the first snapshot keeps those pages while its window starts
+   * where they end (`applyThreadStreamItem`), as the transcript keeps the list's place.
+   */
+  parked: Schema.Array(
+    Schema.Struct({ threadId: ThreadId, state: ThreadViewModel })
+  ),
   /** The transcript: its list, open folds and per-thread scroll memory. */
   timeline: Timeline.Model,
   /** The diff panel (closed until a changed-files card opens it). */
@@ -62,6 +70,12 @@ export const Model = Schema.Struct({
 });
 
 export type Model = typeof Model.Type;
+
+/**
+ * How many left threads keep their paged-in history: a few, since each holds its pages whole; the
+ * transcript keeps the list's place for `Timeline.SAVED_THREAD_LIMIT` threads.
+ */
+export const PARKED_VIEW_LIMIT = 5;
 
 /** A page with no thread and no connection yet. */
 export const initial: Model = {
@@ -73,6 +87,7 @@ export const initial: Model = {
   retries: 0,
   status: ThreadStatus.Loading(),
   view: Option.none(),
+  parked: [],
   timeline: Timeline.initial,
   diff: Diff.initial,
   diffPanel: "idle",

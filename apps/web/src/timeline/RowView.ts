@@ -66,6 +66,7 @@ import {
   Eye,
   FilePen,
   Globe,
+  Info,
   Minimize2,
   Paperclip,
   RotateCcw,
@@ -1040,6 +1041,38 @@ const errorView = (
     ]),
   ]);
 
+/** An input the brain wrote on its own: a quiet work-log line, never the user's bubble. */
+const brainInputView = (
+  h: H,
+  row: Extract<TimelineRow, { readonly kind: "brain-input" }>
+): Html =>
+  frame(h, "brain-input", "", [
+    workLogBlock(h, "standalone", false, [
+      h.div(
+        [
+          h.DataAttribute("testid", "brain-input"),
+          h.Class(workRowClass(false, false)),
+        ],
+        [
+          workLogLine(
+            h,
+            toolIcon(h, [Info, "info"], "text-muted-foreground"),
+            h.span(
+              [
+                h.Class(
+                  "whitespace-pre-wrap wrap-break-word text-sm text-muted-foreground"
+                ),
+              ],
+              [row.message.text]
+            ),
+            [timestamp(h, row.createdAt, "", true)],
+            true
+          ),
+        ]
+      ),
+    ]),
+  ]);
+
 const HISTORY_LABEL: Readonly<Record<HistoryState, string>> = {
   idle: "Load earlier turns",
   loading: "Loading earlier turns...",
@@ -1104,6 +1137,8 @@ export const rowView = (h: H, item: ListItem, context: RowContext): Html =>
         row.message.role === "user"
           ? userMessageView(h, row.id, row.message, context)
           : assistantMessageView(h, row, context),
+      "brain-input": (row) => brainInputView(h, row),
+      pending: (row) => userMessageView(h, row.id, row.message, context),
       "assistant-meta": (row) =>
         frame(h, "assistant-meta", "pb-4 group/assistant", [
           h.div(

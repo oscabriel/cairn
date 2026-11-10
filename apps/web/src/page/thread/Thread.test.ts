@@ -1,10 +1,11 @@
+import { prependHistory } from "@cairn/client-logic/ThreadView";
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import {
   BARE_ROW_FIELDS,
   ThreadShell,
   ThreadUpdatedItem,
 } from "@cairn/protocol/Shell";
-import { ThreadStreamItem } from "@cairn/protocol/Thread";
+import { Entry, ThreadStreamItem } from "@cairn/protocol/Thread";
 import { DateTime, Option, Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
@@ -73,7 +74,7 @@ const page = inform(initial, {
   epoch: 2,
   hasClient: true,
   launching: false,
-  queuedPrompts: [],
+  queuedSends: [],
 }).model;
 
 /** The same page while the thread's launch is on its way to the brain. */
@@ -82,7 +83,7 @@ const launchingPage = inform(page, {
   epoch: 2,
   hasClient: true,
   launching: true,
-  queuedPrompts: [],
+  queuedSends: [],
 }).model;
 
 const missing = (watch: number) =>
@@ -100,6 +101,15 @@ const failed = (watch: number) =>
     missing: false,
     reason: "The thread stream stopped. Resubscribe.",
   });
+
+/** What the root tells a live page routed to `id`. */
+const routedTo = (id: Option.Option<ThreadId>) => ({
+  threadId: id,
+  epoch: 2,
+  hasClient: true,
+  launching: false,
+  queuedSends: [],
+});
 
 describe("the thread page", () => {
   // Direct update calls: the transcript re-anchors its list (a scroll Command) on a new view, which
@@ -179,7 +189,7 @@ describe("the thread page", () => {
       epoch: 3,
       hasClient: false,
       launching: false,
-      queuedPrompts: [],
+      queuedSends: [],
     }).model;
 
     expect(reconnected.status._tag).toBe("Loading");
@@ -190,10 +200,51 @@ describe("the thread page", () => {
       epoch: 2,
       hasClient: true,
       launching: false,
-      queuedPrompts: [],
+      queuedSends: [],
     }).model;
 
     expect(Option.isNone(other.view)).toBeTruthy();
+  });
+
+  it("keeps the history paged in across a look at another thread and back", () => {
+    const windowed = decodeItem(
+      `{"_tag":"Snapshot","seq":0,"view":{"conversation":{"id":1},"entries":[${JSON.stringify({ ...userEntry, id: 5 })}],"docs":{}},"entriesOffset":4,"hasMoreHistory":true}`
+    );
+
+    const ready = update(
+      page,
+      Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: windowed })
+    ).model;
+
+    const paged: Model = {
+      ...ready,
+      view: Option.map(ready.view, (state) =>
+        prependHistory(state, {
+          entries: Schema.decodeSync(Schema.Array(Entry))(
+            [1, 2, 3, 4].map((id) => ({ ...userEntry, id }))
+          ),
+          hasMore: false,
+        })
+      ),
+    };
+
+    const away = inform(paged, routedTo(Option.none())).model;
+    const back = inform(away, routedTo(Option.some(threadId))).model;
+
+    expect(Option.isNone(back.view)).toBeTruthy();
+
+    const again = update(
+      back,
+      Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: windowed })
+    ).model;
+
+    expect(
+      Option.map(again.view, (state) => [
+        state.older.map((entry) => entry.id),
+        state.hasMoreHistory,
+      ])
+    ).toStrictEqual(Option.some([[1, 2, 3, 4], false]));
+    expect(again.parked).toStrictEqual([]);
   });
 
   it("stays Loading on NotFound while its launch is on the way, and subscribes again", () => {
@@ -263,7 +314,7 @@ describe("the thread page", () => {
         epoch: 2,
         hasClient: true,
         launching: false,
-        queuedPrompts: [],
+        queuedSends: [],
       }
     ).model;
 
@@ -277,7 +328,7 @@ describe("the thread page", () => {
       epoch: 2,
       hasClient: true,
       launching: true,
-      queuedPrompts: [],
+      queuedSends: [],
     }).model;
 
     expect(known.status._tag).toBe("Loading");

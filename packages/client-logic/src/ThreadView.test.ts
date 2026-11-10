@@ -54,6 +54,37 @@ const failureReason = (result: ReturnType<typeof applyThreadStreamItem>) =>
   });
 
 describe(applyThreadStreamItem, () => {
+  it("keeps paged-in history across a snapshot whose window starts where the pages end", () => {
+    // Pages 1 to 3 were read in before a window starting at 4; a reconnect's snapshot starts there.
+    const paged = prependHistory(start(snapshot(3, [4, 5])), {
+      entries: [entry(1, "one"), entry(2, "two"), entry(3, "three")],
+      hasMore: false,
+    });
+
+    const again = Result.getOrThrow(apply(paged, snapshot(3, [4, 5, 6])));
+
+    assert.deepStrictEqual(
+      threadEntries(again).map((row) => row.id),
+      [1, 2, 3, 4, 5, 6]
+    );
+    assert.strictEqual(again.entriesOffset, 0);
+    assert.isFalse(again.hasMoreHistory);
+    assert.deepStrictEqual(historyCursor(again), Option.some(EntryId.make(1)));
+  });
+
+  it("keeps the history still left out when the kept pages do not reach the start", () => {
+    const paged = prependHistory(start(snapshot(9, [10, 11])), {
+      entries: [entry(8, "eight"), entry(9, "nine")],
+      hasMore: true,
+    });
+
+    const again = Result.getOrThrow(apply(paged, snapshot(9, [10, 11])));
+
+    assert.strictEqual(again.older.length, 2);
+    assert.strictEqual(again.entriesOffset, 7);
+    assert.isTrue(again.hasMoreHistory);
+  });
+
   it("takes a snapshot whole, replacing any earlier view and history", () => {
     const first = prependHistory(start(snapshot(3, [4, 5])), {
       entries: [entry(3, "older")],

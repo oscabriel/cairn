@@ -11,7 +11,9 @@
 // when it did not change, and the 8 line or 600 character collapse of a user message. Changed: rows
 // come from Cairn's timeline (`TimelineEntries.ts`), whose run id is the turn; a failed turn's error
 // is its own `error` row (t3code draws failure items as work rows) that offers Retry on the newest
-// turn; a checkpoint entry becomes a `changed-files` row at the end of its turn. Removed: worktree
+// turn; a checkpoint entry becomes a `changed-files` row at the end of its turn; an input the brain
+// wrote on its own (a wake, a subagent's question, a brief) is a `brain-input` row, never the user's
+// message, and a turn it started offers no Retry. Removed: worktree
 // setup, superseded attempts, subagents, plans, HTML renders, MCP apps, created-thread summaries,
 // turn diffs and rollback, citations, the minimap and the streaming-only fast path (stable rows
 // keep settled rows' identity instead).
@@ -138,6 +140,13 @@ type RowContent =
       readonly retryable: boolean;
     }
   | {
+      /** An input the brain wrote on its own, drawn as a quiet line, not as the user's message. */
+      readonly kind: "brain-input";
+      readonly id: string;
+      readonly createdAt: number;
+      readonly message: TimelineMessage;
+    }
+  | {
       readonly kind: "message";
       readonly id: string;
       readonly createdAt: number;
@@ -235,6 +244,10 @@ const rowTime = (row: Row): Option.Option<number> =>
     ? row.createdAt
     : Option.some(row.createdAt);
 
+/** True at a message or a brain input: where an answer's trailing work ends. */
+const startsMessage = (row: Row): boolean =>
+  row.kind === "message" || row.kind === "brain-input";
+
 const moveMetaBelowTrailingWork = (
   rows: ReadonlyArray<Row>
 ): ReadonlyArray<Row> => {
@@ -256,7 +269,7 @@ const moveMetaBelowTrailingWork = (
     for (let index = messageIndex + 1; index < rows.length; index += 1) {
       const candidate = rows[index];
 
-      if (candidate === undefined || candidate.kind === "message") {
+      if (candidate === undefined || startsMessage(candidate)) {
         break;
       }
 
@@ -374,6 +387,8 @@ interface RowContext {
   readonly terminalIds: ReadonlySet<string>;
   readonly durationStart: ReadonlyMap<string, number>;
   readonly latestTurn: Option.Option<TimelineTurn>;
+  /** The turns a brain input started: their prompt is not the user's to send again. */
+  readonly brainTurnIds: ReadonlySet<string>;
   readonly headerIndex: number;
   readonly tail: ActiveTail;
   readonly hiddenByTail: ReadonlySet<string>;
@@ -536,6 +551,15 @@ const makeRowContext = (input: TimelineRowsInput): RowContext => {
       )
     ),
     latestTurn: Option.fromUndefinedOr(timeline.turns.at(-1)),
+    brainTurnIds: new Set(
+      entries.flatMap((entry) =>
+        entry.kind === "message" &&
+        entry.message.role === "user" &&
+        entry.message.sender === "brain"
+          ? [entry.message.turnId]
+          : []
+      )
+    ),
     headerIndex,
     tail,
     hiddenByTail: new Set(
@@ -576,6 +600,15 @@ const messageRow = (
 ): Row => {
   const { message } = entry;
 
+  if (message.role === "user" && message.sender === "brain") {
+    return {
+      kind: "brain-input",
+      id: entry.id,
+      createdAt: entry.createdAt,
+      message,
+    };
+  }
+
   const stillInProgress =
     message.role === "assistant" && isActiveTurn(context.input, message.turnId);
 
@@ -603,6 +636,7 @@ const errorRow = (context: RowContext, entry: WorkTimelineEntry): Row => ({
   entry: entry.entry,
   retryable:
     !context.isWorking &&
+    !context.brainTurnIds.has(entry.entry.turnId) &&
     Option.exists(
       context.latestTurn,
       (turn) => turn.id === entry.entry.turnId && turn.status === "failed"
@@ -888,7 +922,10 @@ const placeChangedFiles = (
   };
 
   for (const row of rows) {
-    if (row.kind === "message" && row.message.role === "user") {
+    if (
+      (row.kind === "message" && row.message.role === "user") ||
+      row.kind === "brain-input"
+    ) {
       flushBefore(order.get(row.message.turnId) ?? Number.POSITIVE_INFINITY);
     }
 

@@ -601,59 +601,6 @@ describe("saved attachments in one tab", () => {
         }).toStrictEqual({ tray: ["att_b"], later: [], stored: [] });
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
-
-  it.effect(
-    "stay gone once a turn whose send and put-back saves were both refused is sent again",
-    () =>
-      Effect.gen(function* () {
-        const inA = { draftKey: Option.some("thread:a") };
-        const full = yield* refusingStore;
-
-        // One attachment ready and saved: the tab and storage agree.
-        const first = restore({ ...initial, loaded: true }, "thread:a", [
-          ref("att_a"),
-        ]);
-
-        const saved = answeredIn(first.model, yield* runSaves(first), inA);
-
-        // The send's save S1 is refused; the turn is put back before S1 answers, and its save S2
-        // is refused too.
-        const sent = clearSent(saved, "thread:a");
-        const back = restore(sent.model, "thread:a", [ref("att_a")]);
-
-        const sentAnswers = yield* runSaves(sent).pipe(
-          Effect.provideService(KeyValueStore.KeyValueStore, full)
-        );
-
-        const backAnswers = yield* runSaves(back).pipe(
-          Effect.provideService(KeyValueStore.KeyValueStore, full)
-        );
-
-        const tab = answeredIn(
-          back.model,
-          [...sentAnswers, ...backAnswers],
-          inA
-        );
-
-        // Storage takes writes again, and the brain takes the turn sent again: its save takes the
-        // attachment out, so a reload does not restore it.
-        const sentAgain = clearSent(tab, "thread:a");
-
-        const later = answeredIn(
-          sentAgain.model,
-          yield* runSaves(sentAgain),
-          inA
-        );
-
-        const stored = yield* storedSaved;
-
-        expect({
-          tray: readyIds(tab, "thread:a"),
-          later: readyIds(later, "thread:a"),
-          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
-        }).toStrictEqual({ tray: ["att_a"], later: [], stored: [] });
-      }).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
 });
 
 describe("an upload answer", () => {

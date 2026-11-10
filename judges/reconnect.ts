@@ -73,7 +73,7 @@ import { FAUX_MODEL } from "../apps/server/src/brain/FauxModels.ts";
 import { projectIdFor } from "../apps/server/src/shell/ShellCommands.ts";
 import { chromium } from "./lib/Browser.ts";
 import { recordOnExit } from "./lib/Record.ts";
-import { endedRows, isSettled } from "./lib/TurnsEnded.ts";
+import { endedRows, isSettled, SETTLED_READS } from "./lib/TurnsEnded.ts";
 
 recordOnExit(import.meta);
 
@@ -386,23 +386,26 @@ if (gateAddress === null || Predicate.isString(gateAddress)) {
 let brain = await startBrain();
 
 /**
- * Waits until the turn of every thread this judge launched has ended in the brain's shell, and a
- * second read shows the same rows (`lib/TurnsEnded.ts`), so no live update for them follows what
- * the page is about to read. The dev brain's demo thread keeps moving the shell's sequence; its row
- * is not read.
+ * Waits until the turn of every thread this judge launched has ended in the brain's shell, the
+ * newest one idle, and `SETTLED_READS` reads in a row show the same rows (`lib/TurnsEnded.ts`), so no
+ * live update for them follows what the page is about to read. The dev brain's demo thread keeps
+ * moving the shell's sequence; its row is not read.
  */
 const brainSettled = async (): Promise<void> => {
   const deadline = Date.now() + 30_000;
   let previous = Option.none<string>();
+  let agreeing = 0;
 
   for (;;) {
     const snapshot = await brainShell();
 
     const current = Option.flatMap(snapshot, (shell) =>
-      endedRows(shell, launched)
+      endedRows(shell, launched, launched.slice(-1))
     );
 
-    if (isSettled(previous, current)) {
+    agreeing = isSettled(previous, current) ? agreeing + 1 : 0;
+
+    if (agreeing >= SETTLED_READS - 1) {
       return;
     }
 

@@ -1,5 +1,5 @@
 // When the turns a judge started have ended, read from the brain's shell snapshot: each launched
-// thread's row says a run completed and no run is live, and two reads in a row show the same rows.
+// thread's row says a run completed and no run is live, and the reads agree for long enough.
 // A quiet stretch of the shell's sequence is no proof: the dev brain's demo thread is sent a message
 // every few seconds (`apps/server/src/DevDemo.ts`), and a stalled brain is quiet mid-turn. Rows of
 // threads the judge did not launch are ignored.
@@ -20,11 +20,13 @@ export const hasEnded = (row: ThreadShell): boolean =>
 
 /**
  * The rows of `threadIds` in `snapshot`, as wire JSON in that order, once every one has ended;
- * none while any is missing or still has a run live.
+ * none while any is missing or still has a run live. The rows in `idleOnly` must have ended idle: a
+ * thread no kill touched has no reason to fail, so its failure is not an end the judge waits for.
  */
 export const endedRows = (
   snapshot: ShellSnapshot,
-  threadIds: ReadonlyArray<ThreadId>
+  threadIds: ReadonlyArray<ThreadId>,
+  idleOnly: ReadonlyArray<ThreadId> = []
 ): Option.Option<string> =>
   Option.flatMap(
     Option.all(
@@ -33,7 +35,11 @@ export const endedRows = (
       )
     ),
     (rows) =>
-      rows.every(hasEnded)
+      rows.every(
+        (row) =>
+          hasEnded(row) &&
+          (row.activity === "idle" || !idleOnly.includes(row.id))
+      )
         ? Option.some(`[${rows.map((row) => encodeRow(row)).join(",")}]`)
         : Option.none()
   );
@@ -46,3 +52,10 @@ export const isSettled = (
   Option.isSome(previous) &&
   Option.isSome(current) &&
   previous.value === current.value;
+
+/**
+ * How many reads in a row must agree (`isSettled`) before the brain counts as settled: row writes
+ * that trail a run's end are debounced at 50 ms, so one 250 ms gap is too thin a margin on a loaded
+ * machine. Four agreeing reads hold about a second, as the old settle on the shell's sequence did.
+ */
+export const SETTLED_READS = 4;

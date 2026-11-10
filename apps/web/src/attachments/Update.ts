@@ -672,22 +672,11 @@ export const update = (
         onNone: () => {
           // Nothing was written: the base goes back to `base`, with what this tab asked for in
           // the saves still on their way since, so the next save writes this one's changes again.
-          // What it took out stays out of the tray until storage no longer holds it. The base keeps
-          // what any refused save took out: `base` was asked on top of an earlier save that may
-          // have been refused too, and then leaves out an attachment storage still holds, whose
-          // removal the next save would not write.
-          const refusedRemovals = savedUnion(
-            model.refusedRemovals,
-            savedWithout(base, written)
-          );
-
+          // What it took out stays out of the tray until storage no longer holds it.
           const unsaved = modifyFields(model, {
-            stored: () =>
-              savedUnion(
-                rebaseSaved(written, model.stored, base),
-                refusedRemovals
-              ),
-            refusedRemovals: () => refusedRemovals,
+            stored: () => rebaseSaved(written, model.stored, base),
+            refusedRemovals: (refused) =>
+              savedUnion(refused, savedWithout(base, written)),
           });
 
           return Option.match(context.draftKey, {

@@ -90,6 +90,17 @@ describe("the turns a judge started", () => {
     );
   });
 
+  it("have not ended while a thread no kill touched ended failed", () => {
+    const failed = { ...ended, activity: "failed" as const };
+
+    assert.isTrue(
+      Option.isNone(endedRows(snapshot(4, [failed]), [LAUNCHED], [LAUNCHED]))
+    );
+    assert.isTrue(
+      Option.isSome(endedRows(snapshot(4, [ended]), [LAUNCHED], [LAUNCHED]))
+    );
+  });
+
   it("settle when two reads agree, though the demo thread moves the sequence between them", () => {
     const first = endedRows(
       snapshot(4, [ended, { ...row(DEMO), activity: "running" }]),

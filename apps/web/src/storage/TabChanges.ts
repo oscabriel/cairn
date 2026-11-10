@@ -157,6 +157,18 @@ export const laterRead = (
     : read;
 
 /**
+ * True when `read`, a save's answer, shows storage was cleared since `last`, the tab's own last
+ * read: it is the later read, and of another generation. A tab with no read cannot tell.
+ */
+export const clearedSince = (
+  last: Option.Option<LastRead>,
+  read: Option.Option<LastRead>
+): boolean =>
+  Option.isSome(last) &&
+  laterRead(read, last) === read &&
+  Option.exists(read, (answer) => answer.generation !== last.value.generation);
+
+/**
  * Whether storage may have removed the entry at a key since a tab's read: a removal names it, or
  * the tab cannot tell (`mergeStored`).
  */

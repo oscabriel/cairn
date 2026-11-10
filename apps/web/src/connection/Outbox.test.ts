@@ -44,7 +44,12 @@ import {
   liveModel,
   sendItem,
 } from "../TestFixtures.ts";
-import { init, UNREAD_STORED_NOTICE, update } from "../Update.ts";
+import {
+  CLEARED_NOTICE,
+  init,
+  UNREAD_STORED_NOTICE,
+  update,
+} from "../Update.ts";
 import { CairnConnection } from "./Connection.ts";
 import {
   enqueue,
@@ -805,6 +810,37 @@ const hearOutbox = (tab: Model) =>
       : update(told.model, answer);
   });
 
+/** The draft key of the thread `sendItem` names. */
+const THREAD_DRAFT = `thread:${THREAD}`;
+
+/** An attachment a turn carries. */
+const attachedRef = {
+  id: AttachmentId.make("att_1"),
+  name: "notes.pdf",
+  mimeType: "application/pdf",
+  sizeBytes: 12,
+  kind: "pdf" as const,
+  sha256: "0".repeat(64),
+};
+
+/** `first` with an attachment and a skill, which its words name. */
+const attachedTurn = OutboxItem.match(first, {
+  Send: ({ input }) =>
+    OutboxItem.Send({
+      input: {
+        ...input,
+        input: {
+          ...input.input,
+          text: "message request-1 $review",
+          attachments: [attachedRef.id],
+          skillRefs: ["review"],
+        },
+      },
+    }),
+  Dispatch: (item) => OutboxItem.Dispatch(item),
+  Launch: (item) => OutboxItem.Launch(item),
+});
+
 describe("the outbox in two tabs", () => {
   it("keeps each tab's queued items in storage", async () => {
     const stored = await Effect.runPromise(
@@ -922,14 +958,22 @@ describe("the outbox in two tabs", () => {
     });
   });
 
-  it("drops what it held once site data was cleared under it, instead of writing it back", async () => {
+  it("drops what it held once site data was cleared under it, and puts a turn it queued back in its draft with a notice", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const store = yield* KeyValueStore.KeyValueStore;
 
+        // The brain is unreachable: the turn waits in the outbox, its draft emptied at send.
         const queued = update(
           connectingModel,
-          Message.QueuedOutboxItem({ item: first })
+          Message.GotComposerMessage({
+            message: ComposerMessage.PreparedTurn({
+              draftKey: THREAD_DRAFT,
+              item: attachedTurn,
+              navigateTo: Option.none(),
+              attachments: [attachedRef],
+            }),
+          })
         );
 
         const [saved] = yield* runSaves(queued);
@@ -945,13 +989,85 @@ describe("the outbox in two tabs", () => {
         const heard = yield* hearOutbox(tab);
 
         return {
+          queued: tab.composer.drafts[THREAD_DRAFT]?.text,
           outbox: heard.model.outbox.map(outboxKey),
           stored: (yield* storedOutbox).map(outboxKey),
+          sent: names(heard).filter((name) => name === SendOutboxItem.name),
+          text: heard.model.composer.drafts[THREAD_DRAFT]?.text,
+          attachments: heard.model.composer.drafts[THREAD_DRAFT]?.attachments,
+          tray: readyIds(heard.model.composer.attachments, THREAD_DRAFT),
+          sentTurns: heard.model.sentTurns,
+          notice: heard.model.notice,
         };
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
-    expect(result).toStrictEqual({ outbox: [], stored: [] });
+    expect(result).toStrictEqual({
+      queued: undefined,
+      outbox: [],
+      stored: [],
+      sent: [],
+      text: "message request-1 $review",
+      attachments: [attachedRef.id],
+      tray: [attachedRef.id],
+      sentTurns: {},
+      notice: Option.some(CLEARED_NOTICE),
+    });
+  });
+
+  it("settles a turn it queued once another tab's answer removes it, with no notice, while site data stays", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const queued = update(
+          connectingModel,
+          Message.GotComposerMessage({
+            message: ComposerMessage.PreparedTurn({
+              draftKey: THREAD_DRAFT,
+              item: attachedTurn,
+              navigateTo: Option.none(),
+              attachments: [attachedRef],
+            }),
+          })
+        );
+
+        const [saved] = yield* runSaves(queued);
+
+        const tabA =
+          saved === undefined
+            ? queued.model
+            : update(queued.model, saved).model;
+
+        // Tab B reads the turn, hears the brain acknowledge it, and saves the outbox without it.
+        const tabB = (yield* hearOutbox(liveModel(0))).model;
+
+        yield* runSaves(
+          update(
+            tabB,
+            Message.AcknowledgedOutboxItem({ epoch: 0, key: "request-1" })
+          )
+        );
+
+        const heard = yield* hearOutbox(tabA);
+
+        return {
+          outbox: heard.model.outbox.map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
+          text: heard.model.composer.drafts[THREAD_DRAFT]?.text,
+          tray: readyIds(heard.model.composer.attachments, THREAD_DRAFT),
+          sentTurns: heard.model.sentTurns,
+          notice: heard.model.notice,
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(result).toStrictEqual({
+      outbox: [],
+      stored: [],
+      text: undefined,
+      tray: [],
+      sentTurns: {},
+      notice: Option.none(),
+    });
   });
 
   it("never writes back an item another tab removed while it slept longer than removals are kept", async () => {

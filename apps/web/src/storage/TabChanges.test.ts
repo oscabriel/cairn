@@ -9,6 +9,7 @@ import { KeyValueStore } from "effect/persistence";
 import { TestClock } from "effect/testing";
 
 import {
+  clearedSince,
   loadShared,
   mergeRecord,
   mergeStored,
@@ -157,6 +158,28 @@ describe("a save into shared storage", () => {
         });
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
+});
+
+/** A tab's read of generation `generation` at `at`. */
+const readOf = (generation: string, at: number) =>
+  Option.some<LastRead>({ generation, at });
+
+describe("a save's answer", () => {
+  it("tells a clear: a later read of another generation", () => {
+    expect({
+      cleared: clearedSince(readOf("a", 1), readOf("b", 2)),
+      same: clearedSince(readOf("a", 1), readOf("a", 2)),
+      older: clearedSince(readOf("b", 2), readOf("a", 1)),
+      unread: clearedSince(Option.none(), readOf("b", 2)),
+      failed: clearedSince(readOf("a", 1), Option.none()),
+    }).toStrictEqual({
+      cleared: true,
+      same: false,
+      older: false,
+      unread: false,
+      failed: false,
+    });
+  });
 });
 
 describe("a load of shared storage", () => {

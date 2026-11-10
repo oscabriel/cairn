@@ -5,6 +5,7 @@ import {
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
 import {
+  Array,
   DateTime,
   Duration,
   Effect,
@@ -1067,6 +1068,213 @@ describe("the outbox in two tabs", () => {
       tray: [],
       sentTurns: {},
       notice: Option.none(),
+    });
+  });
+
+  it("puts a turn it read at start back in its draft with a notice once site data was cleared under it", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        // The turn was queued while the brain was unreachable, and the page reloaded: the outbox
+        // kept the turn, and its sent-turn record, kept in memory, is gone.
+        yield* runSaves(
+          update(
+            connectingModel,
+            Message.GotComposerMessage({
+              message: ComposerMessage.PreparedTurn({
+                draftKey: THREAD_DRAFT,
+                item: attachedTurn,
+                navigateTo: Option.none(),
+                attachments: [attachedRef],
+              }),
+            })
+          )
+        );
+
+        const loaded = yield* readOutbox;
+
+        const tab = init(
+          {
+            boot: Option.none(),
+            outbox: loaded.value,
+            outboxRead: loaded.read,
+            outboxUnread: false,
+          },
+          Option.getOrThrow(Url.fromString("https://code.gneiss.run/"))
+        ).model;
+
+        yield* store.clear;
+
+        const heard = yield* hearOutbox(tab);
+
+        return {
+          loaded: tab.outbox.map(outboxKey),
+          outbox: heard.model.outbox.map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
+          sent: names(heard).filter((name) => name === SendOutboxItem.name),
+          text: heard.model.composer.drafts[THREAD_DRAFT]?.text,
+          attachments: heard.model.composer.drafts[THREAD_DRAFT]?.attachments,
+          tray: readyIds(heard.model.composer.attachments, THREAD_DRAFT),
+          notice: heard.model.notice,
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(result).toStrictEqual({
+      loaded: ["request-1"],
+      outbox: [],
+      stored: [],
+      sent: [],
+      text: "message request-1 $review",
+      attachments: [attachedRef.id],
+      tray: [attachedRef.id],
+      notice: Option.some(CLEARED_NOTICE),
+    });
+  });
+
+  it("leaves a turn another tab queued to that tab once site data was cleared under it", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        // Tab A started before tab B queued the turn, and adopts it from storage.
+        const tabA = (yield* hearOutbox(connectingModel)).model;
+
+        yield* runSaves(
+          update(
+            connectingModel,
+            Message.GotComposerMessage({
+              message: ComposerMessage.PreparedTurn({
+                draftKey: THREAD_DRAFT,
+                item: attachedTurn,
+                navigateTo: Option.none(),
+                attachments: [attachedRef],
+              }),
+            })
+          )
+        );
+
+        const adopted = (yield* hearOutbox(tabA)).model;
+
+        yield* store.clear;
+
+        const heard = yield* hearOutbox(adopted);
+
+        return {
+          adopted: adopted.outboxAdopted,
+          outbox: heard.model.outbox.map(outboxKey),
+          text: heard.model.composer.drafts[THREAD_DRAFT]?.text,
+          notice: heard.model.notice,
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(result).toStrictEqual({
+      adopted: ["request-1"],
+      outbox: [],
+      text: undefined,
+      notice: Option.none(),
+    });
+  });
+
+  it("keeps a turn in flight when site data was cleared under it, for its own answer to settle", async () => {
+    const { acknowledged, atClear, queued, refused, resent } =
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* KeyValueStore.KeyValueStore;
+
+          // The brain is live: the turn is sent, and its answer has not come when the clear lands.
+          const sent = update(
+            liveModel(0),
+            Message.GotComposerMessage({
+              message: ComposerMessage.PreparedTurn({
+                draftKey: THREAD_DRAFT,
+                item: attachedTurn,
+                navigateTo: Option.none(),
+                attachments: [attachedRef],
+              }),
+            })
+          );
+
+          const [saved] = yield* runSaves(sent);
+
+          const tab =
+            saved === undefined ? sent.model : update(sent.model, saved).model;
+
+          yield* store.clear;
+
+          const heard = (yield* hearOutbox(tab)).model;
+
+          const draftOf = (current: Model) => ({
+            outbox: current.outbox.map(outboxKey),
+            text: current.composer.drafts[THREAD_DRAFT]?.text,
+            notice: current.notice,
+          });
+
+          // The connection drops before the answer: the next live one sends the same turn again.
+          const reconnected = Array.reduce(
+            [
+              Message.ElapsedBackoff({ epoch: 0, attempt: 1 }),
+              Message.AcquiredConnection(),
+              Message.SucceededHello({ epoch: 1, hello }),
+              Message.ReceivedShellItem({ epoch: 1, item: synchronizedItem }),
+            ],
+            update(
+              heard,
+              Message.LostConnection({ epoch: 0, reason: "closed" })
+            ),
+            (result, next) => update(result.model, next)
+          );
+
+          return {
+            queued: tab.outbox,
+            atClear: {
+              ...draftOf(heard),
+              inFlight: heard.outboxInFlight,
+              sent: tab.outboxInFlight,
+            },
+            acknowledged: draftOf(
+              update(
+                heard,
+                Message.AcknowledgedOutboxItem({ epoch: 0, key: "request-1" })
+              ).model
+            ),
+            refused: draftOf(
+              update(
+                heard,
+                Message.FailedOutboxItem({
+                  epoch: 0,
+                  key: "request-1",
+                  retryable: false,
+                  transport: false,
+                  message: "Thread 01890a5d is archived.",
+                })
+              ).model
+            ),
+            resent: (reconnected.commands ?? []).flatMap((command) =>
+              command.name === SendOutboxItem.name ? [command.args] : []
+            ),
+          };
+        }).pipe(Effect.provide(KeyValueStore.layerMemory))
+      );
+
+    expect({ acknowledged, atClear, refused, resent }).toStrictEqual({
+      atClear: {
+        outbox: ["request-1"],
+        text: undefined,
+        notice: Option.none(),
+        inFlight: ["request-1"],
+        sent: ["request-1"],
+      },
+      acknowledged: { outbox: [], text: undefined, notice: Option.none() },
+      refused: {
+        outbox: [],
+        text: "message request-1 $review",
+        notice: Option.some("Thread 01890a5d is archived."),
+      },
+      // The same item, so the same `requestId`.
+      resent: queued.map((item) => ({ epoch: 1, item })),
     });
   });
 

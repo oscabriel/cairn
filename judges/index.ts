@@ -381,6 +381,16 @@ export const JUDGES: ReadonlyArray<Judge> = [
     control: "a dispatch that ignores its row, and watchers left parked",
   },
   {
+    name: "approval-kill",
+    files: ["approval-kill.ts"],
+    proves:
+      "ADR 0046's gate (ADR 0013's S4 on pi-durable 1.5): an approval pending across six kill -9s is still answerable, and its call runs once.",
+    runs: ["set", "hand"],
+    cost: free,
+    needs: [],
+    control: "control (the brain opened with pi-durable's own restart limit)",
+  },
+  {
     name: "workflow-stop",
     files: ["workflow-stop.ts", "workflow-stop.sh"],
     proves:
@@ -861,6 +871,7 @@ export const SET: ReadonlyArray<SetRun> = [
   { judge: "budget-kill", args: [] },
   { judge: "goal-kill", args: [] },
   { judge: "brief-go", args: [] },
+  { judge: "approval-kill", args: [] },
   { judge: "workflow-kill", args: [] },
   { judge: "workflow-stop", args: [] },
   { judge: "workflow-budget", args: [] },

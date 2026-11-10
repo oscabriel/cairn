@@ -2662,14 +2662,7 @@
                 },
                 "activity": {
                   "type": "string",
-                  "enum": [
-                    "idle",
-                    "preparing",
-                    "running",
-                    "waiting",
-                    "parked",
-                    "failed"
-                  ]
+                  "enum": ["idle", "preparing", "running", "waiting", "failed"]
                 },
                 "activeRunId": {
                   "anyOf": [
@@ -2737,6 +2730,7 @@
                         "usage_limit",
                         "provider_error",
                         "transport_error",
+                        "brain_restart",
                         "unknown"
                       ]
                     },
@@ -2964,14 +2958,6 @@
                     }
                   ]
                 },
-                "parkedTaskIds": {
-                  "type": "array",
-                  "items": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 9007199254740991
-                  }
-                },
                 "lineage": {
                   "anyOf": [
                     {
@@ -3143,8 +3129,7 @@
                 "pinOrderKey",
                 "activeOrderKey",
                 "autoSettleDisabledAt",
-                "lastVisitedAt",
-                "parkedTaskIds"
+                "lastVisitedAt"
               ],
               "additionalProperties": true
             }
@@ -3286,7 +3271,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -3452,14 +3436,7 @@
           },
           "activity": {
             "type": "string",
-            "enum": [
-              "idle",
-              "preparing",
-              "running",
-              "waiting",
-              "parked",
-              "failed"
-            ]
+            "enum": ["idle", "preparing", "running", "waiting", "failed"]
           },
           "activeRunId": {
             "anyOf": [
@@ -3527,6 +3504,7 @@
                   "usage_limit",
                   "provider_error",
                   "transport_error",
+                  "brain_restart",
                   "unknown"
                 ]
               },
@@ -3754,14 +3732,6 @@
               }
             ]
           },
-          "parkedTaskIds": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 9007199254740991
-            }
-          },
           "lineage": {
             "anyOf": [
               {
@@ -3933,8 +3903,7 @@
           "pinOrderKey",
           "activeOrderKey",
           "autoSettleDisabledAt",
-          "lastVisitedAt",
-          "parkedTaskIds"
+          "lastVisitedAt"
         ],
         "additionalProperties": true
       },
@@ -4049,7 +4018,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",

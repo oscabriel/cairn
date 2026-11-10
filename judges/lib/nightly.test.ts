@@ -111,7 +111,9 @@ const holdLock = () => {
   assert.isTrue(lockIsHeld(), "the holder took the lock");
 };
 
-describe("nightly.sh and the judge lock", () => {
+// Each case spawns the script and waits out its lock timeout, about 3 s alone and more under the
+// gate's load, so the cases take a longer limit than Vitest's 5 s.
+describe("nightly.sh and the judge lock", { timeout: 30_000 }, () => {
   afterEach(() => {
     holder?.kill();
     holder = undefined;

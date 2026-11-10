@@ -5,17 +5,19 @@
 // A result schema is checked when the brief is asked (`checkResultSchema`), so a schema the result
 // tool cannot hold a child to comes back to the parent at once, naming what to change. A model must
 // be `provider/modelId[:level]` by its form here, never a role name (ADR 0043); whether it is ready
-// is the tool's check at the ask, and the start task checks it again at Go.
+// is the tool's check at the ask, and the start task checks it again at Go. The budget is what the
+// call asks (`max_tokens`, `max_usd`) over the server's default, frozen with the rest (ADR 0047).
 
 import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Brief } from "@cairn/protocol/Policy";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
-import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
+import type { Budget } from "@cairn/protocol/Spend";
 import { Option, Result, Schema } from "effect";
 
 import { SubagentToolText } from "../brain/SubagentText.ts";
 import { isRoleName } from "../models/ModelSpecs.ts";
 import { checkResultSchema } from "../models/ResultTool.ts";
+import { budgetAsked } from "../usage/DefaultBudget.ts";
 import { jsonRecordOf } from "./SubagentDocs.ts";
 import type { JsonRecord } from "./SubagentDocs.ts";
 
@@ -29,6 +31,10 @@ export interface SpawnArguments {
   readonly wake: Option.Option<string>;
   /** The `provider/modelId[:level]` the child runs on; none for the parent's model and level. */
   readonly model: Option.Option<string>;
+  /** The token budget the call asks; none for the server's default (ADR 0047). */
+  readonly maxTokens: Option.Option<number>;
+  /** The list-price dollar budget the call asks; none for the server's default. */
+  readonly maxUsd: Option.Option<number>;
 }
 
 const encodeBrief = Schema.encodeSync(Brief);
@@ -38,12 +44,14 @@ const decodeBrief = Schema.decodeUnknownOption(Brief);
 const decodeModelSpec = Schema.decodeOption(ModelSpec);
 
 /**
- * The brief a spawn proposes, in `mode` (the parent's effective mode, which a child never widens);
- * fails with the text the model reads when `result_schema` is not a JSON Schema object.
+ * The brief a spawn proposes, in `mode` (the parent's effective mode, which a child never widens),
+ * with the budget the call asks over `fallback`, the server's default (ADR 0047); fails with the
+ * text the model reads when `result_schema` is not a JSON Schema object.
  */
 export const briefOf = (
   args: SpawnArguments,
-  mode: RuntimeMode
+  mode: RuntimeMode,
+  fallback: Budget
 ): Result.Result<Brief, string> => {
   const schema = Option.map(args.resultSchema, jsonRecordOf);
 
@@ -94,7 +102,10 @@ export const briefOf = (
     thinking: null,
     mode,
     mayCommit: false,
-    budget: DEFAULT_BUDGET,
+    budget: budgetAsked(fallback, {
+      maxTokens: args.maxTokens,
+      maxUsd: args.maxUsd,
+    }),
     resultSchema: Option.getOrNull(Option.flatMap(schema, Option.fromNullOr)),
     wake: Option.contains(args.wake, "quiet") ? "quiet" : "answer",
     decisions: [],

@@ -178,6 +178,7 @@ describe("the request card", () => {
           decision: "accept",
           reason: Option.none(),
           answers: Option.none(),
+          launch: Option.none(),
         }),
         Message.SucceededRespond({ approvalId: aId })
       ),
@@ -209,6 +210,7 @@ describe("the request card", () => {
           decision: "decline",
           reason: Option.some("not before the review"),
           answers: Option.none(),
+          launch: Option.none(),
         }),
         Message.SucceededRespond({ approvalId: aId })
       ),
@@ -259,6 +261,7 @@ describe("the request card", () => {
             { index: 0, picks: ["SQLite"], custom: null },
             { index: 1, picks: [], custom: "kestrel" },
           ]),
+          launch: Option.none(),
         })
       ),
       Scene.Command.resolve(
@@ -348,6 +351,7 @@ describe("the request card", () => {
           decision: "accept",
           reason: Option.none(),
           answers: Option.none(),
+          launch: Option.none(),
         })
       ),
       Scene.Command.resolve(
@@ -542,6 +546,7 @@ describe("the request card", () => {
           decision: "decline",
           reason: Option.some("ask me later"),
           answers: Option.none(),
+          launch: Option.none(),
         })
       ),
       Scene.Command.resolve(
@@ -702,6 +707,7 @@ describe("the request card's answer lifecycle", () => {
           decision: "accept",
           reason: Option.none(),
           answers: Option.some([{ index: 0, picks: ["SQLite"], custom: null }]),
+          launch: Option.none(),
         },
       ],
       "the answers go once Cairn is back"

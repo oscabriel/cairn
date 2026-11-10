@@ -52,6 +52,7 @@ export const stubHandlers = {
   "settings.update": unary("settings.update"),
   "models.check": unary("models.check"),
   "spend.get": unary("spend.get"),
+  "budget.declare": unary("budget.declare"),
   "providers.login.start": stream("providers.login.start"),
   "providers.login.cancel": unary("providers.login.cancel"),
   "providers.logout": unary("providers.logout"),

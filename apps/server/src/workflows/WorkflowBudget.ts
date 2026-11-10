@@ -917,9 +917,15 @@ const raiseRecord = (
   at: number,
   elapsedMillis: number
 ): ApprovalRecord => {
+  // The card names the run and reads what it spent against its line (ADR 0047).
   const payload: JsonRecord = {
     type: "budget-raise",
     scope: line.workflowId,
+    title: name,
+    spent: {
+      tokens: Math.round(line.meter.tokens),
+      listMicros: Math.round(line.meter.listMicros),
+    },
     from: { ...line.budget },
     to: raisedBudget(line.budget, line.meter, elapsedMillis),
   };

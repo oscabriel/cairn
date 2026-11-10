@@ -58,6 +58,7 @@ import {
   PiModelSource,
 } from "../apps/server/src/models/PiModelSource.ts";
 import { ResultTool } from "../apps/server/src/models/ResultTool.ts";
+import { NO_DEFAULT_BUDGET } from "../apps/server/src/usage/DefaultBudget.ts";
 import {
   BUILT_IN_RECIPES,
   recipeReference,
@@ -308,6 +309,7 @@ const runCouncil = Effect.gen(function* () {
   const plan = planAccess(
     yield* WorkflowPlan,
     Option.none(),
+    NO_DEFAULT_BUDGET,
     yield* Effect.context()
   );
 

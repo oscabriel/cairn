@@ -126,9 +126,15 @@ export const SourcesMemory = Layer.effectContext(
             (yield* Ref.get(record.scopes)).get(threadId)
           );
         }),
+      // A declare starts an epoch of its own, as the documents count it (`BudgetSources`).
       declare: (threadId: ThreadId, budget: Budget, mode: BudgetMode) =>
         Ref.update(record.scopes, (map) =>
-          new Map(map).set(threadId, { threadId, budget, mode, epoch: 0 })
+          new Map(map).set(threadId, {
+            threadId,
+            budget,
+            mode,
+            epoch: (map.get(threadId)?.epoch ?? 0) + 1,
+          })
         ),
       askRaise: (limit, to) =>
         once(record.raises, `${limit.threadId} ${limit.epoch}`, to),

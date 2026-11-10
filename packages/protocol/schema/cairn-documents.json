@@ -1416,6 +1416,27 @@
                           "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
                           "minLength": 1
                         },
+                        "title": {
+                          "type": "string",
+                          "maxLength": 4096
+                        },
+                        "spent": {
+                          "type": "object",
+                          "properties": {
+                            "tokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listMicros": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["tokens", "listMicros"],
+                          "additionalProperties": true
+                        },
                         "from": {
                           "type": "object",
                           "properties": {
@@ -4557,6 +4578,27 @@
                           "type": "string",
                           "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
                           "minLength": 1
+                        },
+                        "title": {
+                          "type": "string",
+                          "maxLength": 4096
+                        },
+                        "spent": {
+                          "type": "object",
+                          "properties": {
+                            "tokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listMicros": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["tokens", "listMicros"],
+                          "additionalProperties": true
                         },
                         "from": {
                           "type": "object",

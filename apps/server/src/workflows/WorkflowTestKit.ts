@@ -88,6 +88,7 @@ import {
 } from "../models/ModelSpecs.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { fixedDefaultBudget } from "../usage/DefaultBudget.ts";
 import { NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
 import type { BudgetPushSink } from "./WorkflowBudget.ts";
 import { approveRecord, proposedRecord, WorkflowsDoc } from "./WorkflowDocs.ts";
@@ -193,6 +194,8 @@ export interface KitOptions {
   readonly push?: BudgetPushSink;
   /** Project recipes a reference may name, source by name; none when absent. */
   readonly projectRecipes?: Readonly<Record<string, string>>;
+  /** The server's default budget a proposal starts from; no limit when absent. */
+  readonly defaultBudget?: Budget;
 }
 
 /** The flags of a node prompt: `node:<label> typed ms=200`. */
@@ -533,6 +536,7 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
         ...planAccess(
           yield* WorkflowPlan,
           Option.none(),
+          fixedDefaultBudget(options.defaultBudget ?? DEFAULT_BUDGET),
           yield* Effect.context()
         ),
         projectRecipe: async (_root, name) =>

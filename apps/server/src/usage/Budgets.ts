@@ -483,6 +483,8 @@ export class Budgets extends Context.Service<
 
         if (Option.isNone(found)) {
           yield* book.remove(threadId);
+          // A budget removed (a declare with no limit) leaves the row's word to say so.
+          yield* ledger.touch([threadId]);
 
           return [];
         }

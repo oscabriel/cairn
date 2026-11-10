@@ -3,11 +3,14 @@ import type { Brief, Question } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
-import { Option } from "effect";
+import { Option, Result } from "effect";
 
+import { takesBudgetEdit } from "./BriefGo.ts";
+import { budgetDraftOf, budgetEditOf } from "./Meters.ts";
 import {
   approvalDetail,
   briefLines,
+  budgetRaiseLines,
   budgetText,
   judgeText,
   requestKindWord,
@@ -43,7 +46,7 @@ const brief: Brief = {
   thinking: null,
   mode: "auto-accept-edits",
   mayCommit: false,
-  budget: { ...DEFAULT_BUDGET, maxTurns: 40 },
+  budget: { ...DEFAULT_BUDGET, maxListMicros: Micros.make(1_500_000) },
   resultSchema: null,
   wake: "answer",
   decisions: [],
@@ -93,7 +96,7 @@ describe("the request card's words", () => {
       ],
       ["Where", "A worktree from the parent's HEAD; writes src/count"],
       ["Who", "opencode-go/gpt-6-luna at high, Auto-accept edits"],
-      ["Budget", "40 turns"],
+      ["Budget", "$1.50 at API list price"],
     ]);
 
     assert.deepStrictEqual(
@@ -102,11 +105,11 @@ describe("the request card's words", () => {
     );
   });
 
-  it("says each limit of a budget, and No limit for none", () => {
+  it("says the dollar and token limits of a budget, no limit nothing sets, and No limit for none", () => {
     const budget: Budget = {
       maxListMicros: Micros.make(2_500_000),
       maxTokens: 120_000,
-      maxTurns: null,
+      maxTurns: 40,
       maxMinutes: 30,
       planGuard: {
         provider: "claude-bridge",
@@ -118,9 +121,132 @@ describe("the request card's words", () => {
 
     assert.strictEqual(
       budgetText(budget),
-      "$2.50 at API list price, 120,000 tokens, 30 min, 50% of the claude-bridge plan window"
+      "$2.50 at API list price, 120,000 tokens"
     );
     assert.strictEqual(budgetText(DEFAULT_BUDGET), "No limit");
+  });
+
+  it("reads a budget raise by its scope's title, its spend against the line, and the proposed line", () => {
+    const from: Budget = {
+      ...DEFAULT_BUDGET,
+      maxListMicros: Micros.make(2_000_000),
+      maxTokens: 100_000,
+    };
+
+    assert.deepStrictEqual(
+      budgetRaiseLines({
+        type: "budget-raise",
+        scope: "0190f0c0-0000-7000-8000-0000000000b1",
+        title: "Fan out the review",
+        spent: { tokens: 104_000, listMicros: Micros.make(2_040_000) },
+        from,
+        to: { ...from, maxListMicros: Micros.make(4_000_000) },
+      }),
+      [
+        ["Scope", "Fan out the review"],
+        ["Spent", "$2.04 of $2.00 at API list price; 104k of 100k tokens"],
+        ["Raise to", "$4.00 at API list price, 100,000 tokens"],
+      ]
+    );
+
+    // A raise asked before it carried its title and spend never shows a raw id or a zero.
+    const older = {
+      type: "budget-raise" as const,
+      from: DEFAULT_BUDGET,
+      to: { ...DEFAULT_BUDGET, maxTokens: 200_000 },
+    };
+
+    assert.deepStrictEqual(
+      budgetRaiseLines({
+        ...older,
+        scope: "0190f0c0-0000-7000-8000-0000000000b1",
+      }),
+      [
+        ["Scope", "This thread"],
+        ["Spent", "Not recorded on this raise"],
+        ["Raise to", "200,000 tokens"],
+      ]
+    );
+    assert.deepStrictEqual(budgetRaiseLines({ ...older, scope: "wf-3" })[0], [
+      "Scope",
+      "A workflow of this thread",
+    ]);
+  });
+
+  it("takes a budget edit on a subagent's brief and a workflow's launch only", () => {
+    const briefBody = RequestBody.Brief({ payload: brief });
+
+    assert.isTrue(
+      takesBudgetEdit({ kind: "brief", tool: "subagent_spawn" }, briefBody)
+    );
+    // A node's own brief is the workflow's envelope's to bound.
+    assert.isFalse(
+      takesBudgetEdit({ kind: "brief", tool: "agent" }, briefBody)
+    );
+    assert.isFalse(
+      takesBudgetEdit(
+        { kind: "tool-call", tool: "bash" },
+        RequestBody.Approval({ summary: "bash: ls", payload: Option.none() })
+      )
+    );
+  });
+
+  it("reads a budget field's draft into the budget Go sends, refusing what is not a limit", () => {
+    const proposed: Budget = {
+      ...DEFAULT_BUDGET,
+      maxListMicros: Micros.make(2_000_000),
+      warnAt: 0.7,
+    };
+
+    assert.deepStrictEqual(budgetDraftOf(proposed), {
+      dollars: "2.00",
+      tokens: "",
+    });
+
+    // Unchanged: Go sends no edit.
+    assert.deepStrictEqual(
+      budgetEditOf(proposed, Option.some(budgetDraftOf(proposed))),
+      Result.succeed(Option.none())
+    );
+    assert.deepStrictEqual(
+      budgetEditOf(proposed, Option.none()),
+      Result.succeed(Option.none())
+    );
+
+    assert.deepStrictEqual(
+      budgetEditOf(
+        proposed,
+        Option.some({ dollars: "$0.75", tokens: "120,000" })
+      ),
+      Result.succeed(
+        Option.some({
+          ...proposed,
+          maxListMicros: Micros.make(750_000),
+          maxTokens: 120_000,
+        })
+      )
+    );
+
+    // Both empty is no limit, said so.
+    assert.deepStrictEqual(
+      budgetEditOf(proposed, Option.some({ dollars: " ", tokens: "" })),
+      Result.succeed(
+        Option.some({ ...proposed, maxListMicros: null, maxTokens: null })
+      )
+    );
+
+    for (const draft of [
+      { dollars: "abc", tokens: "" },
+      { dollars: "0", tokens: "" },
+      { dollars: "-1", tokens: "" },
+      { dollars: "", tokens: "1.5" },
+      { dollars: "", tokens: "0" },
+    ]) {
+      assert.isTrue(
+        Result.isFailure(budgetEditOf(proposed, Option.some(draft))),
+        JSON.stringify(draft)
+      );
+    }
   });
 
   it("names a model judge by its spec", () => {

@@ -1,18 +1,25 @@
 // The meters' update (plan wave 6, 6G). The brain is asked for each section when the usage page or
 // the settings page opens on a client, and again on a new epoch; answers from another epoch are
 // dropped. On the usage page, new spend on the thread rows asks for the roll-up again, one question
-// at a time.
+// at a time. One budget form is open at a time (ADR 0047): the default a brief or workflow starts
+// from, saved through `settings.update`, or a thread's own budget, through `budget.declare`; each in
+// dollars at list price and tokens, both empty for no limit.
 
+import { budgetDraftOf, budgetOfDraft } from "@cairn/client-logic/Meters";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
-import { Array, Equal, Match, Option, Order } from "effect";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
+import type { Budget } from "@cairn/protocol/Spend";
+import { Array, Equal, Match, Option, Order, Predicate, Result } from "effect";
 import type { Update } from "foldkit";
 import * as AsyncData from "foldkit/asyncData";
 import { modifyFields } from "foldkit/struct";
 
-import { FetchMetersSettings, FetchSpend } from "./Command.ts";
+import { FetchMetersSettings, FetchSpend, SaveBudget } from "./Command.ts";
 import type { Services } from "./Command.ts";
 import { Message } from "./Message.ts";
 import type {
+  BudgetForm,
+  BudgetTarget,
   MeteredThread,
   MetersContext,
   MetersPage,
@@ -138,6 +145,9 @@ export const inform = (model: Model, context: MetersContext): UpdateReturn => {
     // Leaving both pages forgets the epoch, so coming back asks again.
     loadedEpoch: (loaded) =>
       context.page === "closed" ? Option.none() : loaded,
+    // A form left open on a page the user left is dropped with it.
+    form: (form) => (context.page === "usage" ? form : Option.none()),
+    saved: (saved) => (context.page === "usage" ? saved : Option.none()),
   });
 
   if (!canAsk(next)) {
@@ -150,6 +160,94 @@ export const inform = (model: Model, context: MetersContext): UpdateReturn => {
 
   return askNewSpend(next);
 };
+
+/**
+ * The budget a form starts from and writes over: the default's own warning line, a thread's the
+ * default line of 80 percent. Only dollars and tokens are offered (ADR 0047), so the form writes no
+ * other limit.
+ */
+const baseOf = (model: Model, target: BudgetTarget): Budget =>
+  Predicate.isTagged(target, "Default")
+    ? {
+        ...DEFAULT_BUDGET,
+        warnAt: Option.match(AsyncData.getData(model.server), {
+          onNone: () => DEFAULT_BUDGET.warnAt,
+          onSome: (settings) => settings.defaultBudget.warnAt,
+        }),
+      }
+    : DEFAULT_BUDGET;
+
+/** A form for `target`, filled from the default it changes, empty for a thread. */
+const formFor = (model: Model, target: BudgetTarget): BudgetForm => {
+  const draft = Predicate.isTagged(target, "Default")
+    ? Option.match(AsyncData.getData(model.server), {
+        onNone: () => budgetDraftOf(DEFAULT_BUDGET),
+        onSome: (settings) => budgetDraftOf(settings.defaultBudget),
+      })
+    : budgetDraftOf(DEFAULT_BUDGET);
+
+  return { target, ...draft, saving: false, error: Option.none() };
+};
+
+/** Changes the open form as typed, unless its save is out; a new word clears the last error. */
+const typeForm = (
+  model: Model,
+  change: (form: BudgetForm) => BudgetForm
+): UpdateReturn => ({
+  model: modifyFields(model, {
+    form: (form) =>
+      Option.map(form, (open) =>
+        open.saving ? open : change({ ...open, error: Option.none() })
+      ),
+  }),
+});
+
+/** What a saved form set, in words. */
+const savedText = (target: BudgetTarget): string =>
+  Predicate.isTagged(target, "Thread")
+    ? `Budget set for ${target.title}. At its line the thread and its subagents stop.`
+    : "Default budget saved. Briefs and workflows proposed from now on start from it.";
+
+/** Saves the open form's budget, or says why it is not one. */
+const saveForm = (model: Model): UpdateReturn =>
+  Option.match(
+    Option.filter(model.form, (form) => !form.saving),
+    {
+      onNone: () => ({ model }),
+      onSome: (form) =>
+        Result.match(budgetOfDraft(baseOf(model, form.target), form), {
+          onFailure: (problem) => ({
+            model: modifyFields(model, {
+              form: () => Option.some({ ...form, error: Option.some(problem) }),
+            }),
+          }),
+          onSuccess: (budget) =>
+            model.context.hasClient
+              ? {
+                  model: modifyFields(model, {
+                    form: () =>
+                      Option.some({
+                        ...form,
+                        saving: true,
+                        error: Option.none(),
+                      }),
+                  }),
+                  commands: [SaveBudget({ target: form.target, budget })],
+                }
+              : {
+                  model: modifyFields(model, {
+                    form: () =>
+                      Option.some({
+                        ...form,
+                        error: Option.some(
+                          "Cairn is reconnecting. Save again once it is back."
+                        ),
+                      }),
+                  }),
+                },
+        }),
+    }
+  );
 
 /** The answer for `epoch`, written when it is still the meters' epoch. */
 const answer = (
@@ -190,6 +288,41 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         };
       }),
     ClickedRetry: () => (canAsk(model) ? loadSections(model) : { model }),
+    ClickedEditBudget: ({ target }) => ({
+      model: modifyFields(model, {
+        form: () => Option.some(formFor(model, target)),
+        saved: () => Option.none(),
+      }),
+    }),
+    ChangedBudgetDollars: ({ value }) =>
+      typeForm(model, (form) => ({ ...form, dollars: value })),
+    ChangedBudgetTokens: ({ value }) =>
+      typeForm(model, (form) => ({ ...form, tokens: value })),
+    ClickedSaveBudget: () => saveForm(model),
+    ClickedCancelBudget: () => ({
+      model: modifyFields(model, { form: () => Option.none() }),
+    }),
+    SavedBudget: ({ target, settings }) => ({
+      model: modifyFields(model, {
+        form: () => Option.none(),
+        saved: () => Option.some(savedText(target)),
+        server: (server) =>
+          Option.match(settings, {
+            onNone: () => server,
+            onSome: (found) => AsyncData.succeed(found),
+          }),
+      }),
+    }),
+    FailedSaveBudget: ({ message: text }) => ({
+      model: modifyFields(model, {
+        form: (form) =>
+          Option.map(form, (open) => ({
+            ...open,
+            saving: false,
+            error: Option.some(text),
+          })),
+      }),
+    }),
   });
 
 /** The meters' update and root hooks. */

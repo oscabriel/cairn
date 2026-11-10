@@ -336,7 +336,14 @@ export class BudgetGuard extends Context.Service<
           Option.getOrElse(standing.reached, () => "tokens" as const)
         )}?`;
 
-        yield* sources.askRaise(limit, to, summary);
+        const row = yield* threadRows
+          .get(limit.threadId)
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+
+        yield* sources.askRaise(limit, to, summary, {
+          title: Option.map(row, (found) => found.shell.title),
+          spent: standing.spent,
+        });
 
         // Last, so a step that failed above is acted on again by the next evaluation.
         yield* book.markActed(limit.threadId, limit.epoch);

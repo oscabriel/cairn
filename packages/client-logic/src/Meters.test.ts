@@ -181,6 +181,22 @@ describe("budgets", () => {
     assert.strictEqual(lines.get("Warns at"), "80% of a limit");
   });
 
+  it("shows only the limits Cairn offers, never one nothing sets", () => {
+    assert.deepStrictEqual(
+      budgetLinesOf({
+        ...DEFAULT_BUDGET,
+        maxTurns: 40,
+        maxMinutes: 30,
+        planGuard: {
+          provider: "claude-bridge",
+          windowId: "five_hour",
+          maxUsedFraction: 0.5,
+        },
+      }).map(([label]) => label),
+      ["Dollars", "Tokens", "Warns at"]
+    );
+  });
+
   it("words each state, and leaves a thread without a budget out", () => {
     assert.isTrue(Option.isNone(budgetWordOf("none")));
     assert.deepStrictEqual(

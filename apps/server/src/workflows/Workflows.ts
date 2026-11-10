@@ -12,6 +12,9 @@ import { Context, Effect, FileSystem, Layer, Option, Result } from "effect";
 
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { isRoleName, ModelSpecs } from "../models/ModelSpecs.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
+import { defaultBudgetAccess } from "../usage/DefaultBudget.ts";
+import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import { Recipes } from "./recipes/Recipes.ts";
 import { HOLD_RETRY_MILLIS, NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
 import type { BudgetPushSink } from "./WorkflowBudget.ts";
@@ -28,12 +31,13 @@ import type { ModelResolver, ResolvedNodeModel } from "./WorkflowTools.ts";
 
 /**
  * `WorkflowPlan.validate` for `workflow_plan`, which runs outside Effect: the dry run, or the
- * refusal's words for the model; and the project recipes `recipes` finds, none without it. Runs
- * with `context`, the layer's (S43).
+ * refusal's words for the model; the project recipes `recipes` finds, none without it; and the
+ * server's default budget, `defaults` (ADR 0047). Runs with `context`, the layer's (S43).
  */
 export const planAccess = (
   plan: WorkflowPlan["Service"],
   recipes: Option.Option<Recipes["Service"]>,
+  defaults: DefaultBudgetAccess,
   context: Context.Context<never>
 ): PlanAccess => {
   const run = Effect.runPromiseWith(context);
@@ -53,6 +57,7 @@ export const planAccess = (
       onSome: (found) => async (root: string, name: string) =>
         await run(found.source(root, name)),
     }),
+    defaults,
   };
 };
 
@@ -62,8 +67,8 @@ export class Workflows extends Context.Service<
   { readonly extension: CairnExtension }
 >()("cairn/server/workflows/Workflows") {
   /**
-   * Over the root's `ModelSpecs`, `WorkflowPushes` and the platform's `FileSystem` when given; no
-   * faults, no holds.
+   * Over the root's `ModelSpecs` and `SettingsStore` (the default budget), `WorkflowPushes` and the
+   * platform's `FileSystem` when given; no faults, no holds.
    */
   static readonly layer = Layer.effect(
     Workflows,
@@ -123,7 +128,12 @@ export class Workflows extends Context.Service<
       return Workflows.of({
         extension: workflowExtension({
           resolveModel,
-          plan: planAccess(yield* WorkflowPlan, recipes, context),
+          plan: planAccess(
+            yield* WorkflowPlan,
+            recipes,
+            defaultBudgetAccess(yield* SettingsStore, context),
+            context
+          ),
           faults: NO_WORKFLOW_FAULTS,
           hold: NO_HOLD,
           holdRetryMillis: HOLD_RETRY_MILLIS,

@@ -2,8 +2,10 @@
 // the seam, the spend feed and ledger, the shell store, and the budgets (book, sources, `Budgets`,
 // the guard and the `cairn.budgets` gate), over a scratch directory, never the deployed unit's.
 //
-// One scope thread (thread 1) declares a `stop` budget of `--budget-children` children's worth of
-// list price; `--children` subagent threads under it (lineage parent thread 1) each get one input
+// One scope thread (thread 1) is given a `stop` budget of `--budget-children` children's worth of
+// list price, as the user sets one from the usage page: through `budget.declare`'s handler
+// (`declareBudget`, ADR 0047), not straight on `Budgets`; `--children` subagent threads under it
+// (lineage parent thread 1) each get one input
 // and answer from pi-ai's faux provider: `--steps - 1` calls of the `tick` tool, then a final text.
 // Only output tokens are priced, so every tool-calling response costs the same.
 //
@@ -65,7 +67,10 @@ import { Type } from "typebox";
 
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
-import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
+import {
+  BudgetSources,
+  raiseIdOf,
+} from "../../../apps/server/src/brain/BudgetSources.ts";
 import { ThreadReceipt } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
@@ -88,6 +93,7 @@ import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts"
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { Notifier } from "../../../apps/server/src/push/Notifier.ts";
 import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
+import { declareBudget } from "../../../apps/server/src/rpc/SpendHandlers.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import { ShellStoreLayer } from "../../../apps/server/src/shell/ShellLayer.ts";
 import {
@@ -542,11 +548,10 @@ const program = Effect.gen(function* () {
   // Declared once, in the first life; later lives read it from the documents through the guard's
   // boot repair, as the brain does, so a brain without the repair has an empty book after a restart.
   if (Option.isNone(yield* (yield* BudgetSources).scopeOf(SCOPE))) {
-    yield* budgets.declare(
-      SCOPE,
-      budgetOf(Number(values["budget-children"])),
-      "stop"
-    );
+    yield* declareBudget(yield* BudgetGuard, yield* ThreadRows, {
+      threadId: SCOPE,
+      budget: budgetOf(Number(values["budget-children"])),
+    }).pipe(Effect.orDie);
   }
 
   const atBoot = yield* responseCounts;
@@ -592,8 +597,9 @@ const program = Effect.gen(function* () {
   const seam = yield* HarnessSeam;
 
   // A guard that never reached the line asked no raise: the report says so through `admitted`.
+  // The declare is the scope's first epoch (ADR 0047), so its raise is asked at epoch 1.
   yield* seam
-    .respond(SCOPE, ApprovalId.make("budget-raise-0"), {
+    .respond(SCOPE, ApprovalId.make(raiseIdOf(1)), {
       decision: "accept",
       reason: Option.none(),
       answers: Option.none(),

@@ -6,7 +6,8 @@
 // - `subagent_spawn` records a brief (kind `brief`, its payload frozen) and its brief task (the
 //   brief's expiry) in one commit, and returns at once; Go's commit creates the start. It refuses
 //   past the caps: 8 children working or waiting for Go per parent, 32 across the brain
-//   (BrainCap.ts), and depth 2.
+//   (BrainCap.ts), and depth 2. Its brief's budget is the call's `max_tokens` and `max_usd` over
+//   the server's default (ADR 0047).
 // - `subagent_send` gives a child one more input through its own reporter.
 // - `subagent_status` lists each child's status, never its result (that arrives once, as a note),
 //   and with `wait_seconds` waits, bounded, until one reports or asks.
@@ -26,6 +27,7 @@
 // `modelTools`, is offered them; the same change takes the parent's five away.
 
 import { ThreadId } from "@cairn/protocol/Ids";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
   MAX_LIVE_CHILDREN_PER_BRAIN,
@@ -79,6 +81,8 @@ import {
   SubagentToolText,
 } from "../brain/SubagentText.ts";
 import { offerResultTool } from "../models/ResultTool.ts";
+import { NO_DEFAULT_BUDGET } from "../usage/DefaultBudget.ts";
+import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import {
   countLive,
   dropIdle,
@@ -291,13 +295,17 @@ const answerOf = async (
   );
 };
 
-/** The tools, closed over the extension's faults, tasks and options. */
+/**
+ * The tools, closed over the extension's faults, tasks and options, and the server's default
+ * budget a spawn's brief starts from (ADR 0047).
+ */
 export const subagentToolSet = (
   faults: SubagentFaultSet,
   tasks: SubagentTasks,
   models: ModelAccess,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
-  crashAt: (point: SubagentCrashPoint) => void = Function.constVoid
+  crashAt: (point: SubagentCrashPoint) => void = Function.constVoid,
+  defaults: DefaultBudgetAccess = NO_DEFAULT_BUDGET
 ) => {
   const spawn = defineTool({
     name: "subagent_spawn",
@@ -338,6 +346,20 @@ export const subagentToolSet = (
             "The model the child runs on, provider/modelId[:level]; call models to see what is available. Leave it out to run the child on your own model and level; name another only when the user asks.",
         })
       ),
+      max_tokens: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description:
+            "A token budget for the child; leave it out for the user's default. The child stops at it.",
+        })
+      ),
+      max_usd: Type.Optional(
+        Type.Number({
+          exclusiveMinimum: 0,
+          description:
+            "A list-price dollar budget for the child; leave it out for the user's default. The child stops at it.",
+        })
+      ),
     }),
     replay: "safe",
     execute: async (args, api, context) => {
@@ -355,6 +377,21 @@ export const subagentToolSet = (
       }
 
       const permissions = await readPermissions(api, context);
+      const approvalId = approvalIdOf(api.taskId);
+
+      const asked = await api.snapshot(Approvals, api.conversationId, context);
+
+      // The default fills each limit the call does not name, read only while the brief is not
+      // asked yet: the brief freezes the result, so a rerun that finds its brief keeps what was
+      // frozen, whatever the default is now.
+      const fallback =
+        asked?.items[approvalId] === undefined
+          ? await defaults.read()
+          : Result.succeed(DEFAULT_BUDGET);
+
+      if (Result.isFailure(fallback)) {
+        return refused(fallback.failure);
+      }
 
       const brief = briefOf(
         {
@@ -365,17 +402,16 @@ export const subagentToolSet = (
           resultSchema: Option.fromUndefinedOr(args.result_schema),
           wake: textOf(args.wake),
           model: textOf(args.model),
+          maxTokens: Option.fromUndefinedOr(args.max_tokens),
+          maxUsd: Option.fromUndefinedOr(args.max_usd),
         },
-        permissions.mode
+        permissions.mode,
+        fallback.success
       );
 
       if (Result.isFailure(brief)) {
         return refused(brief.failure);
       }
-
-      const approvalId = approvalIdOf(api.taskId);
-
-      const asked = await api.snapshot(Approvals, api.conversationId, context);
 
       // A named model is checked at the ask, so the card never offers Go on one that is not
       // ready; it is checked again at Go, which decides (ADR 0043). A replayed call that already

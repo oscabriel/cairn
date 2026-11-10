@@ -2,8 +2,9 @@
 // What the root tells it (the connection, which of its pages is open, the plan windows the settings
 // page already streams, the thread rows' spend) arrives as its context; what it asks the brain for
 // (the whole roll-up and the server settings with the default budget) is held per epoch, as the
-// settings page holds its sections. Only this module and the Messages load with the entry; the
-// update and views come with the `next` chunk.
+// settings page holds its sections; the one budget form the user has open (the default, or a
+// thread's own budget, ADR 0047) is held beside them. Only this module and the Messages load with
+// the entry; the update and views come with the `next` chunk.
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import { ServerSettings } from "@cairn/protocol/Settings";
@@ -42,6 +43,26 @@ export type MetersContext = typeof MetersContext.Type;
 const remote = <A, AI>(schema: Schema.Codec<A, AI>) =>
   AsyncData.Schema(schema, Schema.String).schema;
 
+/** What a budget form sets (ADR 0047): the server's default, or one thread's own budget. */
+export const BudgetTarget = Schema.Union([
+  Schema.TaggedStruct("Default", {}),
+  Schema.TaggedStruct("Thread", { threadId: ThreadId, title: Schema.String }),
+]);
+
+export type BudgetTarget = typeof BudgetTarget.Type;
+
+/** An open budget form: its target, dollars and tokens as typed, and where its save stands. */
+export const BudgetForm = Schema.Struct({
+  target: BudgetTarget,
+  dollars: Schema.String,
+  tokens: Schema.String,
+  saving: Schema.Boolean,
+  /** Why the last save did not go or did not land. */
+  error: Schema.Option(Schema.String),
+});
+
+export type BudgetForm = typeof BudgetForm.Type;
+
 /** The meters' Model. */
 export const Model = Schema.Struct({
   context: MetersContext,
@@ -52,6 +73,10 @@ export const Model = Schema.Struct({
   /** The rows' token total when `spend` was asked, so new spend asks again. */
   spendAt: Schema.Int,
   server: remote(ServerSettings),
+  /** The budget form open on the usage page; one at a time. */
+  form: Schema.Option(BudgetForm),
+  /** What the last saved budget form set, in words. */
+  saved: Schema.Option(Schema.String),
 });
 
 export type Model = typeof Model.Type;
@@ -69,4 +94,6 @@ export const initial: Model = {
   spend: AsyncData.Idle(),
   spendAt: 0,
   server: AsyncData.Idle(),
+  form: Option.none(),
+  saved: Option.none(),
 };

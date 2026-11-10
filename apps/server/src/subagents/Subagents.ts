@@ -42,6 +42,11 @@ import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";
 import { gateDecision } from "../usage/Budgets.ts";
+import {
+  defaultBudgetAccess,
+  NO_DEFAULT_BUDGET,
+} from "../usage/DefaultBudget.ts";
+import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import { listParent, SPAWN_TOOL } from "./BrainCap.ts";
 import { BriefFaults, NO_BRIEF_FAULTS } from "./BriefFaults.ts";
@@ -198,7 +203,8 @@ const build = (
   briefFaults: BriefFaultHooks,
   models: ModelAccess,
   crashes: SubagentCrashHooks,
-  budgets: BudgetAccess
+  budgets: BudgetAccess,
+  defaults: DefaultBudgetAccess
 ) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
@@ -220,7 +226,14 @@ const build = (
     crashAt: crashes.at,
   });
 
-  const tools = subagentToolSet(faults, tasks, models, tuning, crashes.at);
+  const tools = subagentToolSet(
+    faults,
+    tasks,
+    models,
+    tuning,
+    crashes.at,
+    defaults
+  );
 
   child.agent = childAgentOf(tools);
 
@@ -244,7 +257,8 @@ const build = (
 /**
  * The subagents extension with `faults` planted, making children's workspaces with `workspaces`;
  * the conformance suite's mutation check uses it, a test that needs a question to expire soon
- * passes `tuning`, and a judge brain's `crashes` kill it at its crash points.
+ * passes `tuning`, and a judge brain's `crashes` kill it at its crash points. A spawn's brief
+ * starts from `defaults`, the server's default budget (ADR 0047).
  */
 export const subagentsExtension = (
   faults: SubagentFaultSet,
@@ -253,7 +267,8 @@ export const subagentsExtension = (
   briefFaults: BriefFaultHooks = NO_BRIEF_FAULTS,
   models: ModelAccess = NO_MODELS,
   crashes: SubagentCrashHooks = NO_SUBAGENT_CRASHES,
-  budgets: BudgetAccess = ADMIT_ALL
+  budgets: BudgetAccess = ADMIT_ALL,
+  defaults: DefaultBudgetAccess = NO_DEFAULT_BUDGET
 ): CairnExtension => ({
   order: ExtensionOrder.subagents,
   extension: build(
@@ -263,7 +278,8 @@ export const subagentsExtension = (
     briefFaults,
     models,
     crashes,
-    budgets
+    budgets,
+    defaults
   ).extension,
 });
 
@@ -278,7 +294,8 @@ const host = build(
   NO_BRIEF_FAULTS,
   NO_MODELS,
   NO_SUBAGENT_CRASHES,
-  ADMIT_ALL
+  ADMIT_ALL,
+  NO_DEFAULT_BUDGET
 );
 
 const hostTasks = host.tasks;
@@ -417,7 +434,8 @@ export class Subagents extends Context.Service<
             yield* BriefFaults,
             modelAccess(yield* ModelSpecs, yield* Effect.context()),
             NO_SUBAGENT_CRASHES,
-            budgetAccess(yield* BudgetBook, yield* Effect.context())
+            budgetAccess(yield* BudgetBook, yield* Effect.context()),
+            defaultBudgetAccess(yield* SettingsStore, yield* Effect.context())
           ),
         });
       })
@@ -429,7 +447,8 @@ export class Subagents extends Context.Service<
   /**
    * The extension with the faults `SubagentFaults` and `BriefFaults` name and the crash points
    * `SubagentCrashes` plants (none, unless a test or a judge brain plants some), and briefs that
-   * live as long as `BriefTtl` says (a week), making children's worktrees with `ChildWorkspaces`.
+   * live as long as `BriefTtl` says (a week), making children's worktrees with `ChildWorkspaces`,
+   * a spawn's brief starting from the root's `SettingsStore` default budget (ADR 0047).
    */
   static readonly layer = Layer.effect(
     Subagents,
@@ -452,7 +471,8 @@ export class Subagents extends Context.Service<
           briefFaults,
           modelAccess(yield* ModelSpecs, yield* Effect.context()),
           crashes,
-          budgetAccess(yield* BudgetBook, yield* Effect.context())
+          budgetAccess(yield* BudgetBook, yield* Effect.context()),
+          defaultBudgetAccess(yield* SettingsStore, yield* Effect.context())
         ),
       });
     })

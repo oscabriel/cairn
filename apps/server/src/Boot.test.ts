@@ -76,6 +76,7 @@ import {
 import { ThreadRows } from "./shell/ThreadRows.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
+import { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
 
 // The pi-durable brains below build the brain's own pi setup: an empty one, never the user's.
@@ -220,7 +221,8 @@ const GatedApp = Layer.mergeAll(
   )
 ).pipe(
   Layer.provide(HandlersLayer),
-  Layer.provide(Diffs.layer),
+  // With `budget.declare`'s guard: this test declares no budget.
+  Layer.provide(Layer.merge(Diffs.layer, Layer.mock(BudgetGuard)({}))),
   Layer.provide(SessionHello.layer),
   Layer.provide(BootJson.layerNone),
   Layer.provide(PeerPath.fixed(new Map())),

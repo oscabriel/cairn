@@ -26,6 +26,7 @@ import {
   budgetJson,
   BudgetSources,
   raiseIdOf,
+  RAISE_REPLACED,
   RAISE_TOOL,
 } from "./BudgetSources.ts";
 import {
@@ -280,6 +281,134 @@ describe("budget sources over a Harness", () => {
       }).pipe(Effect.scoped)
   );
 
+  it.live(
+    "a subagent's scope is the budget the user set on its brief card with Go, not the one it asked",
+    () =>
+      Effect.gen(function* () {
+        const { harness, storage } = yield* openHarness;
+        const { parent } = yield* family(harness, BRIEF_BUDGET);
+
+        const edited: Budget = { ...DEFAULT_BUDGET, maxTokens: 40_000 };
+
+        yield* Effect.promise(async () => {
+          await harness.commit(async (tx) => {
+            const { items } = await tx.doc(Approvals, parent);
+            const brief = items[BRIEF_ID];
+
+            if (brief !== undefined) {
+              brief.answer = {
+                decision: "accept",
+                answers: null,
+                note: null,
+                launch: { budget: budgetJson(edited) },
+              };
+            }
+          }, context);
+        });
+
+        yield* Effect.gen(function* () {
+          const sources = yield* BudgetSources;
+
+          assert.deepStrictEqual(
+            yield* sources.scopeOf(CHILD),
+            Option.some({
+              threadId: CHILD,
+              budget: edited,
+              mode: "stop" as const,
+              epoch: 0,
+            })
+          );
+        }).pipe(Effect.provide(sourcesOver(harness, storage)));
+      }).pipe(Effect.scoped)
+  );
+
+  it.live(
+    "a declared budget replaces the raises accepted before it, declines one pending, and starts an epoch",
+    () =>
+      Effect.gen(function* () {
+        const { harness, storage } = yield* openHarness;
+        const { child } = yield* family(harness, BRIEF_BUDGET);
+
+        const raised: Budget = {
+          ...BRIEF_BUDGET,
+          maxListMicros: Micros.make(1_000_000),
+        };
+
+        yield* acceptRaise(harness, child, 0, raised);
+
+        // The next epoch's raise, still pending when the user sets a new budget.
+        yield* Effect.promise(async () => {
+          await harness.commit(async (tx) => {
+            const { items } = await tx.doc(Approvals, child);
+
+            items[raiseIdOf(1)] = {
+              ...record(raiseIdOf(1), {
+                tool: RAISE_TOOL,
+                kind: "tool-call",
+                status: "pending",
+                payload: {
+                  type: "budget-raise",
+                  scope: CHILD,
+                  from: budgetJson(raised),
+                  to: budgetJson({
+                    ...raised,
+                    maxListMicros: Micros.make(2_000_000),
+                  }),
+                },
+              }),
+              askedAt: 30,
+              expiresAt: 10 ** 12,
+            };
+          }, context);
+        });
+
+        const declared: Budget = { ...DEFAULT_BUDGET, maxTokens: 5000 };
+
+        yield* Effect.gen(function* () {
+          const sources = yield* BudgetSources;
+
+          yield* sources.declare(CHILD, declared, "stop");
+
+          assert.deepStrictEqual(
+            yield* sources.scopeOf(CHILD),
+            Option.some({
+              threadId: CHILD,
+              budget: declared,
+              mode: "stop" as const,
+              epoch: 2,
+            })
+          );
+        }).pipe(Effect.provide(sourcesOver(harness, storage)));
+
+        const state = yield* Effect.promise(
+          async () => await harness.snapshot(Approvals, child, context)
+        );
+
+        const stale = state?.items[raiseIdOf(1)];
+
+        assert.strictEqual(stale?.status, "declined");
+        assert.deepStrictEqual(stale?.decidedBy, { kind: "user" });
+        assert.strictEqual(stale?.reason, RAISE_REPLACED);
+
+        // A raise asked after the declare, accepted, raises the declared budget.
+        const later: Budget = { ...declared, maxTokens: 10_000 };
+
+        yield* acceptRaise(harness, child, 2, later);
+
+        yield* Effect.gen(function* () {
+          const sources = yield* BudgetSources;
+
+          assert.deepStrictEqual(
+            Option.map(yield* sources.scopeOf(CHILD), (scope) => [
+              scope.budget,
+              scope.epoch,
+            ]),
+            Option.some([later, 3])
+          );
+        }).pipe(Effect.provide(sourcesOver(harness, storage)));
+      }).pipe(Effect.scoped)
+  );
+
   it.live("a brief whose budget enforces nothing is no scope", () =>
     Effect.gen(function* () {
       const { harness, storage } = yield* openHarness;
@@ -307,8 +436,13 @@ describe("budget sources over a Harness", () => {
           const limit = Option.getOrThrow(yield* sources.scopeOf(CHILD));
           const to = { ...BRIEF_BUDGET, maxListMicros: Micros.make(1_000_000) };
 
-          assert.isTrue(yield* sources.askRaise(limit, to, "Raise?"));
-          assert.isFalse(yield* sources.askRaise(limit, to, "Raise?"));
+          const facts = {
+            title: Option.some("Fan out the review"),
+            spent: { tokens: 120_000, listMicros: 510_000 },
+          };
+
+          assert.isTrue(yield* sources.askRaise(limit, to, "Raise?", facts));
+          assert.isFalse(yield* sources.askRaise(limit, to, "Raise?", facts));
 
           const data = { reason: "budget_stopped" as const, text: "Stopped." };
 
@@ -327,6 +461,12 @@ describe("budget sources over a Harness", () => {
         assert.strictEqual(raise?.status, "pending");
         assert.strictEqual(raise?.tool, RAISE_TOOL);
         assert.strictEqual(raise?.toolTaskId, 0);
+        // The card names the scope by its title and reads what it spent (ADR 0047).
+        assert.deepInclude(raise?.payload ?? {}, {
+          scope: CHILD,
+          title: "Fan out the review",
+          spent: { tokens: 120_000, listMicros: 510_000 },
+        });
 
         const entries = yield* Effect.promise(async () => {
           const conversation = await harness.conversation(child, context);

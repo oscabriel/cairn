@@ -5,6 +5,8 @@ import { Spend } from "@cairn/protocol/Spend";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
+import { BudgetTarget } from "./Model.ts";
+
 /** The sections the meters ask the brain for. */
 export const MetersSection = Schema.Literals(["spend", "server"]);
 
@@ -22,6 +24,18 @@ export const Message = defineMessageUnion({
   },
   /** Asks every section again after a failure. */
   ClickedRetry: {},
+  /** Opens the budget form for the default or a thread (ADR 0047). */
+  ClickedEditBudget: { target: BudgetTarget },
+  ChangedBudgetDollars: { value: Schema.String },
+  ChangedBudgetTokens: { value: Schema.String },
+  ClickedSaveBudget: {},
+  ClickedCancelBudget: {},
+  /** The brain took the form's budget; for the default, with the settings it now holds. */
+  SavedBudget: {
+    target: BudgetTarget,
+    settings: Schema.Option(ServerSettings),
+  },
+  FailedSaveBudget: { message: Schema.String },
 });
 
 /** A meters Message. */

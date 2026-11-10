@@ -13,8 +13,9 @@ import * as AsyncData from "foldkit/asyncData";
 import type { Html } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 
+import { SaveBudget } from "./Command.ts";
 import { Message } from "./Message.ts";
-import { initial } from "./Model.ts";
+import { BudgetTarget, initial } from "./Model.ts";
 import type { MetersContext, Model } from "./Model.ts";
 import { inform, update } from "./Update.ts";
 import { view as usageView } from "./UsageView.ts";
@@ -356,5 +357,99 @@ describe("the usage page", () => {
     );
 
     assert.lengthOf(settled.commands ?? [], 0);
+  });
+});
+
+describe("the usage page's budgets (ADR 0047)", () => {
+  const DEFAULT_TARGET = BudgetTarget.members[0].make({});
+
+  it("changes the default budget a brief or workflow starts from, in dollars and tokens", () => {
+    const saved = {
+      ...DEFAULT_BUDGET,
+      maxListMicros: Micros.make(5_000_000),
+      maxTokens: 200_000,
+    };
+
+    Scene.scene(
+      usageConfig,
+      Scene.given(loaded({})),
+      Scene.click(Scene.role("button", { name: "Change default budget" })),
+      Scene.expect(Scene.label("Tokens")).toHaveValue("200000"),
+      Scene.expect(Scene.label("Dollars at API list price")).toHaveValue(""),
+      Scene.type(Scene.label("Dollars at API list price"), "5"),
+      Scene.click(Scene.role("button", { name: "Save budget" })),
+      Scene.Command.expectExact(
+        SaveBudget({ target: DEFAULT_TARGET, budget: saved })
+      ),
+      Scene.Command.resolve(
+        SaveBudget,
+        Message.SavedBudget({
+          target: DEFAULT_TARGET,
+          settings: Option.some({ ...SETTINGS, defaultBudget: saved }),
+        })
+      ),
+      Scene.expect(Scene.testId("usage-default-budget")).toContainText(
+        "$5.00 at list price"
+      ),
+      Scene.expect(Scene.testId("usage-budget-form")).not.toExist(),
+      Scene.expect(Scene.testId("usage-budget-saved")).toContainText(
+        "Default budget saved"
+      ),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("sets a thread's own budget from its row, through budget.declare", () => {
+    const target = BudgetTarget.members[1].make({
+      threadId: threadA,
+      title: "Port the parser",
+    });
+
+    Scene.scene(
+      usageConfig,
+      Scene.given(loaded({})),
+      Scene.inside(
+        Scene.selector(
+          `[data-testid="usage-thread"][data-thread-id="${threadA}"]`
+        ),
+        Scene.click(Scene.role("button", { name: "Set budget" }))
+      ),
+      Scene.type(Scene.label("Tokens"), "300000"),
+      Scene.click(Scene.role("button", { name: "Save budget" })),
+      Scene.Command.expectExact(
+        SaveBudget({
+          target,
+          budget: { ...DEFAULT_BUDGET, maxTokens: 300_000 },
+        })
+      ),
+      Scene.Command.resolve(
+        SaveBudget,
+        Message.SavedBudget({ target, settings: Option.none() })
+      ),
+      Scene.expect(Scene.testId("usage-budget-saved")).toContainText(
+        "Budget set for Port the parser"
+      ),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("saves nothing that is not a budget, and says why", () => {
+    Scene.scene(
+      usageConfig,
+      Scene.given(loaded({})),
+      Scene.click(Scene.role("button", { name: "Change default budget" })),
+      Scene.type(Scene.label("Dollars at API list price"), "lots"),
+      Scene.click(Scene.role("button", { name: "Save budget" })),
+      Scene.expect(Scene.testId("usage-budget-form-hint")).toContainText(
+        "Dollars must be an amount above zero"
+      ),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
   });
 });

@@ -527,16 +527,16 @@ describe("an answer to a record", () => {
     }
   });
 
-  it("takes Run on 1 first and the card's edits only on a workflow's launch, with Go", () => {
+  it("takes Run on 1 first on a workflow's launch only, and the card's budget edit with Go on a launch or a subagent's brief", () => {
     const payload = LAUNCH_PAYLOAD;
 
     const edits = Option.some({
       budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
     });
 
-    // Neither on a subagent's brief, a question or a tool call.
+    // Neither on a node's own brief, a question or a tool call.
     for (const other of [
-      record({ kind: "brief" }),
+      record({ kind: "brief", tool: "agent" }),
       record({ payload: questions }),
       record({ kind: "tool-call" }),
     ]) {
@@ -550,6 +550,35 @@ describe("an answer to a record", () => {
       );
       assert.strictEqual(other.status, "pending");
     }
+
+    // A subagent's brief takes the budget edit with Go (ADR 0047), never Run on 1 first, and
+    // never with Decline or Send back.
+    const spawned = record({ kind: "brief", tool: "subagent_spawn" });
+
+    assert.strictEqual(
+      applyAnswer(spawned, byUser("accept_sample"), 1500),
+      "refused_sample"
+    );
+
+    for (const decision of ["decline", "revise"] as const) {
+      assert.strictEqual(
+        applyAnswer(
+          spawned,
+          { ...byUser(decision, Option.some("no")), launch: edits },
+          1500
+        ),
+        "refused_launch",
+        decision
+      );
+    }
+
+    assert.strictEqual(
+      applyAnswer(spawned, { ...byUser("accept"), launch: edits }, 1500),
+      "answered"
+    );
+    assert.deepStrictEqual(spawned.answer?.launch, {
+      budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
+    });
 
     // Edits come with Go or Run on 1 first, never with Decline.
     const declined = record({ kind: "brief", tool: "workflow_plan", payload });

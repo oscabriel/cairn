@@ -147,8 +147,9 @@ export interface ApprovalAnswerState {
   answers: Array<QuestionAnswerState> | null;
   note: string | null;
   /**
-   * A workflow launch's edited budget (package 5A); null runs the payload as proposed. An answer
-   * recorded before ADR 0043 may also hold role overrides, which nothing reads.
+   * The edited budget of a workflow's launch (package 5A) or a subagent's brief (ADR 0047); null
+   * runs the payload as proposed. An answer recorded before ADR 0043 may also hold role
+   * overrides, which nothing reads.
    */
   launch: JsonRecord | null;
 }
@@ -908,7 +909,10 @@ export interface RecordAnswer {
   readonly by: Decider;
   readonly reason: Option.Option<string>;
   readonly answers: Option.Option<ReadonlyArray<QuestionAnswer>>;
-  /** A workflow launch card's edits, with Go or Run on 1 first on a launch approval only. */
+  /**
+   * The card's budget edit: with Go or Run on 1 first on a workflow's launch, with Go on a
+   * subagent's brief (ADR 0047).
+   */
   readonly launch: Option.Option<LaunchEdits>;
 }
 
@@ -917,7 +921,8 @@ export interface RecordAnswer {
  * such record, or the record cannot take it (`answers` on a record that asked no questions,
  * answers that do not fit the questions asked, `revise` on anything but a subagent's brief or a
  * workflow's launch, `revise` with no notes: Send back says what to change, Run on 1 first on
- * anything but a workflow's launch, or launch edits on anything but Go or Run on 1 first for a workflow's launch).
+ * anything but a workflow's launch, or a budget edit on anything but Go on a subagent's brief or Go
+ * or Run on 1 first on a workflow's launch).
  */
 export type AnswerOutcome =
   | "answered"
@@ -961,7 +966,7 @@ export const refusalText = (
 
   if (outcome === "refused_launch") {
     return Option.some(
-      `Approval ${approvalId} takes no launch edits: only Go or Run on 1 first on a workflow's launch carries a changed budget. Answer without them.`
+      `Approval ${approvalId} takes no budget edit: only Go on a subagent's brief, or Go or Run on 1 first on a workflow's launch, carries a changed budget. Answer without it.`
     );
   }
 
@@ -986,7 +991,15 @@ const isWorkflowLaunch = Schema.is(WorkflowLaunch);
 export const isLaunchRecord = (record: ApprovalRecord): boolean =>
   record.kind === "brief" && isWorkflowLaunch(record.payload);
 
-/** Why a record refuses Run on 1 first or launch edits, or none when it takes the answer. */
+/** Whether a record is a subagent's brief, whose Go may carry a budget edit (ADR 0047). */
+const isSpawnBriefRecord = (record: ApprovalRecord): boolean =>
+  record.kind === "brief" && record.tool === SEND_BACK_TOOL;
+
+/**
+ * Why a record refuses Run on 1 first or a budget edit, or none when it takes the answer. A budget
+ * edit comes with Go or Run on 1 first on a workflow's launch, and with Go on a subagent's brief
+ * (ADR 0047), whose start reads it as the child's budget.
+ */
 const launchFit = (
   record: ApprovalRecord,
   answer: RecordAnswer
@@ -995,10 +1008,11 @@ const launchFit = (
     return Option.some("refused_sample");
   }
 
-  const going =
-    answer.decision === "accept" || answer.decision === "accept_sample";
+  const takesEdit = isLaunchRecord(record)
+    ? answer.decision === "accept" || answer.decision === "accept_sample"
+    : isSpawnBriefRecord(record) && answer.decision === "accept";
 
-  return Option.isSome(answer.launch) && (!going || !isLaunchRecord(record))
+  return Option.isSome(answer.launch) && !takesEdit
     ? Option.some("refused_launch")
     : Option.none();
 };

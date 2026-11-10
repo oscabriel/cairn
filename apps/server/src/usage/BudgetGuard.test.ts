@@ -534,7 +534,7 @@ describe("the budget guard", () => {
         yield* (yield* BudgetGuard).declare(CHILD, tokenBudget(100), "stop");
 
         assert.isTrue(
-          (yield* Ref.get(sources.notices)).has(`${CHILD} budget-stopped-0`)
+          (yield* Ref.get(sources.notices)).has(`${CHILD} budget-stopped-1`)
         );
         assert.deepStrictEqual(
           (yield* Ref.get(guard.stops)).map((stop) => stop.threadId),
@@ -546,7 +546,7 @@ describe("the budget guard", () => {
 
         assert.isFalse(
           (yield* Ref.get(sources.notices)).has(
-            `${GRANDCHILD} budget-stopped-0`
+            `${GRANDCHILD} budget-stopped-1`
           )
         );
 
@@ -555,7 +555,7 @@ describe("the budget guard", () => {
         assert.isTrue(
           yield* eventually(
             Effect.map(Ref.get(sources.notices), (map) =>
-              map.has(`${GRANDCHILD} budget-stopped-0`)
+              map.has(`${GRANDCHILD} budget-stopped-1`)
             )
           )
         );

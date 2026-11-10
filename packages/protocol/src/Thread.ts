@@ -344,8 +344,9 @@ export type ConfigureInput = typeof ConfigureInput.Type;
 /**
  * `thread.respond` input: an answer to one approval, question or brief. `reason` carries the
  * user's words on Decline or Send back (required for `revise`); `answers` answer a question's
- * payload by index; `launch` carries the user's edits to a workflow's launch card (its budget and
- * role overrides) with Go, stored as the answer's `launch` beside the untouched payload. On a
+ * payload by index; `launch` carries the user's edit to the budget on a workflow's launch card or a
+ * subagent's brief card with Go (ADR 0047), stored as the answer's `launch` beside the untouched
+ * payload. On a
  * parent's mirror of a child's escalated question it answers the child's record; whichever answer
  * lands second is `already_settled` (ADR 0027).
  */

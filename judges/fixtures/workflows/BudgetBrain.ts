@@ -9,8 +9,12 @@
 //     [--control no-admission|no-stopper] [--hold-submit <label>]
 //     [--hold-reserve-until-spent <label>]
 //
-// - The first life plants an approved launch of the script with a token budget of `--max-tokens`
-//   (as 5A's answer path will); every life submits the run under one request id, so it is admitted
+// - The first life plants the launch of the script waiting on its card with no budget (its model
+//   named none, and the default sets none), and the user's Go carries a token budget of
+//   `--max-tokens` from the card's budget field: answered through `answerApproval` with
+//   `launchAnswered`, the path `thread.respond` takes (ADR 0047), so the run is held to the budget
+//   production sets, not one planted on its row. A life killed between the plant and the answer
+//   answers it on the next. Every life submits the run under one request id, so it is admitted
 //   once. Each life boots as the brain does: the reactor host starts, then the Harness resumes.
 // - Each node's child calls `work`, which appends `{node, what, at}` to `effects.log` (outside the
 //   store): `start` once per child, then `done` or `aborted`.
@@ -42,7 +46,10 @@ import { Arms } from "../../../apps/server/src/brain/Arms.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import { BrainStore } from "../../../apps/server/src/brain/BrainStore.ts";
-import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
+import {
+  answerApproval,
+  Approvals,
+} from "../../../apps/server/src/brain/CairnDocs.ts";
 import { CodeMode } from "../../../apps/server/src/brain/CodeMode.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
 import type { Reactor } from "../../../apps/server/src/brain/Events.ts";
@@ -58,6 +65,7 @@ import {
 } from "../../../apps/server/src/brain/ModelSource.ts";
 import { ResultTool } from "../../../apps/server/src/models/ResultTool.ts";
 import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
+import { NO_DEFAULT_BUDGET } from "../../../apps/server/src/usage/DefaultBudget.ts";
 import {
   STOPPER_TASK,
   workflowBudgetReactor,
@@ -68,6 +76,7 @@ import {
   WorkflowsDoc,
 } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
 import type { WorkflowItemState } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
+import { launchAnswered } from "../../../apps/server/src/workflows/WorkflowLaunch.ts";
 import { NO_PROJECT_RECIPES } from "../../../apps/server/src/workflows/WorkflowPlanTool.ts";
 import type { PlanAccess } from "../../../apps/server/src/workflows/WorkflowPlanTool.ts";
 import {
@@ -75,6 +84,7 @@ import {
   eventsOf,
   KIT_CWD,
   KitLayer,
+  launchApprovalIdOf,
   plant,
   plantDefaults,
   respond,
@@ -183,6 +193,7 @@ const plan: PlanAccess = {
   dryRun: async () =>
     await Promise.resolve(Result.fail("the budget judge plants its launch")),
   projectRecipe: NO_PROJECT_RECIPES,
+  defaults: NO_DEFAULT_BUDGET,
 };
 
 const workflows = workflowExtension({
@@ -344,18 +355,52 @@ const program = Effect.gen(function* () {
     async () => await kit.harness.snapshot(WorkflowsDoc, kit.root, context)
   );
 
+  const launchId = launchApprovalIdOf(WF);
+
   if (ledger?.items[WF] === undefined) {
     yield* plant(
       kit,
       source,
-      {
-        ...plantDefaults(WF),
-        budget: { ...DEFAULT_BUDGET, maxTokens },
-      },
+      { ...plantDefaults(WF), status: "pending" },
       context
     );
     say("planted");
   }
+
+  // `plant` writes the row approved; a launch still waiting on its card is `proposed`, as the
+  // `workflow_plan` commit leaves it, so Go's answer is what approves it.
+  yield* Effect.promise(async () => {
+    await kit.harness.commit(async (tx) => {
+      const approvals = await tx.doc(Approvals, kit.root);
+      const rows = await tx.doc(WorkflowsDoc, kit.root);
+      const row = rows.items[WF];
+
+      if (
+        approvals.items[launchId]?.status === "pending" &&
+        row?.state === "approved"
+      ) {
+        row.state = "proposed";
+        row.decidedBy = null;
+        row.decidedAt = null;
+      }
+    }, context);
+  });
+
+  // Go with the card's budget, as the user answers it; a later life finds it answered.
+  yield* answerApproval(
+    kit.harness,
+    kit.root,
+    launchId,
+    {
+      decision: "accept",
+      by: { kind: "user" },
+      reason: Option.none(),
+      answers: Option.none(),
+      launch: Option.some({ budget: { ...DEFAULT_BUDGET, maxTokens } }),
+    },
+    1,
+    launchAnswered
+  ).pipe(Effect.orDie);
 
   // Where this life found the run: whether the line was reached and a stopper still running, so
   // the judge can say which kills landed inside the stop.

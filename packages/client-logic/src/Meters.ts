@@ -6,6 +6,7 @@
 // prices (ADR 0036): a plan model's figure is labelled "at API list price", since the plan bills
 // nothing per token.
 
+import { Micros } from "@cairn/protocol/Spend";
 import type {
   Budget,
   BudgetState,
@@ -14,7 +15,7 @@ import type {
   SpendSummary,
 } from "@cairn/protocol/Spend";
 import type { PlanWindow, UsageSnapshot } from "@cairn/protocol/Usage";
-import { Array, Match, Option, Order } from "effect";
+import { Array, Match, Option, Order, Result } from "effect";
 import type { Record } from "effect";
 
 /** The tone a line takes: a status tone, or neutral for a plain reading. */
@@ -212,7 +213,11 @@ export const budgetWordOf = (state: BudgetState): Option.Option<BudgetWord> =>
 const limitText = <A>(value: A | null, text: (found: A) => string): string =>
   value === null ? "No limit" : text(value);
 
-/** A budget's limits as label and value pairs; an absent limit reads "No limit", never zero. */
+/**
+ * A budget's limits as label and value pairs; an absent limit reads "No limit", never zero. Only
+ * dollars and tokens are offered (ADR 0047): nothing sets turns, minutes or a plan-window guard, so
+ * no line shows them.
+ */
 export const budgetLinesOf = (
   budget: Budget
 ): ReadonlyArray<readonly [string, string]> => [
@@ -224,18 +229,97 @@ export const budgetLinesOf = (
     ),
   ],
   ["Tokens", limitText(budget.maxTokens, tokensText)],
-  ["Turns", limitText(budget.maxTurns, String)],
-  ["Minutes", limitText(budget.maxMinutes, String)],
-  [
-    "Plan guard",
-    limitText(
-      budget.planGuard,
-      (guard) =>
-        `${guard.provider} ${guard.windowId} up to ${String(Math.round(guard.maxUsedFraction * 100))}%`
-    ),
-  ],
   ["Warns at", `${String(Math.round(budget.warnAt * 100))}% of a limit`],
 ];
+
+// Budget fields (ADR 0047): the usage page's default and thread budgets, and a Go card's budget,
+// typed in dollars at list price and tokens, each empty for no limit.
+
+/** A budget field's text as typed: dollars at list price and tokens, each empty for no limit. */
+export interface BudgetDraft {
+  readonly dollars: string;
+  readonly tokens: string;
+}
+
+/** The field's starting text for `budget`. */
+export const budgetDraftOf = (budget: Budget): BudgetDraft => ({
+  dollars:
+    budget.maxListMicros === null
+      ? ""
+      : (budget.maxListMicros / 1_000_000).toFixed(2),
+  tokens: budget.maxTokens === null ? "" : String(budget.maxTokens),
+});
+
+/** A dollar field: list-price micros, none when empty, or why it is not a limit. */
+const dollarsOfDraft = (text: string): Result.Result<number | null, string> => {
+  const plain = text.trim().replace(/^\$/u, "").replaceAll(",", "").trim();
+
+  if (plain === "") {
+    return Result.succeed(null);
+  }
+
+  const dollars = /^\d+(?:\.\d+)?$/u.test(plain) ? Number(plain) : Number.NaN;
+  const micros = Math.round(dollars * 1_000_000);
+
+  return Number.isFinite(dollars) && micros > 0
+    ? Result.succeed(micros)
+    : Result.fail(
+        "Dollars must be an amount above zero, like 2.50, or empty for no dollar limit."
+      );
+};
+
+/** A token field: a whole count, none when empty, or why it is not a limit. */
+const tokensOfDraft = (text: string): Result.Result<number | null, string> => {
+  const plain = text.trim().replaceAll(/[,_\s]/gu, "");
+
+  if (plain === "") {
+    return Result.succeed(null);
+  }
+
+  const tokens = /^\d+$/u.test(plain) ? Number(plain) : Number.NaN;
+
+  return Number.isSafeInteger(tokens) && tokens > 0
+    ? Result.succeed(tokens)
+    : Result.fail(
+        "Tokens must be a whole number above zero, like 200000, or empty for no token limit."
+      );
+};
+
+/**
+ * `base` with the dollar and token limits a budget field says (both empty is no limit), or why a
+ * field is not a limit. Its warning line is `base`'s.
+ */
+export const budgetOfDraft = (
+  base: Budget,
+  draft: BudgetDraft
+): Result.Result<Budget, string> =>
+  Result.flatMap(dollarsOfDraft(draft.dollars), (micros) =>
+    Result.map(tokensOfDraft(draft.tokens), (tokens) => ({
+      ...base,
+      maxListMicros: micros === null ? null : Micros.make(micros),
+      maxTokens: tokens,
+    }))
+  );
+
+/**
+ * The budget Go sends for `proposed` with the field's `draft`: none when the field is closed or
+ * says what was proposed, the changed budget otherwise (both fields empty is no limit), or why a
+ * field is not a limit.
+ */
+export const budgetEditOf = (
+  proposed: Budget,
+  draft: Option.Option<BudgetDraft>
+): Result.Result<Option.Option<Budget>, string> =>
+  Option.match(draft, {
+    onNone: () => Result.succeed(Option.none()),
+    onSome: (typed) =>
+      Result.map(budgetOfDraft(proposed, typed), (edited) =>
+        edited.maxListMicros === proposed.maxListMicros &&
+        edited.maxTokens === proposed.maxTokens
+          ? Option.none()
+          : Option.some(edited)
+      ),
+  });
 
 // Plan windows.
 

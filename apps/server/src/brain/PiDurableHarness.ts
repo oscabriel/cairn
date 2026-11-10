@@ -76,6 +76,7 @@ import {
 } from "effect";
 
 import { BriefFaults } from "../subagents/BriefFaults.ts";
+import { holdWakes } from "../subagents/Delivery.ts";
 import {
   ChildDoc,
   EscalationsDoc,
@@ -852,11 +853,10 @@ const layerNoDeps = Layer.effectContext(
 
     /**
      * One thread's stop, in the caller's fiber: its aborts and cancellations, the notes its run left
-     * queued, then with `subagents: "stop"` each child its registry names as working, queue
-     * cleared, and theirs in turn (ADR 0028). `keep` leaves them working. A settled child is left as
-     * it is, its warm session kept, and so is anything under it: reaching a working grandchild
-     * through it would wake it with that grandchild's stopped result, since its last run completed
-     * and it is not halted. The descendants it stopped, nearest first.
+     * queued, then with `subagents: "stop"` a hold on its wakes (`holdWakes`) and each child its
+     * registry names as working or whose run is live, queue cleared, and theirs in turn (ADR 0028).
+     * `keep` leaves them working. A settled child with no run is left as it is, its warm session
+     * kept, and so is anything under it. The descendants it stopped, nearest first.
      */
     const stopTree = (
       threadId: ThreadId,
@@ -874,6 +874,14 @@ const layerNoDeps = Layer.effectContext(
           return [];
         }
 
+        // Before any child stops: their stopped results must not wake this thread, even when its
+        // last run had completed (ADR 0028).
+        yield* call(Option.some(threadId), "wake-hold", async (context) => {
+          await session.harness.commit(async (tx) => {
+            await holdWakes(tx, conversation.id);
+          }, context);
+        });
+
         const registry = yield* call(
           Option.some(threadId),
           "subagents.read",
@@ -890,7 +898,20 @@ const layerNoDeps = Layer.effectContext(
         for (const item of Object.values(registry?.items ?? {})) {
           const child = decodeThreadId(item.threadId);
 
-          if (item.status !== "settled" && Option.isSome(child)) {
+          // A settled child whose run still goes on is stopped too: its reporter threw before the
+          // run ended (O-3), so nothing else follows that run.
+          const working =
+            item.status !== "settled" ||
+            (Option.isSome(child) &&
+              Option.isSome(
+                yield* liveRun(
+                  session,
+                  child.value,
+                  piConversationId(ConversationId.make(item.conversationId))
+                )
+              ));
+
+          if (working && Option.isSome(child)) {
             stopped.push(
               child.value,
               ...(yield* stopTree(child.value, {

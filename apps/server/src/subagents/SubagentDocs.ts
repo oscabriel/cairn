@@ -258,6 +258,31 @@ export const EscalationsDoc = defineDoc<EscalationsState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
+/** `cairn.wake-hold` state: whether a Stop all holds the thread's wakes, and from which run on. */
+export interface WakeHoldState {
+  [key: string]: JsonValue;
+  held: boolean;
+  /** The thread's newest run task when the stop held it; null when it had none. */
+  afterRun: number | null;
+}
+
+/**
+ * `cairn.wake-hold`: a Stop all's mark on the thread it stopped (ADR 0028). A thread whose last run
+ * had completed is not halted by its run, so without the mark the stopped children's results would
+ * wake it, and a removed thread would start a run with no row to stop it from. The mark lasts until
+ * a run starts after `afterRun` (`parentHalt`), so the user's next input clears it.
+ */
+export const WakeHoldDoc = defineDoc<WakeHoldState>({
+  kind: "cairn.wake-hold",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  // A fork is another thread, which nobody stopped.
+  fork: "initial",
+  initial: () => ({ held: false, afterRun: null }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
+});
+
 /** Whether a stored `cairn.child` names a parent: the creating commit sets every field at once. */
 export const isLinked = (
   child: Readonly<ChildState> | undefined

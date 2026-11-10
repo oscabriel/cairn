@@ -58,6 +58,7 @@ export const pendingBrief = (
           resultSchema: Option.none(),
           wake: Option.none(),
           model: Option.none(),
+          doneWhen: Option.none(),
         },
         "full-access"
       )

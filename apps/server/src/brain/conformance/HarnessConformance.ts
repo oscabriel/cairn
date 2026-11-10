@@ -912,6 +912,7 @@ export const runScenario = (
         stop: stopStep(false, "keep"),
         stop_clear: stopStep(true, "keep"),
         stop_all: stopStep(false, "stop"),
+        remove: stopStep(true, "stop"),
         withdraw: withdrawStep,
         respond: respondStep,
         respond_race: respondRaceStep,

@@ -83,6 +83,7 @@ import {
   priceOf,
 } from "../models/ModelPrice.ts";
 import { conversationOf } from "../subagents/Delivery.ts";
+import { failsVisibly } from "../subagents/TaskFailures.ts";
 import { isWorkflowEnded, usageTotals, WorkflowsDoc } from "./WorkflowDocs.ts";
 import type {
   BudgetState,
@@ -717,6 +718,9 @@ const pause = async (millis: number, signal: AbortSignal): Promise<void> => {
   await sleep(millis, null, { signal }).catch(() => null);
 };
 
+/** How long a stopper whose pass threw waits before it stops the run's nodes again. */
+const STOP_RETRY_MILLIS = 30_000;
+
 /**
  * The stopper (`cairn.workflow-budget-stop`): created once by the budget reactor in the commit that
  * handles `workflow.budget.spent`, a background task of the launching conversation. It aborts the
@@ -726,7 +730,9 @@ const pause = async (millis: number, signal: AbortSignal): Promise<void> => {
  * nothing for a child already idle. It stops at once when the run leaves the line of its `epoch`
  * (a raise was accepted, so the nodes the raised budget admits are not its to stop). Last, it
  * marks the run `partial`, `budget_spent`, only while the run still stands at that line (its
- * watcher writes the same outcome when it ends).
+ * watcher writes the same outcome when it ends). A pass that throws (O-3, `TaskFailures.ts`) is
+ * reported and the stopper sleeps `STOP_RETRY_MILLIS` on pi-durable's clock and stops again, since
+ * its passes are safe to repeat and a run at its line must not keep its nodes.
  */
 export const BudgetStopper = defineTask<
   { workflowId: string; epoch?: number },
@@ -737,7 +743,20 @@ export const BudgetStopper = defineTask<
   version: 1,
   initial: () => ({ phase: "stop" }),
   phases: {
-    stop: async (task, runtime, context) => {
+    stop: failsVisibly<
+      { workflowId: string; epoch?: number },
+      { phase: "stop" },
+      null,
+      object
+    >(async (_tx, failed) => {
+      await Promise.resolve();
+
+      return {
+        status: "sleeping",
+        until: failed.at + STOP_RETRY_MILLIS,
+        checkpoint: { phase: "stop" },
+      };
+    })(async (task, runtime, context) => {
       const { workflowId } = task.input;
       const epoch = Option.fromUndefinedOr(task.input.epoch);
 
@@ -795,7 +814,7 @@ export const BudgetStopper = defineTask<
           outcome: { status: "completed", result: null },
         };
       }, context);
-    },
+    }),
   },
   abort: async (_task, runtime, context) => {
     await runtime.commit(

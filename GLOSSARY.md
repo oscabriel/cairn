@@ -104,7 +104,7 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Tally**: A parent row's count of its subagents (working, asking, settled, failed), from its registry. A settled child whose result is not yet delivered counts as working.
 
-**Stop all**: A parent row's stop that also stops each working subagent, and theirs in turn (`thread.stop` with `subagents: stop`); a settled child and anything under it are left as they are.
+**Stop all**: A parent row's stop that also stops each working subagent, and theirs in turn (`thread.stop` with `subagents: stop`); a settled child with no run, and anything under it, is left as it is. It holds the parent's wakes until its next run, so a stopped child's result reaches it as a note and never wakes it, even when its last run had completed. Archiving or deleting a thread makes this stop.
 
 **Crash point**: A named place in a subagent's delivery where a judge brain kills itself (`SubagentCrashes`), so the kill judge lands a `kill -9` inside each window. Production plants none.
 
@@ -124,7 +124,7 @@ _Avoid_: using it for a thread's settle state, which is **Settle**
 
 **Note**: A transcript entry the model reads but that starts no run (a passive write with model content), such as a subagent's settlement in its parent. An idle thread places it at once, a running one at its next boundary ahead of queued inputs, and a stop keeps it.
 
-**Wake**: The separate input that follows a note when the parent should act on it. A quiet spawn, a user's own steer to the child, a usage-limit failure, or a parent the user stopped or whose run failed gets the note without a wake. At most one wake waits in a running parent's queue.
+**Wake**: The separate input that follows a note when the parent should act on it. A quiet spawn, a user's own steer to the child, a usage-limit failure, or a parent the user stopped (Stop all included) or whose run failed gets the note without a wake. At most one wake waits in a running parent's queue.
 
 **Reporter**: The task that delivers one input to a subagent and its result back to the parent, under request ids derived from the child and the settlement's seq, so each lands once across a restart.
 
@@ -134,7 +134,7 @@ _Avoid_: using it for a thread's settle state, which is **Settle**
 
 _Avoid_: task, epic, project (for the goal)
 
-**Workflow**: A durable script that fans work out across subagents and stones. Every node returns a typed result, writers get verified, and integration is an explicit step.
+**Workflow**: A durable script that fans work out across subagents and stones. Every node returns a typed result its script reads; a writer is verified only where the script calls `verify`, and integration is an explicit step that phase 3 adds.
 
 _Avoid_: pipeline, DAG, job
 
@@ -328,7 +328,7 @@ _Avoid_: plugin
 
 _Avoid_: permission request, prompt (for the record)
 
-**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. It is an approval, and nothing delegated starts until the user answers it with Go or it fits its workflow's envelope.
+**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. A subagent's brief may name a command that exits 0 once the work is done (`done_when`), shown on the card before Go and given to the child, which Cairn does not run yet; otherwise no outside judge checks the result, and the parent (or the workflow script) accepts it (ADR 0055). It is an approval, and nothing delegated starts until the user answers it with Go or it fits its workflow's envelope.
 
 _Avoid_: task, spec, ticket
 
@@ -426,7 +426,7 @@ _Avoid_: e2e, test suite (for the recipe)
 
 **Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens (`judges/fixtures/parity/Landmarks.ts`). _Avoid_: anchor (that word is the subagent anchor's).
 
-**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user.
+**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user. A goal's model judge on the thread's own model is refused unless the user names that model for it (ADR 0055), and a subagent's parent accepting its result is not one.
 
 **Browser driver**: `judges/lib/Browser.ts`, what every browser judge drives system Chromium with over the DevTools protocol (ADR 0044). Chained locators with auto-waiting and strict single-match behaviour, real key events, touch, routes, screenshots, and nothing no judge calls.
 

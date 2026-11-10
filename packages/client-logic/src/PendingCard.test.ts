@@ -88,9 +88,10 @@ describe("the request card's words", () => {
       ["Why", "To size the port."],
       ["Avoid", "editing files; network calls"],
       [
-        "Judged by",
-        "The parent accepts the result. (judged by you); Tests pass (judged by the command `pnpm test` exits 0)",
+        "Done when",
+        "`pnpm test` exits 0 (the child is told to run it; Cairn does not run it yet)",
       ],
+      ["Judged by", "No outside judge; the parent accepts the result"],
       ["Where", "A worktree from the parent's HEAD; writes src/count"],
       ["Who", "opencode-go/gpt-6-luna at high, Auto-accept edits"],
       ["Budget", "40 turns"],
@@ -98,7 +99,43 @@ describe("the request card's words", () => {
 
     assert.deepStrictEqual(
       briefLines({ ...brief, avoid: [] }).map(([label]) => label),
-      ["Do", "Why", "Judged by", "Where", "Who", "Budget"]
+      ["Do", "Why", "Done when", "Judged by", "Where", "Who", "Budget"]
+    );
+  });
+
+  it("says a brief with no command has no outside judge, never that the user judges it (V-9)", () => {
+    const parentOnly: Brief = {
+      ...brief,
+      doneWhen: [
+        { text: "The parent accepts the result.", judge: { kind: "user" } },
+      ],
+    };
+
+    const node: Brief = {
+      ...brief,
+      doneWhen: [
+        {
+          text: "The workflow script accepts the result.",
+          judge: { kind: "user" },
+        },
+      ],
+    };
+
+    assert.deepStrictEqual(
+      [parentOnly, node].map((found) =>
+        briefLines(found).filter(([label]) =>
+          ["Done when", "Judged by"].includes(label)
+        )
+      ),
+      [
+        [["Judged by", "No outside judge; the parent accepts the result"]],
+        [
+          [
+            "Judged by",
+            "No outside judge; the workflow script accepts the result",
+          ],
+        ],
+      ]
     );
   });
 

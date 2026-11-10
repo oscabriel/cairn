@@ -16,6 +16,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   ApprovalId,
@@ -25,6 +26,7 @@ import type { ConversationId } from "@cairn/protocol/Ids";
 import { ThreadArchive, ThreadDelete } from "@cairn/protocol/ShellCommands";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { DocumentObserver } from "@earendil-works/pi-durable";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -63,7 +65,11 @@ import type { ThreadRows } from "../shell/ThreadRows.ts";
 import { EscalationsDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
-import { escalateStrandedQuestions, QuestionRoutes } from "./QuestionRoute.ts";
+import {
+  escalateStrandedQuestions,
+  QuestionRoutes,
+  watchFor,
+} from "./QuestionRoute.ts";
 
 const PARENT = testThreadId(1);
 
@@ -512,5 +518,73 @@ describe("question routing's automatic escalations", () => {
         })
       ),
     30_000
+  );
+});
+
+describe("a side of the question race whose wait fails (Q-11)", () => {
+  /** An observer whose every watch fails as a storage error under it would, not as an abort. */
+  const failing: DocumentObserver = {
+    watchDoc: async () =>
+      await Promise.reject(new Error("storage failed under the watch")),
+  };
+
+  /** The idle side's watch of conversation 1 over the failing observer, raced on `signal`. */
+  const idleSide = async (signal: AbortSignal) =>
+    await watchFor(
+      failing,
+      LiveDoc,
+      piConversationId(ConversationIdOf.make(1)),
+      () => true,
+      "idle",
+      signal
+    );
+
+  /**
+   * Races the side on a race that ends `millis` later: whether the side had ended before the race
+   * did, and how it ended.
+   */
+  const raced = async (millis: number) => {
+    const race = new AbortController();
+    let early = false;
+
+    const side = idleSide(race.signal).then((end) => {
+      early = true;
+
+      return end;
+    });
+
+    await sleep(millis);
+
+    const before = early;
+
+    race.abort();
+
+    return [before, await side] as const;
+  };
+
+  /** The side on a race that already ended. */
+  const onEndedRace = async () => {
+    const race = new AbortController();
+
+    race.abort();
+
+    return await idleSide(race.signal);
+  };
+
+  it.live(
+    "waits for the race's end instead of winning it, and a race already ended cuts it at once",
+    () =>
+      Effect.gen(function* () {
+        // Before the fix the failure answered `cut` at once, so the route returned with the
+        // question neither answered nor escalated.
+        assert.deepStrictEqual(
+          yield* Effect.promise(async () => await raced(200)),
+          [false, "cut"]
+        );
+        assert.strictEqual(
+          yield* Effect.promise(async () => await onEndedRace()),
+          "cut"
+        );
+      })
   );
 });

@@ -2,12 +2,14 @@
 // into the shell store that translate its failures into the protocol's public errors, carrying the
 // RPC request id. A `ProjectCreate` first
 // passes `FolderRules` (the deny list, dot folders, links escaping the home) and is committed with
-// the folder's real path. Deleting or archiving a thread, or deleting a project, first stops the
-// runs it removes (queue cleared, stop hooks run), so a hung thread that is deleted frees its
-// Claude Code child instead of holding it for hours. A resent command whose id already has a
-// receipt stops nothing: its first send did, and the thread may have a newer run since. Clearing a scratch thread stops its run and its
-// subagents' first, then removes its folder once the clear is committed; a crash between the two
-// leaves the folder to the scratch boot repair.
+// the folder's real path. Deleting, archiving or clearing a thread, or deleting a project, first
+// stops the runs it removes and their working subagents (queue cleared, stop hooks run; ADR 0028
+// as amended on 2026-11-09), so a hung thread that is deleted frees its Claude Code child instead
+// of holding it for hours, and no child goes on working under a parent whose row is gone with its
+// Stop all. A resent command whose id already has a receipt stops nothing: its first send did,
+// and the thread may have a newer run since. Clearing a scratch thread then removes its folder
+// once the clear is committed; a crash between the two leaves the folder to the scratch boot
+// repair.
 
 import {
   Conflict,
@@ -126,13 +128,11 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
     });
 
     /**
-     * Stops each run, and with `subagents: "stop"` its working subagents' runs too; a thread the
-     * brain never ensured has none, and any other failure is logged.
+     * Stops each run and its working subagents' runs (Stop all): a removed thread leaves no row to
+     * stop its children from. A thread the brain never ensured has none, and any other failure is
+     * logged.
      */
-    const stopRuns = (
-      threadIds: ReadonlyArray<ThreadId>,
-      subagents: "keep" | "stop"
-    ) =>
+    const stopRuns = (threadIds: ReadonlyArray<ThreadId>) =>
       Effect.forEach(
         threadIds,
         (threadId) =>
@@ -140,7 +140,7 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
             .stop({
               threadId,
               clearQueue: true,
-              subagents: Option.some(subagents),
+              subagents: Option.some("stop"),
             })
             .pipe(
               Effect.catchTags({
@@ -214,14 +214,7 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
       const id = Option.some(String(requestId));
 
       return admitted(command, id).pipe(
-        Effect.tap((checked) =>
-          Effect.flatMap(runsEndedBy(checked), (ended) =>
-            stopRuns(
-              ended,
-              Predicate.isTagged(checked, "ThreadClear") ? "stop" : "keep"
-            )
-          )
-        ),
+        Effect.tap((checked) => Effect.flatMap(runsEndedBy(checked), stopRuns)),
         Effect.flatMap((checked) =>
           Effect.tap(sink.commitCommand(checked), () =>
             Predicate.isTagged(checked, "ThreadClear")

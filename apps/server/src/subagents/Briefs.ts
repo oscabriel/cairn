@@ -6,6 +6,11 @@
 // tool cannot hold a child to comes back to the parent at once, naming what to change. A model must
 // be `provider/modelId[:level]` by its form here, never a role name (ADR 0043); whether it is ready
 // is the tool's check at the ask, and the start task checks it again at Go.
+//
+// How the result will be judged (`doneWhen`, ADR 0055): the command the parent names in
+// `done_when`, frozen as a command criterion the card shows before Go and the child is told to run,
+// or, without one, the parent accepting the result, which is no outside judge. Cairn does not run
+// the command yet.
 
 import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Brief } from "@cairn/protocol/Policy";
@@ -29,7 +34,42 @@ export interface SpawnArguments {
   readonly wake: Option.Option<string>;
   /** The `provider/modelId[:level]` the child runs on; none for the parent's model and level. */
   readonly model: Option.Option<string>;
+  /** `done_when`: the command, as an argv list, that exits 0 once the work is done. */
+  readonly doneWhen: Option.Option<ReadonlyArray<string>>;
 }
+
+/** How long a brief's `done_when` command may run, when something runs it. */
+export const DONE_WHEN_TIMEOUT_SEC = 600;
+
+/** What a brief says when the parent named no command: it accepts the result itself. */
+export const PARENT_ACCEPTS = "The parent accepts the result.";
+
+/** A brief's `doneWhen` from `done_when`; fails when it is not a command. */
+const doneWhenOf = (
+  argv: Option.Option<ReadonlyArray<string>>
+): Result.Result<Brief["doneWhen"], string> => {
+  if (Option.isNone(argv)) {
+    return Result.succeed([{ text: PARENT_ACCEPTS, judge: { kind: "user" } }]);
+  }
+
+  const [first, ...rest] = argv.value;
+
+  if (first === undefined || argv.value.some((part) => part.trim() === "")) {
+    return Result.fail(SubagentToolText.doneWhenInvalid);
+  }
+
+  return Result.succeed([
+    {
+      text: `\`${argv.value.join(" ")}\` exits 0`,
+      judge: {
+        kind: "command",
+        argv: [first, ...rest],
+        expectExit: 0,
+        timeoutSec: DONE_WHEN_TIMEOUT_SEC,
+      },
+    },
+  ]);
+};
 
 const encodeBrief = Schema.encodeSync(Brief);
 
@@ -63,6 +103,12 @@ export const briefOf = (
     return Result.fail(SubagentToolText.resultSchemaNotObject);
   }
 
+  const doneWhen = doneWhenOf(args.doneWhen);
+
+  if (Result.isFailure(doneWhen)) {
+    return Result.fail(doneWhen.failure);
+  }
+
   // A schema the result tool cannot hold the child to is refused now, while the parent can fix
   // it, rather than at the child's first request (2E's rule).
   for (const named of Option.toArray(
@@ -81,9 +127,7 @@ export const briefOf = (
     task: args.brief,
     why: Option.getOrElse(args.why, () => ""),
     avoid: [],
-    doneWhen: [
-      { text: "The parent accepts the result.", judge: { kind: "user" } },
-    ],
+    doneWhen: doneWhen.success,
     workspace: Option.contains(args.isolation, "worktree")
       ? "worktree"
       : "shared",

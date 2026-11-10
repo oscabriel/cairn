@@ -334,7 +334,7 @@ describe("the request card", () => {
       Scene.inside(
         Scene.testId("request-card"),
         Scene.expect(Scene.selector("dl")).toContainText(
-          "DoCount the TypeScript files under src.WhyTo size the port.Judged byThe parent accepts the result. (judged by you)"
+          "DoCount the TypeScript files under src.WhyTo size the port.Judged byNo outside judge; the parent accepts the result"
         ),
         Scene.expect(Scene.selector("dl")).toContainText(
           "Budget$2.00 at API list price"

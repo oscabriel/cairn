@@ -266,7 +266,7 @@ _Avoid_: plugin
 
 **Durable event**: A fact with several consumers (a node settled, a child's result, an approval answered), appended to the event conversation in the commit of the change it describes, so it exists exactly when the change does (ADR 0033). Not the events log.
 
-**Reactor**: A named handler of some durable event kinds that runs each event once, oldest first, in one commit with its cursor in `cairn.events`. It writes only through `tx` and creates pi-durable tasks for outside work. Its `from` (`now` or `start`) says where a newly added reactor's cursor starts. The brain's reactors are listed in `apps/server/src/brain/ReactorSet.ts`.
+**Reactor**: A named handler of some durable event kinds that runs each event once, oldest first, in one commit with its cursor in `cairn.events`. It writes only through `tx` and creates pi-durable tasks for outside work. Its `from` (`now` or `start`) says where a newly added reactor's cursor starts. A feature lists its reactors in its manifest, and `apps/server/src/ReactorSet.ts` runs every manifest's.
 
 **Dead letter**: An event a reactor passed without handling it, recorded with its error in `cairn.event-dead-letters`: its handler failed on it five times in a row, or could not read it at all. The reactor goes on to the next event; the dead letter is logged, shown as the reactor's last failure and pushed (ADR 0033).
 

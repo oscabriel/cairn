@@ -108,10 +108,18 @@ export const closure = (entry: string): ReadonlyMap<string, string> => {
 
 /**
  * Test doubles by name: a fake, a faux model, a fixture, a kit, a stub or mock, the scripted
- * harness, a dev-only layer or demo, the conformance suite, or a test.
+ * harness, a dev-only layer or demo, the conformance suite, or a test. Matched against a path
+ * relative to the repository root (`isTestDoubleUnder`), so where the checkout lives never counts.
  */
-export const TEST_DOUBLE =
+const TEST_DOUBLE =
   /(?:Fake|Faux|Fixture|fixtures\/|Kit\.ts$|TestLayer|Stub|Mock|Scripted|\/Dev[A-Z]|Demo|conformance\/|\.test\.ts$)/u;
+
+/** Whether `file`, an absolute path under `root`, is named like a test double. */
+export const isTestDoubleUnder = (root: string) => (file: string) =>
+  TEST_DOUBLE.test(path.relative(root, file));
+
+/** Whether `file`, an absolute path in this repository, is named like a test double. */
+export const isTestDouble = isTestDoubleUnder(REPO);
 
 /** A server file's node in the folder graph: its top-level folder, or the file itself at the root. */
 export const folderOf = (file: string) => {

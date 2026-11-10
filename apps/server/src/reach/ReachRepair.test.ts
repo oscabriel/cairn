@@ -26,15 +26,12 @@ import { TestClock } from "effect/testing";
 
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
-import {
-  makeFakePorch,
-  PorchClient,
-  PorchError,
-  PorchSettings,
-} from "./PorchClient.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { makeFakeUnits } from "./FakePortalUnits.ts";
+import { PorchClient, PorchError, PorchSettings } from "./PorchClient.ts";
 import { Portals } from "./Portals.ts";
 import type { OpenInput } from "./Portals.ts";
-import { makeFakeUnits, PortalUnits } from "./PortalUnits.ts";
+import { PortalUnits } from "./PortalUnits.ts";
 import { portalReconcile } from "./ReachRepair.ts";
 import {
   isPorchNotSetUp,

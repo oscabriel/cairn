@@ -54,11 +54,8 @@ import { isolatePiSetup } from "./models/PiConfigTestKit.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { PushLayer } from "./push/PushLayer.ts";
-import {
-  ReachMachine,
-  ReachServices,
-  ReachServicesTest,
-} from "./reach/ReachLayer.ts";
+import { ReachServices } from "./reach/ReachLayer.ts";
+import { ReachMachine, ReachServicesTest } from "./reach/ReachTestKit.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
 import { ProjectorSignals } from "./shell/ProjectorSignals.ts";

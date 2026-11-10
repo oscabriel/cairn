@@ -45,11 +45,13 @@ import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
-import { makeFakePorch, PorchClient } from "./PorchClient.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { makeFakeUnits } from "./FakePortalUnits.ts";
+import { PorchClient } from "./PorchClient.ts";
 import { isPortalName, PortalFaults, Portals } from "./Portals.ts";
 import type { PortalFaultHooks } from "./Portals.ts";
 import { PortalTools } from "./PortalTools.ts";
-import { makeFakeUnits, PortalUnits } from "./PortalUnits.ts";
+import { PortalUnits } from "./PortalUnits.ts";
 
 isolateGitEnvironment();
 

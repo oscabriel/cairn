@@ -134,7 +134,7 @@ export class BridgeCwd extends Context.Service<
      */
     sessionsOf(threadId: ThreadId): Effect.Effect<ReadonlyArray<string>>;
   }
->()("cairn/server/brain/BridgeCwdExtension/BridgeCwd") {
+>()("cairn/server/models/BridgeCwdExtension/BridgeCwd") {
   /** Over the brain's `BridgeProvider`. */
   static readonly layer = Layer.effect(
     BridgeCwd,

@@ -260,8 +260,16 @@ const lockState = <R>(take: Effect.Effect<boolean, OAuthStoreError, R>) =>
 export class OAuthStore extends Context.Service<
   OAuthStore,
   {
-    /** False when another process holds the OAuth lock: then nothing here reads or writes. */
+    /**
+     * False when another process holds the OAuth lock, or when it could not be taken at boot: then
+     * nothing here reads or writes.
+     */
     readonly held: boolean;
+    /**
+     * Why the OAuth lock could not be taken when the brain started, when it could not: then every
+     * refusal is `unavailable`, not `not_holder`, since no other brain holds it.
+     */
+    readonly lockFailure: Option.Option<string>;
     /** The stored credential of `provider`, if any; none when this process is not the holder. */
     read(
       provider: string
@@ -304,6 +312,16 @@ export class OAuthStore extends Context.Service<
         const clock = yield* Clock.Clock;
         const lock = yield* takeLock;
         const held = lock === "held";
+
+        const lockFailure = Option.map(
+          Option.liftPredicate(
+            lock,
+            (state): state is OAuthStoreError =>
+              state instanceof OAuthStoreError
+          ),
+          (failure) => failure.message
+        );
+
         const permit = yield* Semaphore.make(1);
         const run = yield* FiberSet.makeRuntimePromise();
 
@@ -534,6 +552,7 @@ export class OAuthStore extends Context.Service<
         const source: OAuthCredentialSource = {
           providers: OAUTH_PROVIDERS,
           held,
+          lockFailure,
           read: async (provider) =>
             Option.getOrUndefined(await run(read(provider))),
           modify: async (provider, update) =>
@@ -551,6 +570,7 @@ export class OAuthStore extends Context.Service<
 
         return OAuthStore.of({
           held,
+          lockFailure,
           read,
           modify,
           signIn,

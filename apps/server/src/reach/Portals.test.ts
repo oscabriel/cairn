@@ -26,7 +26,9 @@ import { TestClock } from "effect/testing";
 
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
-import { makeFakePorch, PorchClient } from "./PorchClient.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { makeFakeUnits } from "./FakePortalUnits.ts";
+import { PorchClient } from "./PorchClient.ts";
 import { answerPortalClose, answerPortalStart } from "./PortalHandlers.ts";
 import {
   isPortalName,
@@ -44,12 +46,7 @@ import type {
   PortalFaultHooks,
   PortalStep,
 } from "./Portals.ts";
-import {
-  makeFakeUnits,
-  PortalUnits,
-  systemdRunArgs,
-  unitsOfListing,
-} from "./PortalUnits.ts";
+import { PortalUnits, systemdRunArgs, unitsOfListing } from "./PortalUnits.ts";
 
 const DOMAIN = "example.test";
 

@@ -21,11 +21,8 @@ import { PiModelSource } from "./models/PiModelSource.ts";
 import { SettingsLive } from "./models/SettingsStore.ts";
 import { observabilityLayer } from "./Observability.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
-import {
-  judgePortalSettings,
-  ReachLive,
-  ReachMachine,
-} from "./reach/ReachLayer.ts";
+import { ReachLive } from "./reach/ReachLayer.ts";
+import { judgePortalSettings, ReachMachine } from "./reach/ReachTestKit.ts";
 
 const { values } = parseArgs({
   options: { models: { type: "string", default: "scripted" } },

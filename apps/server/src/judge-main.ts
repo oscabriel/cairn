@@ -35,11 +35,8 @@ import { SettingsLive } from "./models/SettingsStore.ts";
 import { observabilityLayer } from "./Observability.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { judgePortalFaults } from "./reach/Portals.ts";
-import {
-  judgePortalSettings,
-  ReachLive,
-  ReachMachine,
-} from "./reach/ReachLayer.ts";
+import { ReachLive } from "./reach/ReachLayer.ts";
+import { judgePortalSettings, ReachMachine } from "./reach/ReachTestKit.ts";
 
 // `--models real` runs pi's model runtime with the bridge (the bridge windows of judges/durability.ts); the default is
 // the judge's faux model.

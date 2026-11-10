@@ -352,7 +352,7 @@ export class BudgetSources extends Context.Service<
       threads: ReadonlyArray<ThreadId>
     ): Effect.Effect<number, BudgetSourceError>;
   }
->()("cairn/server/brain/BudgetSources") {
+>()("cairn/server/usage/BudgetSources") {
   /** Over the brain's Harness. */
   static readonly layer = Layer.effect(
     BudgetSources,

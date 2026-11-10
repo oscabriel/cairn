@@ -1,8 +1,15 @@
-// The folder import graph of `apps/server/src` (ADR 0053): what the production modules load from
-// one another (value imports; test doubles left out, since the deployed brain never loads them,
-// `main.test.ts`), with each file at the root its own node. `brain/` imports no feature folder but
+// The folder import graph of `apps/server/src` (ADR 0053): what the server's modules load from one
+// another (value imports), with each file at the root its own node. It is measured over every
+// non-test file, test doubles included, but the doubles in `LEFT_OUT`, each listed by path with
+// why its imports do not count: a double named elsewhere is in the graph like production code, so
+// a new kit under `brain/` that imports a feature fails here. `brain/` imports no feature folder but
 // the approval ledger, and the cycles that remain are exactly the ones listed here, each with why.
-// The review of 2026-11-09 measured one cycle of 22 folders, `brain/` among them.
+// The review of 2026-11-09 measured one cycle of 22 folders, `brain/` among them, over every
+// non-test file. Measured so, less the `LEFT_OUT` doubles, it is the two cycles below; with those
+// five doubles counted, `brain/` and the root's composition files rejoin one component of 23
+// nodes, since the dev, judge and test brains assemble every feature (ADR 0053).
+
+import path from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 
@@ -10,16 +17,44 @@ import { FEATURES } from "./Features.ts";
 import {
   cycles,
   folderEdges,
+  isTestDouble,
+  isTestDoubleUnder,
   SERVER_SOURCE,
   sourceFiles,
-  TEST_DOUBLE,
 } from "./ImportGraphTestKit.ts";
 
-const production = sourceFiles(SERVER_SOURCE).filter(
-  (file) => !TEST_DOUBLE.test(file)
-);
+/**
+ * The test doubles whose imports the graph leaves out, by path, and why. None is loaded by the
+ * deployed brain (`main.test.ts`); each imitates or assembles more than its own folder.
+ */
+const LEFT_OUT: ReadonlyMap<string, string> = new Map([
+  [
+    "brain/BrainTestKit.ts",
+    "the brain tests' and judge brains' stack: the production extension set over every feature, with the features' test layers (subagents, reach, models, pi-host, Executor)",
+  ],
+  [
+    "brain/ScriptedHarness.ts",
+    "the dev and judge brains' harness imitates pi-durable's view of a thread, so it writes the features' documents and tools a scripted turn shows (approvals, a subagent's question and decision, goal documents, the result tool, model specs)",
+  ],
+  [
+    "brain/conformance/Targets.ts",
+    "the conformance suite runs the seam's contract over a harness with the subagents extension installed, over a child workspace",
+  ],
+  [
+    "push/RequestTestKit.ts",
+    "builds each kind of decision record the push card answers, a subagent's brief among them",
+  ],
+  [
+    "workspaces/ChildWorkspacesTestKit.ts",
+    "builds child workspaces over the threads test kit's repository and database",
+  ],
+]);
 
-const edges = folderEdges(production);
+const files = sourceFiles(SERVER_SOURCE);
+
+const allEdges = folderEdges(files);
+
+const edges = allEdges.filter((edge) => !LEFT_OUT.has(edge.file));
 
 /** The folders that register through a manifest. */
 const features = new Set(FEATURES.map((feature) => feature.name));
@@ -88,6 +123,36 @@ describe("the server's folder graph", () => {
     assert.deepStrictEqual(
       found,
       REMAINING.map(({ folders }) => folders.toSorted().join(" ")).toSorted()
+    );
+  });
+
+  it("leaves out only listed test doubles, each of which imports another folder", () => {
+    for (const file of LEFT_OUT.keys()) {
+      const full = path.join(SERVER_SOURCE, file);
+
+      assert.include(files, full, `${file} exists`);
+      assert.isTrue(isTestDouble(full), `${file} is named like a test double`);
+      assert.isTrue(
+        allEdges.some((edge) => edge.file === file),
+        `${file} imports another folder`
+      );
+    }
+  });
+
+  it("names a double by its path in the repository, not by where the checkout lives", () => {
+    const checkout = path.join(path.sep, "home", "FakeUser", "Scripted-demo");
+    const double = isTestDoubleUnder(checkout);
+
+    assert.isFalse(
+      double(path.join(checkout, "apps", "server", "src", "main.ts"))
+    );
+    assert.isTrue(
+      double(
+        path.join(checkout, "apps", "server", "src", "reach", "FakePorch.ts")
+      )
+    );
+    assert.isTrue(
+      double(path.join(checkout, "apps", "server", "src", "DevLayer.ts"))
     );
   });
 

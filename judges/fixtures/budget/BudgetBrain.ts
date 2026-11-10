@@ -88,7 +88,7 @@ import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts"
 import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { Notifier } from "../../../apps/server/src/push/Notifier.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
+import { ReachServicesTest } from "../../../apps/server/src/reach/ReachTestKit.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import { ShellStoreLayer } from "../../../apps/server/src/shell/ShellLayer.ts";
 import {

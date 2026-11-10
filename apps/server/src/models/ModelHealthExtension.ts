@@ -80,7 +80,7 @@ export class ModelHealthFeed extends Context.Service<
     /** The extension, for the installed set. */
     readonly extension: CairnExtension;
   }
->()("cairn/server/brain/ModelHealthExtension/ModelHealthFeed") {
+>()("cairn/server/models/ModelHealthExtension/ModelHealthFeed") {
   /** Over the brain's `ModelHealth` and its run settings (`ModelSource`). */
   static readonly layer = Layer.effect(
     ModelHealthFeed,

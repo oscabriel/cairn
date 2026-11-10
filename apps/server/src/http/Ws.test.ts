@@ -32,7 +32,7 @@ import { ServerConfig } from "../Config.ts";
 import { ScriptedBrain } from "../DevLayer.ts";
 import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ReachMachine } from "../reach/ReachLayer.ts";
+import { ReachMachine } from "../reach/ReachTestKit.ts";
 import {
   Identity,
   IdentityRefused,

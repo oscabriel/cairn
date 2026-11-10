@@ -37,11 +37,11 @@ import { ModelHealthLive } from "../../../apps/server/src/models/ModelHealth.ts"
 import { SettingsLive } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { NotifierSettings } from "../../../apps/server/src/push/Notifier.ts";
+import { ReachLive } from "../../../apps/server/src/reach/ReachLayer.ts";
 import {
   judgePortalSettings,
-  ReachLive,
   ReachMachine,
-} from "../../../apps/server/src/reach/ReachLayer.ts";
+} from "../../../apps/server/src/reach/ReachTestKit.ts";
 import { Skills } from "../../../apps/server/src/skills/SkillsLayer.ts";
 import { BudgetSources } from "../../../apps/server/src/usage/BudgetSources.ts";
 import { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";

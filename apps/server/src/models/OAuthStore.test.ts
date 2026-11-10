@@ -101,6 +101,8 @@ describe("the OAuth store", () => {
 
       assert.isTrue(first.held);
       assert.isFalse(second.held);
+      // Another brain holds it: not a lock that failed.
+      assert.isTrue(Option.isNone(second.lockFailure));
       assert.isTrue(Option.isNone(yield* second.read("openai-codex")));
       assert.isTrue(Option.isNone(yield* second.signedIn("openai-codex")));
 
@@ -154,6 +156,7 @@ describe("the OAuth store", () => {
         const store = yield* holderAt(blocked);
 
         assert.isFalse(store.held);
+        assert.isTrue(Option.isSome(store.lockFailure));
         assert.isTrue(Option.isNone(yield* store.read("openai-codex")));
         assert.isTrue(Option.isNone(yield* store.signedIn("openai-codex")));
 

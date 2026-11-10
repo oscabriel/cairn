@@ -33,7 +33,7 @@ export class BudgetGate extends Context.Service<
     /** The extension, for the installed set. */
     readonly extension: CairnExtension;
   }
->()("cairn/server/brain/BudgetGateExtension/BudgetGate") {
+>()("cairn/server/usage/BudgetGateExtension/BudgetGate") {
   /**
    * Over the `BudgetBook` (the same one `Budgets` fills), at `ExtensionOrder.budgets`. It needs nothing that
    * needs the brain, so the brain's extension set can be built with it.

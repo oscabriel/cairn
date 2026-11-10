@@ -260,7 +260,7 @@ const BudgetsLive = BudgetGuard.layerNoDeps.pipe(
  * `FileSystem`, a harness (`HarnessSeam` and `HarnessBoot`) and its models (`ModelSource` and the
  * picker's `PiModelSource`): `PiDurableBrain` and `ScriptedBrain` provide all four. Also the porch
  * and portal units (`PorchClient`, `PortalUnits`): the real ones in `main.ts`, a fake porch in
- * judge and dev brains (`ReachMachine` in `ReachLayer.ts`).
+ * judge and dev brains (`ReachMachine` in `reach/ReachTestKit.ts`).
  */
 export const AppLayer = Layer.mergeAll(
   HttpLive,

@@ -81,7 +81,7 @@ import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
+import { ReachServicesTest } from "../../../apps/server/src/reach/ReachTestKit.ts";
 import {
   BriefFaultPoint,
   BriefFaults,

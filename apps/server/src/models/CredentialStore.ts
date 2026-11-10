@@ -40,12 +40,14 @@ export const OAUTH_PROVIDERS: ReadonlySet<string> = new Set([CODEX_PROVIDER]);
 
 /**
  * Cairn's own OAuth sign-ins as pi-ai's credential store methods (`OAuthStore.source`). `held` is
- * false when another process holds the OAuth lock; `read` then answers nothing and writes reject.
+ * false when another process holds the OAuth lock, or when it could not be taken at boot
+ * (`lockFailure` says why); `read` then answers nothing and writes reject.
  */
 export interface OAuthCredentialSource {
   /** The providers it serves. */
   readonly providers: ReadonlySet<string>;
   readonly held: boolean;
+  readonly lockFailure: Option.Option<string>;
   read(providerId: string): Promise<OAuthCredential | undefined>;
   modify(
     providerId: string,
@@ -62,12 +64,14 @@ export const HIDDEN_PROVIDERS: ReadonlySet<string> = new Set([
 
 /**
  * Why a credential is not offered to the model runtime: the first five for entries in pi's file,
- * `signed_out` and `not_holder` for Cairn's own OAuth sign-ins.
+ * `signed_out`, `not_holder` and `oauth_unavailable` (the OAuth lock could not be taken at boot)
+ * for Cairn's own OAuth sign-ins.
  */
 export type CredentialRefusal =
   | "hidden_provider"
   | "signed_out"
   | "not_holder"
+  | "oauth_unavailable"
   | "oauth"
   | "not_literal"
   | "subscription_token"
@@ -312,7 +316,15 @@ export class CairnCredentialStore implements CredentialStore {
   private async oauthRefusal(
     provider: string
   ): Promise<Option.Option<CredentialRefusal>> {
-    if (Option.isNone(this.oauth) || !this.oauth.value.held) {
+    if (Option.isNone(this.oauth)) {
+      return Option.some("not_holder");
+    }
+
+    if (Option.isSome(this.oauth.value.lockFailure)) {
+      return Option.some("oauth_unavailable");
+    }
+
+    if (!this.oauth.value.held) {
       return Option.some("not_holder");
     }
 

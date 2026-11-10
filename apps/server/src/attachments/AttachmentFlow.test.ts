@@ -41,7 +41,7 @@ import { isolatePiSetup } from "../models/PiConfigTestKit.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
+import { ReachServicesTest } from "../reach/ReachTestKit.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
 import { TurnContent, textStage } from "../threads/TurnContent.ts";
 import { attachmentStage } from "./AttachmentStage.ts";

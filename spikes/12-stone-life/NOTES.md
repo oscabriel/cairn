@@ -4,6 +4,8 @@ Result: **passed, with one gate missed by 78 ms.** Run on 2026-11-04 from the Be
 
 `life.ts` drives it. The object makes each cut itself: `git bundle create --all`, `sha256sum`, then `R2.put` with that checksum through a `FixedLengthStream`. The Beelink then fetches the object through the Worker and checks its hash and length. All on `standard-2` with the 2026-10-22 stone image.
 
+Measured on Alchemy beta.83 and Effect 4.0.5. On 2026-11-09 the stack moved to the catalog's Alchemy beta.85, `@alchemy.run/cloudflare` and Effect 4.1.2, typechecked only, never planned or deployed on them.
+
 ## An eviction with no request after it (`arms.md` A)
 
 `ctx.abort()`, then silence until the check, which is the first request. A detached process wrote a heartbeat every 5 s. The inactivity timeout was 15 minutes in every case.

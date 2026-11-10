@@ -109,6 +109,7 @@ Defaults taken unless you object, each from a note's decision list: `standard-2`
 Phase 2's hold unchanged (`docs/phase-2/plan.md`, section 3): ownership, integrator-only seams, dependencies only on earlier waves, done means `pnpm check` green plus the package's judges, an integration note per wave in `docs/phase-3/waves.md`, scenarios before code, the cheapest model that answers the question. Phase 3 adds:
 
 - **No Cloudflare until wave 2,** apart from M0's throwaway stacks, each destroyed in its own run.
+- **Every spike uses the catalog's Alchemy version,** with the catalog's import paths (`@alchemy.run/cloudflare`), because every stack shares the account's one Cloudflare state store. A spike stack is finished or destroyed before a different Alchemy beta deploys anything: beta.85 upgrades the store to v8, and an older Alchemy run against an upgraded store fails and can lose the store's key.
 - **A real-money run is announced with its estimate first,** and its cost is recorded in the wave note.
 - **Tests against a deployed dev stage, never `alchemy dev`,** whose local container runtime is Docker (kickoff).
 

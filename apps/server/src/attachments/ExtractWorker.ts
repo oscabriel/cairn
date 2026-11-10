@@ -1,7 +1,7 @@
 // The worker thread that reads a document's text, so a hostile or huge file costs a thread with a
 // 512 MiB heap and a 15 s deadline (both set by `TextExtract`) instead of the brain. PDFs go through
 // `unpdf` on a copy of the bytes (pdf.js transfers the buffer it is given), one page at a time so
-// page boundaries survive as `--- Page N of M ---` lines. The pdf.js that unpdf 1.9.1 bundles has
+// page boundaries survive as `--- Page N of M ---` lines. The pdf.js that unpdf 2.1.0 bundles has
 // no font-eval path left (no `isEvalSupported` option, no `new Function` or `eval`), which closes
 // CVE-2024-4367; XFA forms stay off. A DOCX goes through `mammoth` only after its central directory
 // claims at most 50 MiB uncompressed. Both stop at 500 pages and 2,000,000 characters and say so.

@@ -8,6 +8,8 @@ Result: **passed.**
 
 Run on 2026-10-21 from the Beelink. Alchemy 2.0.0-beta.83 (default profile), `@cloudflare/sandbox` 1.0.2 (image `cloudflare/sandbox:1.0.2` for its shim), pi-env, pi-durable, chord and pi-ai 1.3.0, Node 26.11.1. Compatibility date 2026-10-01 with `nodejs_compat`. Containers on `standard-1`, which reported 1 CPU, 4.2 GB and kernel `6.18.54-cloudflare-microvm`. The Beelink reaches Cloudflare at the Portland edge (`colo=PDX`).
 
+Measured on Alchemy beta.83 and Effect 4.0.5. On 2026-11-09 the stack moved to the catalog's Alchemy beta.85, `@alchemy.run/cloudflare` and Effect 4.1.2, typechecked only, never planned or deployed on them. The next `./deploy.sh` is its first run on beta.85.
+
 ## Shape
 
 v1's Phase 6 had already built this path (cairn-v1 `apps/cloud-sandbox`). The spike ports it, cut down, under v2's rules.

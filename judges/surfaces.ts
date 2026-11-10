@@ -953,12 +953,12 @@ const briefGo = async (
     const sentA = a.responds.length;
     const sentB = b.responds.length;
 
-    await Promise.all([
-      clickNow(a.page, "go").then(async () => {
-        await clickNow(a.page, "go");
-      }),
-      clickNow(b.page, "go"),
-    ]);
+    const goTwiceOnA = async () => {
+      await clickNow(a.page, "go");
+      await clickNow(a.page, "go");
+    };
+
+    await Promise.all([goTwiceOnA(), clickNow(b.page, "go")]);
     await card(a.page)
       .filter({ hasText: `Count the files ${tag}` })
       .waitFor({ state: "hidden", timeout: 10_000 });

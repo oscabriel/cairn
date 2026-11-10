@@ -229,6 +229,12 @@ export const piDurableLayer = (
     Layer.provideMerge(
       ModelSource.layerFaux({
         tokensPerSecond: 2000,
+        // A delta of 64 tokens (256 characters), not pi-ai's 3 to 5: an answer streams as long,
+        // but a long one is a few timers and deltas, not hundreds. With small deltas, the two
+        // 4,000-character arguments of `subagent_reply_escalate_reason_bounded` were 500 timers in
+        // a row, each late on a loaded machine, and that line went past the mutation check's
+        // timeout; no scenario judges a delta.
+        tokensPerDelta: 64,
         // No provider retries (a failed answer would take the next scripted one), and a
         // compaction keeps only the newest context, so a short thread has something to compact.
         settings: {

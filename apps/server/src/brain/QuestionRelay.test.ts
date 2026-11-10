@@ -59,7 +59,7 @@ const passes = (
     const outcome = yield* runScenario(
       scenario,
       piDurableTargetWith({ ...DEFAULT_TOOL_OPTIONS, ...tuning }),
-      { timeout, mutations: new Set() }
+      { timeout, mutations: new Set(), awaitAtRest: false }
     );
 
     assert.deepStrictEqual(outcome.failure, Option.none());

@@ -12,7 +12,10 @@ import type {
 } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
-import type { FauxModelDefinition } from "@earendil-works/pi-ai/providers/faux";
+import type {
+  FauxModelDefinition,
+  RegisterFauxProviderOptions,
+} from "@earendil-works/pi-ai/providers/faux";
 import type { HarnessSettings } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Schema } from "effect";
 
@@ -66,6 +69,11 @@ export class ModelSource extends Context.Service<
     readonly settings: HarnessSettings;
     /** The model's display name; pi-ai shows the id when it is absent. */
     readonly name?: string;
+    /**
+     * The tokens each streamed delta carries; pi-ai's default is 3 to 5. A long answer then takes
+     * as long to stream but in fewer, larger deltas.
+     */
+    readonly tokensPerDelta?: number;
   }) =>
     Layer.effectContext(
       Effect.sync(() => {
@@ -80,11 +88,20 @@ export class ModelSource extends Context.Service<
           definition.name = options.name;
         }
 
-        const faux = fauxProvider({
+        const fauxOptions: RegisterFauxProviderOptions = {
           provider: FAUX_MODEL.provider,
           models: [definition],
           tokensPerSecond: options.tokensPerSecond,
-        });
+        };
+
+        if (options.tokensPerDelta !== undefined) {
+          fauxOptions.tokenSize = {
+            min: options.tokensPerDelta,
+            max: options.tokensPerDelta,
+          };
+        }
+
+        const faux = fauxProvider(fauxOptions);
 
         const models = createModels();
 

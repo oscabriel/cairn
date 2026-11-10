@@ -6,7 +6,7 @@
 // Every assertion below has the same justification:
 // SAFETY: the argument is a protocol id, decoded as a positive integer; the result is the same
 // number under pi-durable's brand, which has no runtime part.
-// Verified by: Conformance.test.ts (scenarios submit, withdraw, page and retry by these ids)
+// Verified by: ConformancePiDurable.test.ts (scenarios submit, withdraw, page and retry by these ids)
 
 import type {
   ConversationId,

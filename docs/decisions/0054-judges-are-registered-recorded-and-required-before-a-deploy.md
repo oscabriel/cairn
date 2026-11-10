@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: `pnpm check` green with `judges/index.test.ts`, `judges/lib/Record.test.ts`, `judges/lib/nightly.test.ts`, `judges/lib/lock-held-by-caller.test.ts`, `ops/cairn/idle-guard.test.ts`, `ops/cairn/link-units.test.ts` and `apps/server/src/push/NightlyFailedRoute.test.ts` passing; then on the Beelink, `node judges/run-set.ts` passes on a clean commit and `ops/cairn/deploy.sh` deploys it without `--override`, and the user receives the nightly's failure push on the phone from a night that failed (or from `systemctl --user start cairn-nightly-failed.service`)
 ---
 
@@ -19,3 +19,5 @@ gate: `pnpm check` green with `judges/index.test.ts`, `judges/lib/Record.test.ts
 - The set takes a few hours, so a deploy waits for a quiet stretch; `--override` exists for an urgent fix, and says so on every use.
 - A paid judge (bridge, OpenCode Go, the deployed brain) is not in the set and records nothing yet; its row in `status.ts` says "no record", which is the honest answer.
 - A judge another change adds must come with its entry, or `pnpm check` fails.
+
+Accepted 2026-11-10 by the user. The gate held: `pnpm check` green with the named tests, `node judges/run-set.ts` passed on `62bfa82` with a clean tree (38 of 38), and `ops/cairn/deploy.sh 62bfa82` deployed it with no `--override`.

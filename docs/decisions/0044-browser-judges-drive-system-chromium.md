@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: on the driver, `pnpm check` green; `judges/behaviour.ts --strict`, `surfaces.ts`, `rollup.ts`, `rows-subagent.ts`, `work-panel.ts`, `meters.ts`, `typing.ts chromium`, `transcript-scroll.ts`, `load.ts --local`, `subagent-flows.ts`, `workflow-surfaces.ts`, `goal-chip.ts` at their last Playwright results with their controls still failing, and `look.ts capture --strict` rules passing; the user decides what `look.ts check` does about any pixel difference
 ---
 
@@ -19,3 +19,5 @@ The user removed Playwright from the machine on 2026-11-04: `~/.cache/ms-playwri
 Decided by the user on 2026-11-04.
 
 Evidence so far (2026-11-04, Chromium 154.0.8037.97, uncommitted in a worktree off `a160935`): `pnpm check` green with 2,700 tests. `behaviour.ts --strict` 39 of 39, `surfaces.ts` 10 of 10, `rollup.ts` 8 of 8, `rows-subagent.ts` 12 of 12, `work-panel.ts` 4 of 4, `meters.ts` 2 of 2 (one check since ADR 0043, at two widths), `typing.ts chromium` 1,200 of 1,200 keys with 0 slow views, `transcript-scroll.ts` no failing check, `load.ts --local` lan p50 250 ms and 4g p50 611 ms, `subagent-flows.ts` 8 of 8, `workflow-surfaces.ts` 4 of 4, `goal-chip.ts` 8 of 8; all 30 `--broken` controls fail, as do `load.ts`'s held-document control and `look.ts`'s planted ones. `look.ts capture --strict` holds 40 shots with no rule finding. `look.ts check` fails on round 10: 37 of 40 shots byte-identical, and 3 drifted, which is the user's to judge. This stays proposed until the user has.
+
+Accepted 2026-11-10 by the user. The gate held: every browser judge on the driver passed in the pre-deploy set on `62bfa82` (38 of 38, clean tree), `look.ts round 12 --strict` passed its rules with its controls caught, and the user's approval of look round 12 settled what a pixel difference needs: a new round, approved and frozen.

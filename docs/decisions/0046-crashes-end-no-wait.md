@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: `judges/approval-kill.ts` (six kills with an approval pending, then an answer that runs exactly once; its control, the brain opened with pi-durable's own restart limit, fails)
 ---
 
@@ -28,3 +28,5 @@ Also part of the bump, 2026-11-09 (pi 1.4.0 to 1.5.1):
 - A wake and a declined brief's tell read whether the parent was stopped and admit their input in one commit (`submit(tx, draft)`), so a stop lands either before the read or after the input.
 
 Gate: `judges/approval-kill.ts`, on a judge brain with the production seam, brain, extension set and boot repairs over a faux model: six kills while the gated `bash` waits on its approval, then a seventh life accepts it as the user. Measured on 2026-11-09, with every tool call kept: the real case passes (6 of 6 kills with the approval pending, the command ran once, the record accepted by the user, one result that is not an error); the control (pi-durable's own limit) fails as it must, its call ended "Tool bash was interrupted 5 times in a row; it is not run again", its record cancelled and the command never run. The review fixes of 2026-11-09 narrowed the kept tool calls to the waits above (`CrashLimit.test.ts` runs the rule on a store crashed five times: the call that waits on nothing ends, the approval and the named wait run on, the approval still pending); the gate is rerun after that integration. `judges/workflow-kill.ts` crash-loop now holds all three of the fan's nodes after their reserve, so only waits are live through its six kills (a node child's `work` call is work the rule ends), and is rerun with its control after that integration too. The status moves to accepted when the user accepts it.
+
+Accepted 2026-11-10 by the user. The gate held: `judges/approval-kill.ts` passed (its control failing), it passed again in the pre-deploy set on `62bfa82`, and the brain has run on pi 1.5.1 with this crash accounting since that deploy.

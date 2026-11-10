@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: shelved
 gate: the user's real Codex login through the phase 2 wizard, and J-codex's rotation test
 ---
 
@@ -10,3 +10,5 @@ ADR 0009 decided that Cairn owns the logins of OAuth providers. This records how
 Codex plan windows are read from its undocumented usage endpoint (as MonoCode does), behind a schema decode that shows "unreadable" when the response changes.
 
 Decided by the user on 2026-10-27, from the phase 2 area notes.
+
+Shelved 2026-11-10 by the user. The Codex login was shelved on 2026-10-29 (`docs/phase-2/plan.md` decisions), so this design waits with it; the gate cannot run. If Codex comes back, this returns to proposed.

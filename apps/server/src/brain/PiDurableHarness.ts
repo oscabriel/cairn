@@ -1413,12 +1413,15 @@ const layerNoDeps = Layer.effect(
         return created;
       };
 
+      // Only a run makes a thread live: a thread whose only tasks are Cairn's own (a subagent's, a
+      // workflow's, a judge run) has nothing running, queued or pending, so the seam leaves it out.
       for (const task of inspection.tasks) {
         const { record } = task;
-        const target = slot(record.conversationId);
 
         if (record.kind === RUN_TASK) {
-          target.runId = Option.some(RunId.make(record.id));
+          slot(record.conversationId).runId = Option.some(
+            RunId.make(record.id)
+          );
         }
       }
 

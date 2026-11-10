@@ -1,0 +1,12 @@
+{"type":"transcript_start","scenario":"entry_past_the_wire_limits","version":1}
+{"type":"model","label":"m1","text":"the long one"}
+{"type":"model","label":"m2","text":"the longer one"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"0123456789","repeat":4000}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"input","step":"message","requestId":"r2","text":"0123456789","repeat":30000}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"0123456789012345…[32766 chars]…6789012\n… output truncated for transport","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"the long one","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"0123456789012345…[32766 chars]…6789012\n… output truncated for transport","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"the longer one","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_entry","at":0,"equals":{"kind":"pi.user","role":"user","text":"0123456789012345…[40000 chars]…0123456789012345678901234567890123456789","images":0,"toolCalls":[],"toolName":null,"isError":null},"truncated":false}
+{"type":"expect_entry","at":2,"equals":{"kind":"pi.user","role":"user","text":"0123456789012345…[32766 chars]…6789012\n… output truncated for transport","images":0,"toolCalls":[],"toolName":null,"isError":null},"truncated":true}
+{"type":"expect_history","before":3,"limit":100,"entries":[{"kind":"pi.user","role":"user","text":"0123456789012345…[32766 chars]…6789012\n… output truncated for transport","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"the long one","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"0123456789012345…[32766 chars]…6789012\n… output truncated for transport","images":0,"toolCalls":[],"toolName":null,"isError":null}],"hasMore":false}

@@ -10,13 +10,21 @@
 // The subagent mutations break delivery inside the harness, where no seam wrapper reaches, so
 // they travel to the target as SubagentFaults (see that module): drop_note, deliver_twice,
 // wake_stopped_parent, route_approval_to_parent. Each must fail at least two subagent scenarios.
+//
+// The read mutations break one of the seam's reads, and each must fail at least two of the
+// scenarios that make that read (`READ_LINES`):
+//
+// - drop_history_entry: a history page loses its newest entry.
+// - hide_pending_record: `inspect` leaves out each thread's oldest pending record.
+// - read_neighbour_entry: `entry` and `entryImage` read the entry before the one asked for.
 
 import { SubmissionId } from "@cairn/protocol/Ids";
-import type { ThreadId } from "@cairn/protocol/Ids";
+import type { EntryId, ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Option, Predicate, Stream } from "effect";
 
 import type { HarnessEvent, HarnessSeam } from "../HarnessSeam.ts";
 import type { SubagentFaultSet } from "../SubagentFaults.ts";
+import type { TranscriptLine } from "./Transcript.ts";
 
 /** One way to break the seam from outside. */
 export type SeamMutation =
@@ -32,8 +40,14 @@ export type SubagentMutation =
   | "wake_stopped_parent"
   | "route_approval_to_parent";
 
+/** One way to break the seam's history, entry or inspection reads from outside. */
+export type ReadMutation =
+  | "drop_history_entry"
+  | "hide_pending_record"
+  | "read_neighbour_entry";
+
 /** Any mutation. */
-export type Mutation = SeamMutation | SubagentMutation;
+export type Mutation = SeamMutation | SubagentMutation | ReadMutation;
 
 /** Every seam mutation. */
 export const MUTATIONS: ReadonlyArray<SeamMutation> = [
@@ -50,6 +64,22 @@ export const SUBAGENT_MUTATIONS: ReadonlyArray<SubagentMutation> = [
   "wake_stopped_parent",
   "route_approval_to_parent",
 ];
+
+/** Every read mutation. */
+export const READ_MUTATIONS: ReadonlyArray<ReadMutation> = [
+  "drop_history_entry",
+  "hide_pending_record",
+  "read_neighbour_entry",
+];
+
+/** The lines whose scenarios a read mutation is judged on: those that make the read it breaks. */
+export const READ_LINES: Readonly<
+  Record<ReadMutation, ReadonlyArray<TranscriptLine["type"]>>
+> = {
+  drop_history_entry: ["expect_history"],
+  hide_pending_record: ["expect_inspect"],
+  read_neighbour_entry: ["expect_entry", "expect_entry_image"],
+};
 
 /** The delivery faults a set of mutations plants. */
 export const faultsOf = (
@@ -127,5 +157,66 @@ export const breakSeam = (
       ? seam.watch(threadId).pipe(Stream.drop(1))
       : seam.watch(threadId);
 
-  return { ...seam, events, submit, watch };
+  const history: HarnessSeam["Service"]["history"] = (threadId, query) =>
+    mutations.has("drop_history_entry")
+      ? Effect.map(seam.history(threadId, query), (page) => ({
+          ...page,
+          entries: page.entries.slice(0, -1),
+        }))
+      : seam.history(threadId, query);
+
+  const inspect: HarnessSeam["Service"]["inspect"] = mutations.has(
+    "hide_pending_record"
+  )
+    ? Effect.map(seam.inspect, (live) =>
+        live.map((thread) => ({
+          ...thread,
+          pendingApprovals: thread.pendingApprovals
+            .toSorted((a, b) => a.askedAt - b.askedAt)
+            .slice(1),
+        }))
+      )
+    : seam.inspect;
+
+  // The entry just before `entryId`, as one history page of one entry finds it; the entry itself
+  // when it is the first.
+  const neighbour = (threadId: ThreadId, entryId: EntryId) =>
+    Effect.map(seam.history(threadId, { before: entryId, limit: 1 }), (page) =>
+      Option.getOrElse(
+        Option.map(
+          Option.fromUndefinedOr(page.entries[0]),
+          (entry) => entry.id
+        ),
+        () => entryId
+      )
+    );
+
+  const entry: HarnessSeam["Service"]["entry"] = (threadId, entryId) =>
+    mutations.has("read_neighbour_entry")
+      ? Effect.flatMap(neighbour(threadId, entryId), (read) =>
+          seam.entry(threadId, read)
+        )
+      : seam.entry(threadId, entryId);
+
+  const entryImage: HarnessSeam["Service"]["entryImage"] = (
+    threadId,
+    entryId,
+    index
+  ) =>
+    mutations.has("read_neighbour_entry")
+      ? Effect.flatMap(neighbour(threadId, entryId), (read) =>
+          seam.entryImage(threadId, read, index)
+        )
+      : seam.entryImage(threadId, entryId, index);
+
+  return {
+    ...seam,
+    events,
+    submit,
+    watch,
+    history,
+    entry,
+    entryImage,
+    inspect,
+  };
 };

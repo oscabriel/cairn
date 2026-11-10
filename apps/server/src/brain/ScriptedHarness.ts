@@ -75,7 +75,11 @@ import type {
   SubagentSettlement,
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
-import { ThreadOpsItem, ThreadSnapshotItem } from "@cairn/protocol/Thread";
+import {
+  FULL_ENTRY_LIMIT_BYTES,
+  ThreadOpsItem,
+  ThreadSnapshotItem,
+} from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { copyJson, isJsonValue } from "@earendil-works/chord/json";
 import type {
@@ -222,6 +226,7 @@ import {
   projectEntry,
   wireProjector,
 } from "./ThreadWire.ts";
+import type { ProjectionMode } from "./ThreadWire.ts";
 
 type RunStatus = (typeof RunTerminal.Type)["status"];
 
@@ -4830,13 +4835,24 @@ const layerNoDeps = Layer.effectContext(
     ) {
       const found = yield* findEntry(threadId, entryId);
 
-      const projected = yield* Effect.fromResult(
-        projectEntry(found, "full")
-      ).pipe(
-        Effect.mapError((cause) => failure("internal", threadId, cause.message))
-      );
+      const projected = (mode: ProjectionMode) =>
+        Effect.fromResult(projectEntry(found, mode)).pipe(
+          Effect.mapError((cause) =>
+            failure("internal", threadId, cause.message)
+          )
+        );
 
-      return { entry: projected, truncated: false };
+      const full = yield* projected("full");
+
+      // Past the full-entry limit the entry is read as the stream cuts it, as pi-durable's is.
+      if (
+        new TextEncoder().encode(JSON.stringify(full)).length <=
+        FULL_ENTRY_LIMIT_BYTES
+      ) {
+        return { entry: full, truncated: false };
+      }
+
+      return { entry: yield* projected("stream"), truncated: true };
     });
 
     const entryImage = Effect.fn("ScriptedHarness.entryImage")(function* (

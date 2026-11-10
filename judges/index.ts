@@ -310,7 +310,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "shell-resume",
     files: ["shell-resume.ts"],
     proves:
-      "A client resubscribing after random connection cuts holds the database's snapshot within 2 s.",
+      "A client resubscribing after random connection cuts holds the database's snapshot within 2 s. On the scripted brain (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: [],
@@ -406,7 +406,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "behaviour",
     files: ["behaviour.ts"],
     proves:
-      "What a screenshot cannot show: the composer footer folds the least that fits, against t3code's readings (plan 4F, ADR 0040).",
+      "What a screenshot cannot show: the composer footer folds the least that fits, against t3code's readings (plan 4F, ADR 0040). On the scripted brain (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -416,7 +416,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "dev-smoke",
     files: ["dev-smoke.ts"],
     proves:
-      "`pnpm dev` goes Live, lists the demo thread and streams its transcript.",
+      "`pnpm dev` goes Live, lists the demo thread and streams its transcript. The dev default is the scripted brain (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -426,7 +426,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "goal-chip",
     files: ["goal-chip.ts"],
     proves:
-      "The goal chip and panel show the brain's verdicts at 390 and 1,440 px (ADR 0026, briefs note B6).",
+      "The goal chip and panel show the brain's verdicts at 390 and 1,440 px (ADR 0026, briefs note B6). On the scripted brain: the judge writes verdicts through the verdict writer, no pi-durable judge run does (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -446,7 +446,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "look",
     files: ["look.ts"],
     proves:
-      "`check`: today's client matches the newest frozen look round; `capture` and `round` hold each named state to the look rules (ADR 0040).",
+      "`check`: today's client matches the newest frozen look round; `capture` and `round` hold each named state to the look rules (ADR 0040). On the scripted brain over seeded documents (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -467,7 +467,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "meters",
     files: ["meters.ts"],
     proves:
-      "The usage page shows the seeded spend, budgets and plan windows, and nothing unknown as zero (surfaces S9, models M10).",
+      "The usage page shows the seeded spend, budgets and plan windows, and nothing unknown as zero (surfaces S9, models M10). On the scripted brain over seeded documents, without pi-durable's spend feed or budget halts (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -477,7 +477,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "paste-client",
     files: ["paste-client.ts"],
     proves:
-      "Paste, drop and send in the real client at 390 px: one chip and one upload per file, and a send waits for the upload.",
+      "Paste, drop and send in the real client at 390 px: one chip and one upload per file, and a send waits for the upload. On the scripted brain (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -487,7 +487,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "reconnect",
     files: ["reconnect.ts"],
     proves:
-      "The kickoff's Durability target, client side: the page converges within 2 s after its brain is killed and restarted.",
+      "The kickoff's Durability target, client side: the page converges within 2 s after its brain is killed and restarted. On the dev brain's scripted default (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -497,7 +497,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "rollup",
     files: ["rollup.ts"],
     proves:
-      "ADR 0027's gate in the page: a child's approval lights its ancestors, and a question goes to the parent's model first.",
+      "ADR 0027's gate in the page: a child's approval lights its ancestors, and a question goes to the parent's model first. On the scripted brain, whose subagent delivery the conformance suite judges; pi-durable's subagent tasks and repairs are not in it (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -507,7 +507,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "rows-subagent",
     files: ["rows-subagent.ts"],
     proves:
-      "Subagent rows (surfaces S4): each row's state comes from its child's own shell row, and the way back works.",
+      "Subagent rows (surfaces S4): each row's state comes from its child's own shell row, and the way back works. On the scripted brain, without pi-durable's subagent tasks and repairs (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -517,7 +517,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "subagent-flows",
     files: ["subagent-flows.ts"],
     proves:
-      "Steer, stop and escalated-question flows from the UI, judged on the page and on the brain (ADR 0027, ADR 0028).",
+      "Steer, stop and escalated-question flows from the UI, judged on the page and on the brain (ADR 0027, ADR 0028). On the scripted brain, without pi-durable's subagent tasks and repairs (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -527,7 +527,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "surfaces",
     files: ["surfaces.ts"],
     proves:
-      "The request card and the brief card: one answer per request, a reload keeps it, two devices settle it once.",
+      "The request card and the brief card: one answer per request, a reload keeps it, two devices settle it once. On the scripted brain (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -547,7 +547,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "typing",
     files: ["typing.ts"],
     proves:
-      "ADR 0023's gate (the kickoff's Composer target): no key dropped or reordered while a long thread streams, IME and menus intact.",
+      "ADR 0023's gate (the kickoff's Composer target): no key dropped or reordered while a long thread streams, IME and menus intact. On the scripted brain (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -557,7 +557,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "workflow-surfaces",
     files: ["workflow-surfaces.ts"],
     proves:
-      "The workflow launch approval and steps panel (ADR 0032): numbers first, one answer per control, Stop reaches the brain.",
+      "The workflow launch approval and steps panel (ADR 0032): numbers first, one answer per control, Stop reaches the brain. On the scripted brain over a hand-written ledger: no workflow runs (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -567,7 +567,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "work-panel",
     files: ["work-panel.ts"],
     proves:
-      "The work panel (surfaces S5, S7): Stop ends one child alone, and the steps follow the child.",
+      "The work panel (surfaces S5, S7): Stop ends one child alone, and the steps follow the child. On the scripted brain, without pi-durable's subagent tasks and repairs (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
@@ -607,7 +607,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "push",
     files: ["push.ts"],
     proves:
-      "Push end to end: --pwa registers the worker, --fake pushes approvals once with their words, --send reaches the phone (the wizard).",
+      "Push end to end: --pwa registers the worker, --fake pushes approvals once with their words, --send reaches the phone (the wizard). --fake runs on the scripted brain (ADR 0024).",
     runs: ["set", "wizard", "hand"],
     cost: free,
     needs: ["browser"],

@@ -4,7 +4,8 @@
 // `@cairn/client-logic/ThreadState`) puts the thread in the doc's category with the label map's
 // words, or checks the shelf the doc names, or says which surface other than a thread's row reads
 // the state. The first test fails when the doc gains a row with no case or a case loses its row;
-// the last proves the comparison fails on a doc whose category disagrees.
+// the last proves the comparison fails on a doc whose category disagrees. A row case's label map
+// cell may never say "Not shown yet" (review C-5): the thread-state function shows it.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -147,7 +148,10 @@ interface Expect {
   readonly not?: ReadonlyArray<ThreadCategory>;
   /** The row's top label words; none for a row that shows its age. */
   readonly word?: Option.Option<string>;
-  /** Whether the label map's cell for the row quotes `word` (false where it says "Not shown yet"). */
+  /**
+   * Whether the label map's cell for the row quotes `word`: false where the cell says what the
+   * status's own surface shows (a settled record's line, a child's entry) rather than the row's word.
+   */
   readonly quoted?: boolean;
   /** The hold banner's badge word. */
   readonly hold?: string;
@@ -327,31 +331,35 @@ const CASES = {
   "ProviderStatus.state unknown": elsewhere(
     "a provider's credential, on the settings page"
   ),
-  "UsageReading read": elsewhere("a provider's plan windows, on the meters"),
+  "UsageReading read": elsewhere(
+    'a provider\'s plan windows, on the usage page (`thread-states.test.ts` fails a "Not shown yet" cell)'
+  ),
   "UsageReading unreadable": elsewhere(
-    "a provider's plan windows, on the meters"
+    'a provider\'s plan windows, on the usage page (`thread-states.test.ts` fails a "Not shown yet" cell)'
   ),
   "UsageReading unsupported": elsewhere(
-    "a provider's plan windows, on the meters"
+    'a provider\'s plan windows, on the usage page (`thread-states.test.ts` fails a "Not shown yet" cell)'
   ),
   "BudgetState none": elsewhere(
-    "the spend meters (6G) and the budget notice (4E)"
+    "a budget card on the usage page and the budget notice (`thread-states.test.ts` holds its words)"
   ),
   "BudgetState within": elsewhere(
-    "the spend meters (6G) and the budget notice (4E)"
+    "a budget card on the usage page and the budget notice (`thread-states.test.ts` holds its words)"
   ),
   "BudgetState warned": elsewhere(
-    "the spend meters (6G) and the budget notice (4E)"
+    "a budget card on the usage page and the budget notice (`thread-states.test.ts` holds its words)"
   ),
   "BudgetState exhausted": elsewhere(
-    "the spend meters (6G) and the budget notice (4E)"
+    "a budget card on the usage page and the budget notice (`thread-states.test.ts` holds its words)"
   ),
   "CriterionState open": elsewhere(
-    "a goal's criterion, on the goal strip (6H)"
+    "a goal's criterion, on the goal panel (`thread-states.test.ts` holds its words)"
   ),
-  "CriterionState met": elsewhere("a goal's criterion, on the goal strip (6H)"),
+  "CriterionState met": elsewhere(
+    "a goal's criterion, on the goal panel (`thread-states.test.ts` holds its words)"
+  ),
   "CriterionState failed": elsewhere(
-    "a goal's criterion, on the goal strip (6H)"
+    "a goal's criterion, on the goal panel (`thread-states.test.ts` holds its words)"
   ),
   // A parent's children: counted on its row (`subagents`), and their requests rolled up to it.
   "SubagentStatus working": row(tally({ working: 1 }), {
@@ -433,26 +441,52 @@ const CASES = {
     { category: "failed", word: word("Failed"), quoted: false }
   ),
   "WorkflowState proposed": elsewhere(
-    "a workflow, on its launch card and steps panel (6F)"
+    "a workflow, on its launch card and steps panel (`thread-states.test.ts` holds its words)"
   ),
-  "WorkflowState approved": elsewhere("a workflow, on its steps panel (6F)"),
-  "WorkflowState running": elsewhere("a workflow, on its steps panel (6F)"),
-  "WorkflowState finished": elsewhere("a workflow, on its steps panel (6F)"),
-  "WorkflowState failed": elsewhere("a workflow, on its steps panel (6F)"),
-  "WorkflowState stopped": elsewhere("a workflow, on its steps panel (6F)"),
-  "WorkflowState declined": elsewhere("a workflow, on its steps panel (6F)"),
-  "NodeState reserved": elsewhere("a workflow node, on the steps panel (6F)"),
-  "NodeState running": elsewhere("a workflow node, on the steps panel (6F)"),
-  "NodeState held": elsewhere("a workflow node, on the steps panel (6F)"),
-  "NodeState settled": elsewhere("a workflow node, on the steps panel (6F)"),
-  "NodeState failed": elsewhere("a workflow node, on the steps panel (6F)"),
-  "NodeState stopped": elsewhere("a workflow node, on the steps panel (6F)"),
-  "NodeState refused": elsewhere("a workflow node, on the steps panel (6F)"),
+  "WorkflowState approved": elsewhere(
+    "a workflow, on its steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "WorkflowState running": elsewhere(
+    "a workflow, on its steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "WorkflowState finished": elsewhere(
+    "a workflow, on its steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "WorkflowState failed": elsewhere(
+    "a workflow, on its steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "WorkflowState stopped": elsewhere(
+    "a workflow, on its steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "WorkflowState declined": elsewhere(
+    "a workflow, on its steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "NodeState reserved": elsewhere(
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "NodeState running": elsewhere(
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "NodeState held": elsewhere(
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "NodeState settled": elsewhere(
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "NodeState failed": elsewhere(
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "NodeState stopped": elsewhere(
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
+  ),
+  "NodeState refused": elsewhere(
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
+  ),
   "NodeState start_unknown": elsewhere(
-    "a workflow node, on the steps panel (6F)"
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
   ),
   "NodeState stop_unknown": elsewhere(
-    "a workflow node, on the steps panel (6F)"
+    "a workflow node, on the steps panel (`thread-states.test.ts` holds its words)"
   ),
   "PortalState opening": elsewhere("a portal, on its entry (6I)"),
   "PortalState open": elsewhere("a portal, on its entry (6I)"),
@@ -498,7 +532,7 @@ const CASES = {
     word: word("Waiting"),
   }),
   "state: Goal": elsewhere(
-    "the goal strip (6H) reads `goal`; the row's state is its run's"
+    "the goal chip and panel read `goal`; the row's state is its run's"
   ),
   "state: Hold": row(
     { ...running, waitingFor: "claude_slot" },
@@ -693,6 +727,13 @@ const disagreements = (
     );
   }
 
+  // The thread-state function is a label function for every row case: its row is shown.
+  if (Option.exists(labelCell, (cell) => cell.includes("Not shown yet"))) {
+    problems.push(
+      `${key}: the label map says "Not shown yet", but the thread's row shows it`
+    );
+  }
+
   if (expect.quoted !== false && Option.isSome(labelCell)) {
     for (const quoted of [
       ...Option.toArray(expect.word ?? Option.none()),
@@ -800,6 +841,16 @@ describe("thread-state rows", () => {
     ]);
     assert.deepStrictEqual(judge(wrongWord), [
       'RuntimeRequestKind brief: the label map does not quote "Go"',
+    ]);
+
+    const notShown = doc.replace(
+      /\| `SettlementOutcome` \| `failed` \| "Failed"[^|]*\|/u,
+      "| `SettlementOutcome` | `failed` | Not shown yet; subagent rows (6C). |"
+    );
+
+    assert.notStrictEqual(notShown, doc);
+    assert.deepStrictEqual(judge(notShown), [
+      'SettlementOutcome failed: the label map says "Not shown yet", but the thread\'s row shows it',
     ]);
   });
 });

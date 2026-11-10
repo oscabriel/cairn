@@ -3,7 +3,8 @@
 // and bookkeeping can be held to the same expectations.
 //
 // - `transcript`: the visible entries in order (hidden placeholders left out), each with its kind,
-//   role, text, tool calls, tool name, error flag and image count.
+//   role, text, tool calls, tool name, error flag and image count. A text past 8192 characters is
+//   written as its head, its length and its tail (`normalizeText`).
 // - `queue`: queued inputs with their mode and text; `queueLength`.
 // - `running`: whether `pi.live` has a run.
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
@@ -18,16 +19,22 @@
 // A named device's view (`normalizeDeviceView`) adds what its client reads from the records
 // through `PendingRequests`: `card`, the requests the card offers in order (tool, body, "i/N"),
 // and `lines`, each settled record's transcript line (status, words, a question's answers).
+//
+// The seam's reads are judged in the same terms: a history page's or a full entry's entries as
+// `transcript` holds them (`normalizeEntries`, `normalizeEntry`), and `inspect`'s states by thread
+// alias (`normalizeInspection`).
 
 import {
   approvalRecordsOf,
   pendingRequests,
   settledLines,
 } from "@cairn/client-logic/PendingRequests";
-import type { ConversationView } from "@cairn/protocol/Thread";
+import type { ThreadId } from "@cairn/protocol/Ids";
+import type { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
 import type { Schema } from "effect";
 
+import type { LiveThreadState } from "../HarnessSeam.ts";
 import { HIDDEN_ENTRY_KIND } from "../ThreadWire.ts";
 
 type Json = Schema.Json;
@@ -38,23 +45,38 @@ const isRecord = (value: Json | undefined): value is Schema.JsonObject =>
 const isList = (value: Json | undefined): value is Schema.JsonArray =>
   Array.isArray(value);
 
+/** Texts longer than this are written short: far past any scenario's ordinary text. */
+const LONG_TEXT_CHARS = 8192;
+
+/**
+ * A text as expectations and goldens write it: whole, or, past `LONG_TEXT_CHARS`, its first 16
+ * characters, its length and its last 40, so a text cut for the wire (which ends with the
+ * truncation marker) and a whole one read differently without either being written out.
+ */
+export const normalizeText = (text: string) =>
+  text.length <= LONG_TEXT_CHARS
+    ? text
+    : `${text.slice(0, 16)}…[${String(text.length)} chars]…${text.slice(-40)}`;
+
 /** Text blocks of a content value, joined; a plain string is its own text. */
 const textOf = (content: Json | undefined): string => {
   if (Predicate.isString(content)) {
-    return content;
+    return normalizeText(content);
   }
 
   if (!isList(content)) {
     return "";
   }
 
-  return content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && Predicate.isString(part.text)
-        ? [part.text]
-        : []
-    )
-    .join("");
+  return normalizeText(
+    content
+      .flatMap((part) =>
+        isRecord(part) && part.type === "text" && Predicate.isString(part.text)
+          ? [part.text]
+          : []
+      )
+      .join("")
+  );
 };
 
 const countImages = (content: Json | undefined) =>
@@ -73,7 +95,8 @@ const toolCallsOf = (content: Json | undefined) =>
       )
     : [];
 
-const normalizeEntry = (entry: ConversationView["entries"][number]) => {
+/** One entry as the view's `transcript` holds it; `thread.entry`'s read is judged this way too. */
+export const normalizeEntry = (entry: Entry): Json => {
   const message = Option.fromUndefinedOr(entry.model?.[0]).pipe(
     Option.filter(isRecord)
   );
@@ -106,11 +129,17 @@ const normalizeEntry = (entry: ConversationView["entries"][number]) => {
   };
 };
 
+/** The visible entries of a list, hidden placeholders left out. */
+export const visibleEntries = (entries: ReadonlyArray<Entry>) =>
+  entries.filter((entry) => entry.kind !== HIDDEN_ENTRY_KIND);
+
+/** Entries as the view's `transcript` holds them: the visible ones, normalized. */
+export const normalizeEntries = (entries: ReadonlyArray<Entry>) =>
+  visibleEntries(entries).map(normalizeEntry);
+
 /** The fields of a normalized view. */
 const viewFields = (view: ConversationView) => {
-  const transcript = view.entries
-    .filter((entry) => entry.kind !== HIDDEN_ENTRY_KIND)
-    .map(normalizeEntry);
+  const transcript = normalizeEntries(view.entries);
 
   const inbox = view.docs["pi.inbox"];
   const items = isRecord(inbox) && isList(inbox.items) ? inbox.items : [];
@@ -255,6 +284,34 @@ export const normalizeDeviceView = (view: ConversationView): Json => {
 
   return { ...viewFields(view), card, lines };
 };
+
+/**
+ * `inspect`'s states as an `expect_inspect` line writes them: one per thread in `rank` order, with
+ * whether a run is live, the queue's length and the pending records oldest first. Ids and times
+ * differ by harness, so a thread is named by its alias and a record by its kind, route and origin.
+ */
+export const normalizeInspection = (
+  states: ReadonlyArray<LiveThreadState>,
+  aliasOf: (threadId: ThreadId) => string,
+  rank: (threadId: ThreadId) => number
+): Json =>
+  states
+    .toSorted((a, b) => rank(a.threadId) - rank(b.threadId))
+    .map((state) => ({
+      thread: aliasOf(state.threadId),
+      running: Option.isSome(state.runId),
+      queueLength: state.queueLength,
+      pending: state.pendingApprovals
+        .toSorted((a, b) => a.askedAt - b.askedAt)
+        .map((record) => ({
+          kind: record.kind,
+          route: record.route,
+          origin: Option.match(record.origin, {
+            onNone: () => null,
+            onSome: aliasOf,
+          }),
+        })),
+    }));
 
 /** The ids of pending approvals in a client's view, oldest first. */
 export const pendingApprovalIds = (view: ConversationView) => {

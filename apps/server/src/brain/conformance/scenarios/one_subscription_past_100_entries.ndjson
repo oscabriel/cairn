@@ -14,3 +14,5 @@
 {"type":"expect_view","path":["transcript",0],"equals":{"kind":"pi.user","role":"user","text":"turn 1","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"turn 2 done","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"expect_event_count","event":{"_tag":"RunTerminal"},"count":2}
+{"type":"expect_history","before":-1,"limit":3,"entries":[{"kind":"pi.tool-result","role":"toolResult","text":"t2-58","images":0,"toolCalls":[],"toolName":"echo","isError":false},{"kind":"pi.tool-result","role":"toolResult","text":"t2-59","images":0,"toolCalls":[],"toolName":"echo","isError":false},{"kind":"pi.tool-result","role":"toolResult","text":"t2-60","images":0,"toolCalls":[],"toolName":"echo","isError":false}],"hasMore":true}
+{"type":"expect_entry","at":-2,"equals":{"kind":"pi.tool-result","role":"toolResult","text":"t2-60","images":0,"toolCalls":[],"toolName":"echo","isError":false},"truncated":false}

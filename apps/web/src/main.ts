@@ -21,7 +21,12 @@ const flags = Effect.gen(function* () {
   const boot = yield* readBootData;
   const outbox = yield* readOutbox;
 
-  return { boot, outbox: outbox.value, outboxUnread: outbox.tell };
+  return {
+    boot,
+    outbox: outbox.value,
+    outboxRead: outbox.read,
+    outboxUnread: outbox.tell,
+  };
 });
 
 const application = Runtime.makeApplication({

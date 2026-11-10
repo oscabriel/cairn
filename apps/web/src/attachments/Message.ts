@@ -8,6 +8,7 @@ import { Schema } from "effect";
 import { File } from "foldkit/file";
 import { defineMessageUnion } from "foldkit/message";
 
+import { LastRead } from "../storage/TabChanges.ts";
 import { SendIntent } from "./Model.ts";
 
 /** Everything the tray reacts to. */
@@ -44,14 +45,15 @@ export const Message = defineMessageUnion({
   CompletedDiscard: {},
   CompletedRevokePreview: {},
 
-  /** The ready attachments saved on this device, by draft key. */
+  /** The ready attachments saved on this device, by draft key, read at `read` (none when refused). */
   LoadedSaved: {
     drafts: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
+    read: Schema.Option(LastRead),
   },
   /**
    * The ready attachments were written as `written`, over `base` (the changes since it are what the
-   * save wrote); `stored` is what storage held afterwards, with other tabs' attachments, or none
-   * when storage refused.
+   * save wrote); `stored` is what storage held afterwards, with other tabs' attachments, read at
+   * `read`, or none when storage refused.
    */
   CompletedSave: {
     base: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
@@ -59,6 +61,7 @@ export const Message = defineMessageUnion({
     stored: Schema.Option(
       Schema.Record(Schema.String, Schema.Array(AttachmentRef))
     ),
+    read: Schema.Option(LastRead),
   },
   /** Another tab wrote the saved attachments. */
   ChangedStoredAttachments: {},

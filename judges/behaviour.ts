@@ -38,6 +38,9 @@
 //   drop             an image and a text file dropped on the composer make two chips;
 //   drafts-reload    the hero's draft survives a reload of the page's URL (t3code moves the hero to
 //                    `/draft/<id>`, so its reload restores the draft);
+//   drafts-cleared   site data cleared in another tab (storage emptied, and the `storage` event the
+//                    browser raises in this tab) empties the hero's draft here and leaves it out of
+//                    storage, rather than this tab writing it back;
 //   drafts-separate  a thread's draft stays with the thread and out of the hero;
 //   hero-launch      20 sends from the hero, each started without a project (every seeded project
 //                    has a project thread by then, which the hero opens rather than replaces, ADR
@@ -2246,6 +2249,33 @@ try {
       return `after reload: ${JSON.stringify(await value(page))}`;
     },
     (detail) => detail === 'after reload: "a hero draft"'
+  );
+
+  await check(
+    chromiumBrowser,
+    "drafts-cleared",
+    desktop(1440),
+    hero,
+    async (page) => {
+      await editor(page).click();
+      await page.keyboard.type("a draft to clear");
+      await page.waitForTimeout(800);
+      await page.evaluate(() => {
+        localStorage.clear();
+        // What the browser raises in every other tab of the site when one of them clears it.
+        globalThis.dispatchEvent(new StorageEvent("storage", { key: null }));
+      });
+      await page.waitForTimeout(800);
+
+      const stored = await page.evaluate(() =>
+        Object.keys(localStorage).some((key) =>
+          (localStorage.getItem(key) ?? "").includes("a draft to clear")
+        )
+      );
+
+      return `editor ${JSON.stringify(await value(page))}, written back ${stored}`;
+    },
+    (detail) => detail === 'editor "", written back false'
   );
 
   await check(

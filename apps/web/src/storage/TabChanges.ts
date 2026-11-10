@@ -12,6 +12,14 @@
 // lacks is removed from the tab only when such a record names it; otherwise the tab's save writes
 // it back.
 //
+// That holds only while the records can name every removal since the tab's read. A tab whose last
+// read is older than a record lives (asleep for a day), or that read before storage was cleared
+// (site data cleared in another tab, or in the browser's settings), cannot prove an entry storage
+// lacks is still live, so its save writes only what it changed since that read, and the entries
+// storage lacks leave the tab. A clear is told by the value's generation (`<key>:generation`): an
+// id a tab mints when it finds none, which a clear removes, so a tab that finds none, or another
+// id than it read, knows storage was cleared since.
+//
 // Two builds can share storage (a tab not yet reloaded after a deploy), so a value is read entry by
 // entry: an entry this build cannot decode is not shown, but storage still holds it, so it is never
 // taken for lost, and a save patches the stored value (sets and removes this tab's entries only),
@@ -25,7 +33,7 @@
 // every load, and only an entry not told about yet raises it again.
 
 import type { Equivalence, Stream } from "effect";
-import { Array, Clock, Effect, Option, Record, Schema } from "effect";
+import { Array, Clock, Effect, Option, Random, Record, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { streamFromEventFilterMap } from "foldkit/dom";
 
@@ -104,7 +112,10 @@ export const applyListChanges =
 /** When each key was removed from a shared value, in epoch milliseconds, by entry key. */
 export type Removals = Readonly<Record<string, number>>;
 
-/** How long a removal is remembered: a tab asleep longer may write a removed entry back. */
+/**
+ * How long a removal is remembered. A tab whose last read is older cannot tell what was removed
+ * since, so its save writes back no entry storage lacks (`mergeStored`).
+ */
 export const REMOVAL_MEMORY_MS = 24 * 60 * 60 * 1000;
 
 /** The localStorage key the removals from the value at `key` are kept under. */
@@ -115,6 +126,69 @@ export const removalsKey = (key: string): string => `${key}:removed`;
  * unreadable as a whole, so the unreadable value is never written over.
  */
 export const recoveryKey = (key: string): string => `${key}:recovery`;
+
+/**
+ * The localStorage key of the generation of the value at `key`: an id minted when a tab finds none,
+ * so a clear of storage, which removes it, starts a new one.
+ */
+export const generationKey = (key: string): string => `${key}:generation`;
+
+/** When a tab last read a shared value, and the generation storage held then. */
+export const LastRead = Schema.Struct({
+  generation: Schema.String,
+  /** Epoch milliseconds. */
+  at: Schema.Finite,
+});
+
+export type LastRead = typeof LastRead.Type;
+
+/** The later of two reads: answers can land out of order, and an older read must not win. */
+export const laterRead = (
+  read: Option.Option<LastRead>,
+  other: Option.Option<LastRead>
+): Option.Option<LastRead> =>
+  Option.exists(other, (last) =>
+    Option.match(read, {
+      onNone: () => true,
+      onSome: (answer) => last.at > answer.at,
+    })
+  )
+    ? other
+    : read;
+
+/**
+ * Whether storage may have removed the entry at a key since a tab's read: a removal names it, or
+ * the tab cannot tell (`mergeStored`).
+ */
+export type Removed = (key: string) => boolean;
+
+/** The generation of the value at `key`, minting and writing one when storage holds none. */
+const currentGeneration = (key: string) =>
+  Effect.gen(function* () {
+    const store = yield* KeyValueStore.KeyValueStore;
+    const held = yield* store.get(generationKey(key));
+
+    if (held !== undefined) {
+      return held;
+    }
+
+    const now = yield* Clock.currentTimeMillis;
+    const random = yield* Random.nextIntBetween(0, Number.MAX_SAFE_INTEGER);
+    const minted = `${now.toString(36)}-${random.toString(36)}`;
+
+    yield* store.set(generationKey(key), minted);
+
+    return minted;
+  });
+
+/** What a tab knows of storage now: the generation it holds, read at the current time. */
+const readNow = (key: string) =>
+  Effect.gen(function* () {
+    const generation = yield* currentGeneration(key);
+    const at = yield* Clock.currentTimeMillis;
+
+    return { generation, at } satisfies LastRead;
+  });
 
 // The removals' shape. A change an older build cannot decode needs a new key (`<key>:removed2`):
 // a build that cannot read the removals reads them as none, and its next save writes over them.
@@ -153,16 +227,16 @@ export interface Merged<A> {
 
 /**
  * The merge of a save of `mine` (base `base`) into a stored record: this tab's changes, plus every
- * entry it holds that storage lacks and no removal names, so a write from a stale read is undone.
- * `held` names the entries storage holds that this build cannot decode: they are not lost. None
- * when there is nothing to write.
+ * entry it holds that storage lacks and storage cannot have removed (`removed`), so a write from a
+ * stale read is undone. `held` names the entries storage holds that this build cannot decode: they
+ * are not lost. None when there is nothing to write.
  */
 export const mergeRecord =
   <A>(equivalence: Equivalence.Equivalence<A>) =>
   (base: Readonly<Record<string, A>>, mine: Readonly<Record<string, A>>) =>
   (
     stored: Readonly<Record<string, A>>,
-    removals: Removals,
+    removed: Removed,
     held: ReadonlyArray<string>
   ): Option.Option<Merged<Record<string, A>>> => {
     const changes = recordChanges(equivalence)(base, mine);
@@ -170,9 +244,7 @@ export const mergeRecord =
     const lost = Record.filter(
       mine,
       (_value, key) =>
-        !Record.has(stored, key) &&
-        !held.includes(key) &&
-        !Record.has(removals, key)
+        !Record.has(stored, key) && !held.includes(key) && !removed(key)
     );
 
     const set = { ...lost, ...changes.set };
@@ -192,7 +264,7 @@ export const mergeList =
   (base: ReadonlyArray<A>, mine: ReadonlyArray<A>) =>
   (
     stored: ReadonlyArray<A>,
-    removals: Removals,
+    removed: Removed,
     held: ReadonlyArray<string>
   ): Option.Option<Merged<ReadonlyArray<A>>> => {
     const changes = listChanges(keyOf)(base, mine);
@@ -202,11 +274,7 @@ export const mergeList =
     const lost = Array.filter(mine, (item) => {
       const key = keyOf(item);
 
-      return (
-        !storedKeys.has(key) &&
-        !addedKeys.has(key) &&
-        !Record.has(removals, key)
-      );
+      return !storedKeys.has(key) && !addedKeys.has(key) && !removed(key);
     });
 
     const added = [...lost, ...changes.added];
@@ -308,6 +376,8 @@ export interface Stored<A> {
   readonly value: A;
   /** The ids of what storage holds that this build cannot show, kept as stored. */
   readonly unread: ReadonlyArray<string>;
+  /** This read, which the tab's next save names (`mergeStored`); none when storage refused. */
+  readonly read: Option.Option<LastRead>;
 }
 
 /**
@@ -333,19 +403,26 @@ const recoveryLeft = Effect.fnUntraced(function* <A, Raw, R, E>(
 });
 
 /**
- * Reads the shared value at `key` entry by entry. A missing value, or storage refusing, is the empty
- * value: the page must start. A value unreadable as a whole stays where it is, and the tab's copy at
- * the recovery key is read instead.
+ * Reads the shared value at `key` entry by entry, minting its generation when storage holds none. A
+ * missing value, or storage refusing, is the empty value: the page must start. A value unreadable as
+ * a whole stays where it is, and the tab's copy at the recovery key is read instead.
  */
 export const loadShared = <A, Raw, R, E>(
   key: string,
   persisted: Persisted<A, Raw, R, E>
 ): Effect.Effect<Stored<A>, never, R | KeyValueStore.KeyValueStore> =>
   Effect.gen(function* () {
+    // Read first: a value written after the read is newer than it, never missed by it. Storage that
+    // reads but refuses the generation's write (full) still loads, as a tab that never read.
+    const read = yield* Effect.option(readNow(key));
     const found = yield* findStored(key, persisted);
 
     if (Option.isNone(found)) {
-      return { value: persisted.empty.value, unread: [UNREADABLE_VALUE] };
+      return {
+        value: persisted.empty.value,
+        unread: [UNREADABLE_VALUE],
+        read,
+      };
     }
 
     const { at, readable } = found.value;
@@ -354,6 +431,7 @@ export const loadShared = <A, Raw, R, E>(
       return {
         value: readable.value,
         unread: [UNREADABLE_VALUE, ...readable.unread],
+        read,
       };
     }
 
@@ -362,11 +440,13 @@ export const loadShared = <A, Raw, R, E>(
     return {
       value: readable.value,
       unread: left ? [...readable.unread, LEFT_RECOVERY] : readable.unread,
+      read,
     };
   }).pipe(
     Effect.orElseSucceed((): Stored<A> => ({
       value: persisted.empty.value,
       unread: [],
+      read: Option.none(),
     }))
   );
 
@@ -420,6 +500,8 @@ export interface Loaded<A> {
   readonly value: A;
   /** Storage holds entries this build cannot show, kept as stored, that no load has told about. */
   readonly tell: boolean;
+  /** This read, which the tab's next save names (`mergeStored`); none when storage refused. */
+  readonly read: Option.Option<LastRead>;
 }
 
 /**
@@ -430,43 +512,71 @@ export const readShared = <A, Raw, R, E>(
   key: string,
   persisted: Persisted<A, Raw, R, E>
 ): Effect.Effect<Loaded<A>, never, R | KeyValueStore.KeyValueStore> =>
-  Effect.flatMap(loadShared(key, persisted), ({ unread, value }) =>
-    Effect.map(tellOnce(key, unread), (tell) => ({ value, tell }))
+  Effect.flatMap(loadShared(key, persisted), ({ read, unread, value }) =>
+    Effect.map(tellOnce(key, unread), (tell) => ({ value, tell, read }))
   );
+
+/** What storage holds after a save, and the save's read of it, which the tab's next save names. */
+export interface Synced<A> {
+  readonly value: A;
+  readonly read: LastRead;
+}
 
 /**
  * Writes one tab's changes into what storage holds at `key` now: read the stored value, `merge`
- * this tab's changes into it with the removals other tabs recorded (none when there is nothing to
- * write, so no other tab is woken), record this save's removals, and write the stored value patched
- * with the merge. Answers what storage holds afterwards (the entries this build decodes), which the
- * tab takes as its new base, or none when storage refused or nothing there could be read.
+ * this tab's changes into it (none when there is nothing to write, so no other tab is woken),
+ * record this save's removals, and write the stored value patched with the merge. Answers what
+ * storage holds afterwards (the entries this build decodes), which the tab takes as its new base,
+ * or none when storage refused or nothing there could be read.
+ *
+ * `read` is the tab's last read of the value (none before its first). The merge may write back an
+ * entry storage lacks only when the removals other tabs recorded name every removal since that
+ * read: storage holds the generation the tab read, and the read is younger than a removal is
+ * remembered. Otherwise storage may have removed any entry it lacks, so none is written back.
  */
 export const mergeStored = <A, Raw, R, E>(
   key: string,
   persisted: Persisted<A, Raw, R, E>,
+  read: Option.Option<LastRead>,
   merge: (
     stored: A,
-    removals: Removals,
+    removed: Removed,
     held: ReadonlyArray<string>
   ) => Option.Option<Merged<A>>
-): Effect.Effect<Option.Option<A>, never, R | KeyValueStore.KeyValueStore> =>
+): Effect.Effect<
+  Option.Option<Synced<A>>,
+  never,
+  R | KeyValueStore.KeyValueStore
+> =>
   Effect.gen(function* () {
+    const now = yield* readNow(key);
     const found = yield* findStored(key, persisted);
 
     if (Option.isNone(found)) {
-      return Option.none<A>();
+      return Option.none<Synced<A>>();
     }
 
     const { at, readable } = found.value;
     const removals = yield* loadRemovals(at);
-    const merged = merge(readable.value, removals, readable.held);
+
+    const complete = Option.exists(
+      read,
+      (last) =>
+        last.generation === now.generation &&
+        now.at - last.at < REMOVAL_MEMORY_MS
+    );
+
+    const merged = merge(
+      readable.value,
+      complete ? (entry) => Record.has(removals, entry) : () => true,
+      readable.held
+    );
 
     if (Option.isNone(merged)) {
-      return Option.some(readable.value);
+      return Option.some({ value: readable.value, read: now });
     }
 
     const store = yield* KeyValueStore.KeyValueStore;
-    const now = yield* Clock.currentTimeMillis;
     const text = yield* persisted.write(readable.raw, merged.value);
 
     const next: Record<string, number> = {
@@ -476,7 +586,7 @@ export const mergeStored = <A, Raw, R, E>(
       ),
       ...Record.fromIterableWith(merged.value.removed, (removedKey) => [
         removedKey,
-        now,
+        now.at,
       ]),
     };
 
@@ -484,8 +594,8 @@ export const mergeStored = <A, Raw, R, E>(
     yield* store.set(removalsKey(at), yield* encodeRemovals(next));
     yield* store.set(at, text);
 
-    return Option.some(merged.value.value);
-  }).pipe(Effect.orElseSucceed(() => Option.none<A>()));
+    return Option.some({ value: merged.value.value, read: now });
+  }).pipe(Effect.orElseSucceed(() => Option.none<Synced<A>>()));
 
 const RecordDocument = Schema.fromJsonString(
   Schema.Record(Schema.String, Schema.Json)

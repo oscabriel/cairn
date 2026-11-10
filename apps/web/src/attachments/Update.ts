@@ -18,6 +18,8 @@ import type { Command, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import type { Services } from "../Command.ts";
+import { laterRead } from "../storage/TabChanges.ts";
+import type { LastRead } from "../storage/TabChanges.ts";
 import {
   DiscardAttachment,
   LoadSaved,
@@ -160,7 +162,9 @@ const save = (model: Model): Saving => {
 
   return {
     model: modifyFields(model, { stored: () => drafts }),
-    commands: [SaveReady({ base: model.stored, drafts })],
+    commands: [
+      SaveReady({ base: model.stored, read: model.storedRead, drafts }),
+    ],
   };
 };
 
@@ -489,10 +493,10 @@ const isIn = (saved: SavedAttachments, item: Item, ref: AttachmentRef) =>
   );
 
 /**
- * The tray once storage holds `stored`: the base of the next save becomes `stored` with what this
- * tab asked for in the saves still on their way since `written`, and the ready items follow every
- * attachment this tab did not add or remove since `written`, so one another tab removed goes and
- * one it added comes in. Items still on their way stay. One this tab took out in a refused save
+ * The tray once storage holds `stored`, read at `read`: the base of the next save becomes `stored`
+ * with what this tab asked for in the saves still on their way since `written`, and the ready items
+ * follow every attachment this tab did not add or remove since `written`, so one another tab
+ * removed (or a clear of storage took) goes and one it added comes in. Items still on their way stay. One this tab took out in a refused save
  * never comes back: a save asked before the refusal answered did not write its removal, so storage
  * may still hold it until a later save does. One this tab holds again (a turn put back into its
  * draft) is no longer a removal.
@@ -500,7 +504,8 @@ const isIn = (saved: SavedAttachments, item: Item, ref: AttachmentRef) =>
 const syncSaved = (
   model: Model,
   written: SavedAttachments,
-  stored: SavedAttachments
+  stored: SavedAttachments,
+  read: Option.Option<LastRead>
 ) => {
   const mine = savedFrom(model.items);
   const refused = savedWithout(model.refusedRemovals, mine);
@@ -518,6 +523,7 @@ const syncSaved = (
     restoreSaved(modifyFields(model, { items: () => kept }), target),
     {
       stored: () => rebaseSaved(written, model.stored, stored),
+      storedRead: (last) => laterRead(read, last),
       refusedRemovals: () => savedWithin(refused, stored),
     }
   );
@@ -641,9 +647,9 @@ export const update = (
     CompletedDiscard: () => ({ model }),
     CompletedRevokePreview: () => ({ model }),
 
-    LoadedSaved: ({ drafts }) => {
+    LoadedSaved: ({ drafts, read }) => {
       // Attachments made ready before storage answered stay, and are saved beside the rest.
-      const restored = syncSaved(model, model.stored, drafts);
+      const restored = syncSaved(model, model.stored, drafts, read);
       const saved = save(restored.model);
 
       return {
@@ -653,9 +659,9 @@ export const update = (
     },
     // Saving merges into what the other tab wrote, and its answer brings those attachments here.
     ChangedStoredAttachments: () => save(model),
-    CompletedSave: ({ base, stored, written }) =>
+    CompletedSave: ({ base, read, stored, written }) =>
       Option.match(stored, {
-        onSome: (saved) => syncSaved(model, written, saved),
+        onSome: (saved) => syncSaved(model, written, saved, read),
         onNone: () => {
           // Nothing was written: the base goes back to `base`, with what this tab asked for in
           // the saves still on their way since, so the next save writes this one's changes again.

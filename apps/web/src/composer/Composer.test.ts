@@ -29,6 +29,7 @@ import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { fetchChunk } from "../page/Chunks.ts";
 import { AppRoute } from "../Route.ts";
+import { REMOVAL_MEMORY_MS } from "../storage/TabChanges.ts";
 import {
   ConfigureThread,
   FocusPopoverSearch,
@@ -747,7 +748,7 @@ describe("composer drafts", () => {
     // The saver writes after the pause; a new page reads it back.
     const saved = await Effect.runPromise(
       Effect.gen(function* () {
-        yield* saveDrafts({}, back.drafts);
+        yield* saveDrafts({}, Option.none(), back.drafts);
 
         return yield* storedDrafts;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
@@ -755,7 +756,7 @@ describe("composer drafts", () => {
 
     const reloaded = update(
       inform(initial, contextFor(ComposerTarget.Thread({ threadId }))).model,
-      Message.LoadedDrafts({ drafts: saved, tell: false })
+      Message.LoadedDrafts({ drafts: saved, tell: false, read: Option.none() })
     ).model;
 
     assert.strictEqual(activeDraft(reloaded).text, "half a thought");
@@ -788,6 +789,7 @@ describe("composer drafts", () => {
           stored: Option.some({
             [`thread:${threadId}`]: { ...emptyDraft, text: "ab" },
           }),
+          read: Option.none(),
         })
       ),
       Story.model((model: Model) => {
@@ -831,8 +833,10 @@ const runSaves = (result: UpdateReturn) =>
 
 /** A tab on `target` whose drafts were read from an empty store. */
 const freshTab = (target: ComposerTarget): Model =>
-  update(composerOn(target), Message.LoadedDrafts({ drafts: {}, tell: false }))
-    .model;
+  update(
+    composerOn(target),
+    Message.LoadedDrafts({ drafts: {}, tell: false, read: Option.none() })
+  ).model;
 
 /** Types `value` into `tab`'s open draft, lets the saver's pause run out, and takes its answer. */
 const typeAndSave = (tab: Model, value: string) =>
@@ -950,18 +954,90 @@ describe("drafts in two tabs", () => {
         );
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
+
+  it.effect(
+    "drop what they held once site data was cleared under them, instead of writing it back",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        const tab = yield* typeAndSave(
+          freshTab(ComposerTarget.Thread({ threadId })),
+          "hello"
+        );
+
+        // Another tab clears the site's data; the browser tells this one with a `storage` event.
+        yield* store.clear;
+
+        const heard = yield* hear(tab);
+
+        assert.deepStrictEqual(
+          {
+            open: activeDraft(heard).text,
+            stored: Object.keys(yield* storedDrafts),
+          },
+          { open: "", stored: [] }
+        );
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "never write back a draft another tab removed while they slept longer than removals are kept",
+    () =>
+      Effect.gen(function* () {
+        const xKey = `thread:${threadId}`;
+        const yKey = `thread:${otherThreadId}`;
+
+        const tabA = yield* typeAndSave(
+          freshTab(ComposerTarget.Thread({ threadId })),
+          "hello"
+        );
+
+        // Tab B reads tab A's draft, then sleeps.
+        const tabB = yield* hear(
+          freshTab(ComposerTarget.Thread({ threadId: otherThreadId }))
+        );
+
+        // Tab A empties its draft (sent, say), and the saver writes it.
+        yield* typeAndSave(tabA, "");
+
+        // Tab B wakes a day and an hour later, and the user types in its own draft.
+        yield* TestClock.adjust(
+          Duration.millis(REMOVAL_MEMORY_MS + 60 * 60 * 1000)
+        );
+
+        const woke = yield* typeAndSave(tabB, "another");
+
+        assert.deepStrictEqual(
+          {
+            held: tabB.drafts[xKey]?.text,
+            woke: woke.drafts[xKey]?.text,
+            stored: Object.keys(yield* storedDrafts),
+          },
+          { held: "hello", woke: undefined, stored: [yKey] }
+        );
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
 });
 
 /** `model` after both stores answered with what they hold now, drafts first or tray first. */
 const reload = (model: Model, traysFirst: boolean) =>
   Effect.gen(function* () {
+    const read = yield* readDrafts;
+
     const drafts = Message.LoadedDrafts({
-      drafts: yield* storedDrafts,
+      drafts: read.value,
       tell: false,
+      read: read.read,
     });
 
+    const saved = yield* loadSaved;
+
     const tray = Message.GotAttachmentsMessage({
-      message: AttachmentsMessage.LoadedSaved({ drafts: yield* loadSaved }),
+      message: AttachmentsMessage.LoadedSaved({
+        drafts: saved.value,
+        read: saved.read,
+      }),
     });
 
     const [first, second] = traysFirst ? [tray, drafts] : [drafts, tray];
@@ -988,11 +1064,10 @@ describe("drafts after a reload", () => {
     "drop an attachment the brain has swept, so an empty composer cannot send",
     () =>
       Effect.gen(function* () {
-        yield* saveSaved({}, { [key]: [pdfRef] });
-        yield* saveDrafts(
-          {},
-          { [key]: { ...emptyDraft, attachments: [pdfRef.id] } }
-        );
+        yield* saveSaved({}, Option.none(), { [key]: [pdfRef] });
+        yield* saveDrafts({}, Option.none(), {
+          [key]: { ...emptyDraft, attachments: [pdfRef.id] },
+        });
         yield* TestClock.adjust(Duration.millis(RESTORE_WINDOW_MS));
 
         for (const traysFirst of [false, true]) {
@@ -1021,14 +1096,16 @@ describe("drafts after a reload", () => {
       Effect.gen(function* () {
         const old = { ...emptyDraft, text: "old", attachments: [pdfRef.id] };
 
-        yield* saveSaved({}, { [key]: [pdfRef] });
-        yield* saveDrafts({}, { [key]: old });
+        yield* saveSaved({}, Option.none(), { [key]: [pdfRef] });
+        yield* saveDrafts({}, Option.none(), { [key]: old });
         yield* TestClock.adjust(Duration.millis(RESTORE_WINDOW_MS));
 
         const reloaded = yield* reload(opened, false);
 
         // Another tab rewrites the draft after this page read it.
-        yield* saveDrafts({ [key]: old }, { [key]: { ...old, text: "newer" } });
+        yield* saveDrafts({ [key]: old }, Option.none(), {
+          [key]: { ...old, text: "newer" },
+        });
         yield* runSaves(update(reloaded, Message.HidPage()));
 
         assert.strictEqual((yield* storedDrafts)[key]?.text, "newer");
@@ -1045,8 +1122,8 @@ describe("drafts after a reload", () => {
 
         const saved = { [key]: [pdfRef] };
 
-        yield* saveDrafts({}, drafts);
-        yield* saveSaved({}, saved);
+        yield* saveDrafts({}, Option.none(), drafts);
+        yield* saveSaved({}, Option.none(), saved);
 
         const typed: Model = {
           ...onThread,
@@ -1214,6 +1291,7 @@ describe("composer sends", () => {
           version: 3,
           written: {},
           stored: Option.some({}),
+          read: Option.none(),
         })
       )
     );

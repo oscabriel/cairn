@@ -22,6 +22,7 @@ import { failureMessageOrTag } from "../connection/Failure.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { workspaceStrategy, EnvMode } from "../hero/ContextStrip.ts";
 import { draftRouter, threadRouter } from "../Route.ts";
+import { LastRead } from "../storage/TabChanges.ts";
 import {
   loadSettings,
   readDrafts,
@@ -69,22 +70,31 @@ export const DetectPlatform = Command.define("DetectPlatform", {
 /** Reads the drafts saved on this device. */
 export const LoadDrafts = Command.define("LoadDrafts", {
   messages: [Message.LoadedDrafts],
-  execute: Effect.map(readDrafts, ({ tell, value }) =>
-    Message.LoadedDrafts({ drafts: value, tell })
+  execute: Effect.map(readDrafts, ({ read, tell, value }) =>
+    Message.LoadedDrafts({ drafts: value, tell, read })
   ),
 });
 
-/** Writes the drafts this tab changed since `base`, the drafts as it last read or wrote them. */
+/**
+ * Writes the drafts this tab changed since `base`, the drafts as it last read or wrote them (it
+ * last read storage at `read`).
+ */
 export const SaveDrafts = Command.define("SaveDrafts", {
   args: {
     version: Schema.Int,
     base: Schema.Record(Schema.String, Draft),
+    read: Schema.Option(LastRead),
     drafts: Schema.Record(Schema.String, Draft),
   },
   messages: [Message.CompletedSaveDrafts],
-  execute: ({ base, drafts, version }) =>
-    Effect.map(saveDrafts(base, drafts), (stored) =>
-      Message.CompletedSaveDrafts({ version, written: drafts, stored })
+  execute: ({ base, drafts, read, version }) =>
+    Effect.map(saveDrafts(base, read, drafts), (synced) =>
+      Message.CompletedSaveDrafts({
+        version,
+        written: drafts,
+        stored: Option.map(synced, ({ value }) => value),
+        read: Option.map(synced, (answer) => answer.read),
+      })
     ),
 });
 

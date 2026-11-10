@@ -36,6 +36,7 @@ export const connectingModel: Model = {
   shell: Option.none(),
   outbox: [],
   outboxStored: [],
+  outboxRead: Option.none(),
   outboxInFlight: [],
   outboxAttempt: {},
   outboxResend: [],

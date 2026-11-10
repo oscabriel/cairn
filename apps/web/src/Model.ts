@@ -1,7 +1,6 @@
 // The root Model: the route, the connection, the shell, the outbox, and one child Model per page.
 // Page state lives here under its own key, so leaving a page and coming back keeps it.
 
-import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { Hello } from "@cairn/protocol/Rpc";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { Schema } from "effect";
@@ -19,16 +18,16 @@ import { Model as SettingsModel } from "./settings/Model.ts";
 import { Model as HoldModel } from "./shell/Hold.ts";
 import { Model as NextShellModel } from "./shell/Model.ts";
 import { BootData } from "./shell/ShellStore.ts";
+import { LastRead } from "./storage/TabChanges.ts";
 import { QueuedSend } from "./timeline/Model.ts";
 
 /**
  * A turn handed to the outbox, kept until the brain has it so a refusal can put it back in the
- * composer: a send until it is acknowledged, a launch until its thread starts or fails.
+ * composer: a send until it is acknowledged, a launch until its thread starts or fails. The item
+ * carries the refs of its attachments (`outboxAttachments`).
  */
 export const SentTurn = Schema.Struct({
   item: OutboxItem,
-  /** The refs of its attachments; the turn itself carries only their ids. */
-  attachments: Schema.Array(AttachmentRef),
   /** The brain acknowledged it; a launch then waits for its shell row to leave `preparing`. */
   acknowledged: Schema.Boolean,
   /** Sent from the scratch overlay, so a refusal puts its words back there, not in the composer. */
@@ -65,6 +64,8 @@ export const Model = Schema.Struct({
   outbox: Schema.Array(OutboxItem),
   /** The outbox as this tab last read or wrote it in storage; a save writes what changed since. */
   outboxStored: Schema.Array(OutboxItem),
+  /** When this tab last read the outbox in storage; none when storage refused. */
+  outboxRead: Schema.Option(LastRead),
   /** The keys of the outbox items sent on the current epoch and not yet answered, one per lane. */
   outboxInFlight: Schema.Array(Schema.String),
   /** Retryable failures in a row, by the key of the lane head they befell; its resend waits by them. */
@@ -122,6 +123,8 @@ export type Model = typeof Model.Type;
 export const Flags = Schema.Struct({
   boot: Schema.Option(BootData),
   outbox: Schema.Array(OutboxItem),
+  /** When the outbox was read; none when storage refused. */
+  outboxRead: Schema.Option(LastRead),
   /** Storage also holds outbox items this build cannot decode, kept as they are, not told about yet. */
   outboxUnread: Schema.Boolean,
 });

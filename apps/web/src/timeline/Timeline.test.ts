@@ -565,7 +565,12 @@ describe("a send waiting in the outbox", () => {
     );
 
     const reloaded = init(
-      { boot: Option.none(), outbox: [queued], outboxUnread: false },
+      {
+        boot: Option.none(),
+        outbox: [queued],
+        outboxRead: Option.none(),
+        outboxUnread: false,
+      },
       url
     ).model;
 
@@ -617,6 +622,7 @@ describe("a send waiting in the outbox", () => {
       RootMessage.CompletedSaveOutbox({
         written: [],
         stored: Option.some([queued]),
+        read: Option.none(),
       })
     ).model;
 

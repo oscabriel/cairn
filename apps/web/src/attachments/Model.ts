@@ -4,9 +4,11 @@
 // ready item holds the brain's `AttachmentRef`, which is all a draft keeps across a reload.
 
 import { AttachmentRef } from "@cairn/protocol/Attachments";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import { File } from "foldkit/file";
 import { defineTaggedUnion } from "foldkit/schema";
+
+import { LastRead } from "../storage/TabChanges.ts";
 
 /** Where one attachment is on its way to the brain. */
 export const AttachmentStatus = defineTaggedUnion({
@@ -75,6 +77,8 @@ export const Model = Schema.Struct({
    * save answers); a save writes what changed since.
    */
   stored: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
+  /** When this tab last read the saved attachments in storage; none before the first read answers. */
+  storedRead: Schema.Option(LastRead),
   /**
    * The saved attachments this tab took out (sent, or removed with their x) in a save storage
    * refused, while storage may still hold them: an answer to a save asked before the refusal
@@ -93,5 +97,6 @@ export const initial: Model = {
   waitingSends: {},
   notices: {},
   stored: {},
+  storedRead: Option.none(),
   refusedRemovals: {},
 };

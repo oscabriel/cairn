@@ -87,11 +87,16 @@ export const ThreadActivity = Schema.Literals([
 
 export type ThreadActivity = typeof ThreadActivity.Type;
 
-/** How the last failed run failed, so the sidebar can say "usage limit" instead of an error. */
+/**
+ * How the last failed run failed, so the sidebar can say "usage limit" instead of an error.
+ * `brain_restart`: the brain restarted while the model answered and no retry was left (pi-durable's
+ * `interrupted`), or crashes cut the run off too often (`restart_limit`).
+ */
 export const RunFailureClass = Schema.Literals([
   "usage_limit",
   "provider_error",
   "transport_error",
+  "brain_restart",
   "unknown",
 ]);
 

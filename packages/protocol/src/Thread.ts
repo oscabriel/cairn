@@ -201,7 +201,11 @@ export const ThreadSnapshotItem = Schema.TaggedStruct("Snapshot", {
   /** Per subscription, for tests and diagnostics; it starts at 0. */
   seq: NonNegativeInt,
   view: ConversationView,
-  /** How many older active entries the view leaves out; `thread.history` pages them in. */
+  /**
+   * How many entries the brain's first read of the thread held before the view's first entry.
+   * That read is itself a window over the history, so this is not the thread's length: 0 with
+   * `hasMoreHistory` true is normal. `thread.history` pages in everything before the view.
+   */
   entriesOffset: NonNegativeInt,
   hasMoreHistory: Schema.Boolean,
 });

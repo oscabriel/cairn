@@ -94,6 +94,7 @@ import {
   START_TASK,
   SUBAGENT_WAIT_TASKS,
 } from "../../../apps/server/src/subagents/SubagentTasks.ts";
+import { SUBAGENT_STATUS_TOOL } from "../../../apps/server/src/subagents/SubagentTools.ts";
 import {
   cairnWorktrees,
   workspacesAt,
@@ -457,7 +458,10 @@ const program = Effect.gen(function* () {
   // The production boot repairs that touch approvals, crash-looped tasks and child workspaces, in
   // `BootRepairs.ts`'s order, then the Harness resumes.
   yield* cancelAbandonedApprovalsAtBoot;
-  yield* endCrashLoopedTasks(SUBAGENT_WAIT_TASKS);
+  yield* endCrashLoopedTasks({
+    kinds: SUBAGENT_WAIT_TASKS,
+    tools: new Set([SUBAGENT_STATUS_TOOL]),
+  });
   yield* repairChildWorkspacesAtBoot;
   yield* brainService.resume;
 

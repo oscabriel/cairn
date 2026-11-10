@@ -98,6 +98,7 @@ import {
 import { ThreadRows } from "../../../apps/server/src/shell/ThreadRows.ts";
 import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
 import { SUBAGENT_WAIT_TASKS } from "../../../apps/server/src/subagents/SubagentTasks.ts";
+import { SUBAGENT_STATUS_TOOL } from "../../../apps/server/src/subagents/SubagentTools.ts";
 import { BudgetBook } from "../../../apps/server/src/usage/BudgetBook.ts";
 import { BudgetGuard } from "../../../apps/server/src/usage/BudgetGuard.ts";
 import { Budgets } from "../../../apps/server/src/usage/Budgets.ts";
@@ -533,7 +534,10 @@ const program = Effect.gen(function* () {
   }
 
   // After the budget repair, as in the brain's boot.
-  yield* endCrashLoopedTasks(SUBAGENT_WAIT_TASKS).pipe(Effect.orDie);
+  yield* endCrashLoopedTasks({
+    kinds: SUBAGENT_WAIT_TASKS,
+    tools: new Set([SUBAGENT_STATUS_TOOL]),
+  }).pipe(Effect.orDie);
 
   // Declared once, in the first life; later lives read it from the documents through the guard's
   // boot repair, as the brain does, so a brain without the repair has an empty book after a restart.

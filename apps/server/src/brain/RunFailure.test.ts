@@ -170,6 +170,37 @@ describe("run failure classes", () => {
     );
   });
 
+  it("tells a run a brain restart ended from a provider refusal", () => {
+    // pi-durable 1.5 charges a request a crash cut off as a failed attempt, and with no retry left
+    // ends the run with reason `interrupted`; a generation cut off too often ends `restart_limit`.
+    for (const [message, reason] of [
+      [
+        "The host stopped while the model was answering, on attempt 1",
+        "interrupted",
+      ],
+      [
+        "The host stopped while the deferred answer was fetched, on attempt 4",
+        "interrupted",
+      ],
+      [
+        "The generation was interrupted 5 times in a row in its request phase",
+        "restart_limit",
+      ],
+    ] as const) {
+      const failure = classify(message, reason);
+
+      assert.strictEqual(failure.class, "brain_restart", message);
+      assert.isTrue(failure.retryable, message);
+      assert.isTrue(Option.isNone(failure.plan), message);
+    }
+
+    // The reason decides, not the words: a provider error that speaks of a host stays one.
+    assert.strictEqual(
+      classify("The host stopped answering", "model_error").class,
+      "provider_error"
+    );
+  });
+
   it("keeps a transient 429 a retryable provider error, not a usage limit", () => {
     const failure = classify("429 Too Many Requests", "model_error");
 

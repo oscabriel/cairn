@@ -129,6 +129,8 @@ export const FAILURE_TEXT: Readonly<Record<RunFailureClass, string>> = {
     "The model provider refused the request. Send again to retry.",
   transport_error:
     "The model provider could not be reached. Send again to retry.",
+  brain_restart:
+    "The brain restarted while the model was answering. Send again to retry.",
   unknown: "The run failed. Send again to retry.",
 };
 

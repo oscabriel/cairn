@@ -5,9 +5,10 @@
 // not fit the array they address. A refused op leaves the view untouched and asks the caller to
 // resubscribe, which always brings a fresh snapshot.
 //
-// The view may be a window: `entriesOffset` older active entries are left out, and op indices count
-// from the window's start. Pages from `thread.history` are kept apart, in `older`, so they never
-// shift the indices ops address.
+// The view may be a window: older entries are left out (`hasMoreHistory`), and op indices count
+// from the window's start. `entriesOffset` counts only the left-out entries the brain's first read
+// held, not the thread's length (ADR 0020's note). Pages from `thread.history` are kept apart, in
+// `older`, so they never shift the indices ops address.
 
 import type {
   Entry,
@@ -43,7 +44,7 @@ export interface ThreadViewState {
   /** The `seq` of the last item applied. */
   readonly seq: number;
   readonly view: ConversationView;
-  /** Active entries before `view.entries` that the window leaves out. */
+  /** Entries of the brain's first read before `view.entries`; not the thread's length. */
   readonly entriesOffset: number;
   readonly hasMoreHistory: boolean;
   /** Entries paged in by `thread.history`, oldest first, ending right before the window. */

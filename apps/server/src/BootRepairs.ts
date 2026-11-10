@@ -4,8 +4,10 @@
 // the ones made before children were titled; reconcile spend, then load the budget book and halt
 // the scopes past their line (4E); cancel approval records a stop left pending (the abort mark
 // committed, the cancel not); expire records nothing waits on that lapsed (criteria, a budget
-// raise); end the tasks crashes cut off too often (`CrashLimit.ts`, ADR 0046), keeping tool calls
-// (approval waits among them) and the subagent and workflow waits; remove child workspaces whose spawn never landed;
+// raise); end the tasks crashes cut off too often (`CrashLimit.ts`, ADR 0046), keeping the waits:
+// a tool call that holds a record (approval waits among them), a workflow's script call,
+// `subagent_status`, and the subagent and workflow wait tasks; remove child workspaces whose spawn
+// never landed;
 // remove scratch folders whose thread is gone (a thread's row is committed before its folder is
 // claimed); resume interrupted launches from `thread_launches`; repair checkpoint refs; reconcile
 // portal rows, units and porches, then start the portal sweep; then start the durable event
@@ -29,6 +31,7 @@ import {
 } from "./brain/CairnDocs.ts";
 import { repairChildWorkspacesAtBoot } from "./brain/ChildWorkspaceRepair.ts";
 import { endCrashLoopedTasks } from "./brain/CrashLimit.ts";
+import type { KeptWaits } from "./brain/CrashLimit.ts";
 import { startEventReactors } from "./brain/EventReactors.ts";
 import type { EventReactors } from "./brain/EventReactors.ts";
 import type { HarnessSeam } from "./brain/HarnessSeam.ts";
@@ -47,6 +50,7 @@ import {
   retitleSubagentRows,
 } from "./subagents/SubagentRows.ts";
 import { SUBAGENT_WAIT_TASKS } from "./subagents/SubagentTasks.ts";
+import { SUBAGENT_STATUS_TOOL } from "./subagents/SubagentTools.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
 import type { ThreadTitles } from "./threads/ThreadTitles.ts";
 import { budgetBootRepair } from "./usage/BudgetGuard.ts";
@@ -86,16 +90,17 @@ export const bootRepair = <E, R>(
 });
 
 /**
- * The task kinds the crash accounting keeps however often crashes cut them off: they wait on other
- * work, a clock or a person and start nothing outside, or (a subagent's start) must make their
- * child once (ADR 0030, ADR 0046). The workflow watcher waits on a node's or a script call's task,
- * and the budget stopper looks until no node runs.
+ * The waits the crash accounting keeps however often crashes cut them off (ADR 0046). Task kinds:
+ * they wait on other work, a clock or a person and start nothing outside, or (a subagent's start)
+ * must make their child once (ADR 0030); the workflow watcher waits on a node's or a script call's
+ * task, and the budget stopper looks until no node runs. Tools: `subagent_status` waits on its
+ * children with no record of its own. A tool call that holds a record, and a workflow's script
+ * call, are kept by what they hold (`CrashLimit.ts`).
  */
-export const KEPT_WAIT_TASKS: ReadonlySet<string> = new Set([
-  ...SUBAGENT_WAIT_TASKS,
-  WATCH_TASK,
-  STOPPER_TASK,
-]);
+export const KEPT_WAITS: KeptWaits = {
+  kinds: new Set([...SUBAGENT_WAIT_TASKS, WATCH_TASK, STOPPER_TASK]),
+  tools: new Set([SUBAGENT_STATUS_TOOL]),
+};
 
 /** Every boot repair, in order. */
 export const bootRepairs: ReadonlyArray<
@@ -125,7 +130,7 @@ export const bootRepairs: ReadonlyArray<
   bootRepair("budget boot repair", budgetBootRepair),
   bootRepair("cancel abandoned approvals", cancelAbandonedApprovalsAtBoot),
   bootRepair("expire lapsed approvals", expireLapsedApprovalsAtBoot),
-  bootRepair("crash limit", endCrashLoopedTasks(KEPT_WAIT_TASKS)),
+  bootRepair("crash limit", endCrashLoopedTasks(KEPT_WAITS)),
   bootRepair("child workspace repair", repairChildWorkspacesAtBoot),
   bootRepair("scratch folder repair", repairScratchFoldersAtBoot),
   bootRepair(

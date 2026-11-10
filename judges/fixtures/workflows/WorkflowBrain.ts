@@ -28,7 +28,8 @@
 //   judge's broken control: every node fits, so no card is raised.
 // - `--crash-limit` runs the brain's crash accounting (`CrashLimit.ts`, ADR 0046) before the
 //   Harness resumes: it counts the tasks crashes cut off the limit's number of times in a row and
-//   aborts the ones that are neither a tool call nor a workflow wait; it prints `cut-off <n>` and
+//   aborts the ones that are not a wait (a tool call that holds a record, the script call, a
+//   workflow wait task); it prints `cut-off <n>` and
 //   `ended <n>`. `--default-restart-limit` opens the Harness with pi-durable's own restart limit
 //   instead of none, the crash-loop case's broken control. A life with `--crash-limit` ends with
 //   `workflow stalled` when the script call has ended and its row still runs 5 s later.
@@ -57,10 +58,7 @@ import {
   answerApproval,
   Approvals,
 } from "../../../apps/server/src/brain/CairnDocs.ts";
-import {
-  CRASH_LIMIT,
-  crashLooped,
-} from "../../../apps/server/src/brain/CrashLimit.ts";
+import { endCrashLoopedIn } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { taskOf } from "../../../apps/server/src/subagents/Delivery.ts";
 import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
 import { PRELUDE_MARK } from "../../../apps/server/src/workflows/Prelude.ts";
@@ -203,24 +201,17 @@ const crashes = { cutOff: 0, ended: 0 };
 /**
  * The brain's crash accounting (`CrashLimit.ts`, ADR 0046) on the kit's Harness, before it resumes:
  * every live task cut off the limit's number of times in a row is counted, and the ones that are
- * neither a tool call nor a workflow wait are aborted.
+ * not a wait (a tool call that holds a record, the script call, a workflow wait task) are aborted.
  */
 const crashLimit = async (brain: KitBrain) => {
-  const { tasks } = await brain.harness.inspect(context);
-  const records = tasks.map((task) => task.record);
+  const count = await endCrashLoopedIn(
+    brain.harness,
+    { kinds: WORKFLOW_WAIT_TASKS, tools: new Set() },
+    context
+  );
 
-  crashes.cutOff = records.filter(
-    (record) => (record.restarts ?? 0) >= CRASH_LIMIT
-  ).length;
-
-  const looped = crashLooped(records, WORKFLOW_WAIT_TASKS);
-
-  for (const record of looped) {
-    // oxlint-disable-next-line no-await-in-loop
-    await brain.harness.abortTask(record.id, context);
-  }
-
-  crashes.ended = looped.length;
+  crashes.cutOff = count.cutOff;
+  crashes.ended = count.ended.length;
   say(`cut-off ${String(crashes.cutOff)}`);
   say(`ended ${String(crashes.ended)}`);
 };

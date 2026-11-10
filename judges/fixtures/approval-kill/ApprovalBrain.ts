@@ -34,7 +34,7 @@ import { DEFAULT_RESTART_LIMIT, LiveDoc } from "@earendil-works/pi-durable";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Duration, Effect, Layer, Option } from "effect";
 
-import { KEPT_WAIT_TASKS } from "../../../apps/server/src/BootRepairs.ts";
+import { KEPT_WAITS } from "../../../apps/server/src/BootRepairs.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import {
@@ -239,7 +239,7 @@ const program = Effect.gen(function* () {
   // order, then the Harness resumes.
   yield* cancelAbandonedApprovalsAtBoot;
   yield* expireLapsedApprovalsAtBoot;
-  yield* endCrashLoopedTasks(KEPT_WAIT_TASKS);
+  yield* endCrashLoopedTasks(KEPT_WAITS);
   yield* brainService.resume;
 
   const { faux } = yield* FauxModels;

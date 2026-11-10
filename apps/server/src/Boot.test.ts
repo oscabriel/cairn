@@ -445,7 +445,9 @@ const bootBrain = (dataDir: string) =>
     );
 
     const report = yield* runBoot({
-      repairs: endCrashLoopedTasks(new Set()).pipe(Effect.orDie),
+      repairs: endCrashLoopedTasks({ kinds: new Set(), tools: new Set() }).pipe(
+        Effect.orDie
+      ),
       resume: HarnessBoot.use((boot) => boot.resume),
     }).pipe(Effect.provideContext(context));
 

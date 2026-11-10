@@ -6,15 +6,20 @@
 //   and 1 MiB of projected JSON, and at least one entry. When the cut falls inside a turn and the
 //   turn's own user message is in the newer half of the window, the window starts at that message
 //   instead, so the top of the timeline is a whole turn.
-// - `entriesOffset` is the number of active entries before the window. It is fixed for the life of
-//   one window: appends grow the window, they never slide it.
+// - `entriesOffset` is the number of entries of the view it is cut from that lie before the window.
+//   On pi-durable 1.5 that view is itself a window over the history (the stream asks for one that
+//   starts with the newest `maxEntries` and never drops any, `STREAM_WINDOW` in
+//   `PiDurableHarness.ts`), so `entriesOffset` counts only inside the watch's first value: 0 with
+//   `hasMoreHistory` true is normal, and it says nothing of the thread's length (ADR 0020's note).
+//   It is fixed for the life of one window: appends grow the window, they never slide it.
 // - Ops: each revision's window (the entries from `entriesOffset` on, with the whole documents) is
 //   diffed against the previous one with chord's `diffRevisions`, so op indices count from the
 //   window's start by construction; no op is rewritten and none can reach below the window.
 // - A fresh in-stream snapshot, with a new window, whenever the entries before the window are not
-//   exactly the ones the window was cut after (a compaction or a reset moved the head, the view was
-//   replaced by another conversation, the thread got shorter). Entry ids are store-wide and the
-//   active entries are one path, so comparing ids proves the prefix unchanged.
+//   exactly the ones the window was cut after (the view was replaced by another conversation, or
+//   the thread got shorter). On 1.5 a compaction no longer moves them: its summary is appended
+//   where it was written. Entry ids are store-wide and the view's entries are one path, so
+//   comparing ids proves the prefix unchanged.
 //
 // Policy numbers from t3code's apps/server/src/orchestration-v2/threadHistoryPaging.ts
 // (`THREAD_HISTORY_PAGE_POLICY`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: the item

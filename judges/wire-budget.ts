@@ -448,8 +448,13 @@ const progress = (state: ThreadViewState) => {
     inbox.items.length > 0;
 
   return {
-    /** Entry ids only grow, so the newest id survives a compaction that shortens the view. */
+    /** Entry ids only grow, so the newest id says the turn moved on. */
     newest: last?.id ?? 0,
+    /**
+     * Entries the seeding subscription has seen: it opened with the thread, and on pi-durable 1.5
+     * the stream's window never drops an entry, so its first value plus every append is the thread
+     * (`entriesOffset` counts only the entries the thread window left out of that first value).
+     */
     active: state.entriesOffset + entries.length,
     settled:
       !queued &&
@@ -838,7 +843,6 @@ const main = Effect.gen(function* () {
   const seedMs = (yield* Clock.currentTimeMillis) - seedStarted;
   const threadId = ThreadId.make(seeded.threadId);
   const { rounds, snapshot } = yield* measure(port, threadId);
-  const active = snapshot.entriesOffset + snapshot.view.entries.length;
 
   const whole = yield* Effect.scoped(
     Effect.flatMap(connect(port), (client) =>
@@ -852,6 +856,11 @@ const main = Effect.gen(function* () {
   );
 
   const ids = whole.entries.map((entry) => entry.id);
+
+  // The thread's length, from the window and every page behind it. On pi-durable 1.5 a cold
+  // snapshot's `entriesOffset` counts only inside the watch's first value (the newest 75 entries;
+  // ADR 0020's note), so it cannot say how long the thread is.
+  const active = ids.length;
 
   const ordered = ids.every(
     (id, index) => index === 0 || id > (ids[index - 1] ?? 0)
@@ -880,9 +889,11 @@ const main = Effect.gen(function* () {
     images:
       images.length >= TARGET_IMAGES && images.every((result) => result.ok),
     firstFrame: percentile(tailnet, 0.95) < FIRST_FRAME_BUDGET_MS,
-    // History is fork-aware: it may also return entries a compaction took out of the view.
-    historyComplete: ordered && whole.exhausted && ids.length >= active,
-    hasMoreHistory: snapshot.entriesOffset === 0 || snapshot.hasMoreHistory,
+    // Oldest first, each entry once, back to the thread's first entry.
+    historyComplete: ordered && whole.exhausted,
+    // A window that leaves entries out says there is more.
+    hasMoreHistory:
+      snapshot.view.entries.length === active || snapshot.hasMoreHistory,
   };
 
   const passed = Object.values(checks).every(Boolean);

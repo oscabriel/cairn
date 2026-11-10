@@ -232,6 +232,10 @@ const CASES = {
       word: word("Failed"),
     }
   ),
+  "RunFailureClass brain_restart": row(failed(Option.some("brain_restart")), {
+    category: "failed",
+    word: word("Failed"),
+  }),
   "RunFailureClass unknown": row(failed(Option.some("unknown")), {
     category: "failed",
     word: word("Failed"),

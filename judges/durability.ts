@@ -17,9 +17,10 @@
 // send-in-flight (the kill lands before `thread.send` answers; the client resends the same request
 // id), mid-upload (the kill lands while a 20 MB upload streams to its `.part` file; the client
 // retries with a new signed URL and sends the turn), during-launch (the kill lands inside
-// `thread.launch`; the client resends the same command id), kill-six (six kills while `slow` runs:
-// crashes end no tool call (ADR 0046), so the turn finishes with nothing retried), sigterm-six (six
-// clean restarts while `slow` runs count no crash).
+// `thread.launch`; the client resends the same command id), kill-six (kills while `slow` runs: the
+// boot after the fifth ends `slow`, a call that waits on nothing, with an aborted result, and the
+// turn goes on to `mark` with nothing retried; ADR 0046), sigterm-six (six clean restarts while
+// `slow` runs count no crash).
 //
 // Gated windows (ADR 0031): a thread in Supervised calls the real `bash`, which asks first, so
 // each kill lands somewhere in the gated wrapper. gated-bash-wait (while `bash` waits for its
@@ -122,6 +123,7 @@ import {
 import type { ChildProcessSpawner } from "effect/process";
 import type { RpcClient, RpcClientError, RpcGroup } from "effect/rpc";
 
+import { CRASH_LIMIT } from "../apps/server/src/brain/CrashLimit.ts";
 import { projectIdFor } from "../apps/server/src/shell/ShellCommands.ts";
 import * as Page from "./fixtures/durability/Page.ts";
 import * as Proxy from "./fixtures/durability/Proxy.ts";
@@ -247,6 +249,9 @@ const BRIDGE_QUIET_TIMEOUT = Duration.seconds(300);
 const UP_TIMEOUT = Duration.seconds(60);
 
 const MAY_HAVE_RUN = "may have run";
+
+/** What `slow` answers once the boot's crash accounting ended it (pi-durable's abort result). */
+const SLOW_ABORTED = "Tool slow was aborted";
 
 const USER_KINDS: ReadonlySet<string> = new Set(["pi.user", "cairn.user"]);
 
@@ -2096,7 +2101,8 @@ const plans: Readonly<Record<WindowName, Plan>> = {
       Effect.gen(function* () {
         let committed: ReadonlyArray<Entry> = [];
 
-        for (let kill = 1; kill <= 6; kill += 1) {
+        // `slow` waits on nothing, so the boot's crash accounting ends it at the limit (ADR 0046).
+        for (let kill = 1; kill <= CRASH_LIMIT; kill += 1) {
           yield* until(
             "slow to run",
             Effect.map(viewOf(context.follower), (view) =>
@@ -2115,11 +2121,36 @@ const plans: Readonly<Record<WindowName, Plan>> = {
           yield* measureRestart(context, restart);
         }
 
-        // Six crashes in a row without new state: past pi-durable's default limit, and the turn
-        // still finishes, with nobody retrying anything (ADR 0046).
-        context.measures.notes.push("six kills, nothing retried");
+        // The boot after the last crash ended `slow` with an aborted result, and the turn goes on.
+        yield* until(
+          "slow ended by the crash limit",
+          Effect.map(viewOf(context.follower), (view) =>
+            resultTexts(entriesOf(view)).some((text) =>
+              text.includes(SLOW_ABORTED)
+            )
+          ),
+          "60 seconds"
+        );
+
+        context.measures.notes.push(
+          `${CRASH_LIMIT} kills, slow ended at the limit, nothing retried`
+        );
 
         return { committed };
+      }),
+    verdict: (context, entries) =>
+      Effect.gen(function* () {
+        const ended = resultTexts(entries).some((text) =>
+          text.includes(SLOW_ABORTED)
+        );
+
+        context.measures.checks.slowEndedAtLimit = ended;
+
+        if (!ended) {
+          return yield* fail("slow was not ended at the crash limit");
+        }
+
+        return yield* Effect.void;
       }),
   },
   "stubborn-control": {

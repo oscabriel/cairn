@@ -555,7 +555,9 @@ const program = Effect.gen(function* () {
   }
 
   if (values["crash-limit"]) {
-    yield* endCrashLoopedTasks(new Set()).pipe(Effect.orDie);
+    yield* endCrashLoopedTasks({ kinds: new Set(), tools: new Set() }).pipe(
+      Effect.orDie
+    );
   }
 
   yield* brain.resume;

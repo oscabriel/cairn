@@ -12,7 +12,8 @@
 // Checks on the last life: the approval was pending after every restart; it is accepted, by the
 // user; the command ran exactly once (`effects.log` has one line); the call's result is not an
 // error. Cases (default: both):
-// - real: the brain as it ships (crashes end no tool call, `RestartLimit.ts`); every check passes.
+// - real: the brain as it ships (crashes end no call that holds an approval, `RestartLimit.ts`,
+//   `CrashLimit.ts`); every check passes.
 // - control: the broken control, the brain opened with pi-durable's own restart limit, as a bump
 //   that kept it would. The call ends with a restart-limit error after the fifth crash, so the
 //   approval is no longer answerable or its call never runs, and the case must fail.

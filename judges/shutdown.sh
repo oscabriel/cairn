@@ -7,8 +7,9 @@
 # 1. sigterm-six: six `systemctl --user restart`s while `slow` runs. Each stop logs `closing` then
 #    `closed <ms>` with ms under 5,000, no `shutdown_slow`, systemd's Stopping-to-Stopped time under
 #    5,000 ms, NRestarts unchanged, and `mark` runs once (durability.ts checks the last two).
-# 2. kill-six: six `kill -9`s while `slow` runs; crashes end no tool call (ADR 0046), so the turn
-#    finishes with each effect once and nothing retried (durability.ts).
+# 2. kill-six: `kill -9`s while `slow` runs; the boot after the fifth ends `slow`, a call that waits
+#    on nothing, with an aborted result (ADR 0046), and the turn finishes with each effect once and
+#    nothing retried (durability.ts).
 # 3. Control: `stubborn` ignores its abort signal under TimeoutStopSec=3, so systemd must log the
 #    stop timing out and SIGKILL the brain, and the stop must take at least 3 s. If the control does
 #    not show that, the 5 s check above proves nothing and the judge fails.

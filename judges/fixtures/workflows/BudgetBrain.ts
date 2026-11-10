@@ -1,5 +1,5 @@
 // The judge brain of `judges/workflow-budget.ts` (workflows note judge 4, plan 5B): Cairn's `Brain`
-// over a scratch directory (BrainStore, Parked, the reactor host), never the deployed unit's, with
+// over a scratch directory (BrainStore, the reactor host), never the deployed unit's, with
 // the code mode, workflows and results extensions and the kit's `work` tool, over pi-ai's faux
 // provider answering as the workflow kit's model does (apps/server/src/workflows/WorkflowTestKit.ts).
 // The reactor host runs the workflow budget reactor (`cairn.workflow-budget`) as the production
@@ -56,7 +56,6 @@ import {
   FAUX_MODEL,
   ModelSource,
 } from "../../../apps/server/src/brain/ModelSource.ts";
-import { Parked } from "../../../apps/server/src/brain/Parked.ts";
 import { ResultTool } from "../../../apps/server/src/models/ResultTool.ts";
 import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
 import {
@@ -232,7 +231,6 @@ const JudgeLayer = EventReactors.fromSources(reactorSources).pipe(
       Layer.provide(Arms.layer)
     )
   ),
-  Layer.provide(Parked.layer),
   Layer.provide(Extensions.fromSources(extensionSources)),
   Layer.provideMerge(
     ModelSource.layerFaux({

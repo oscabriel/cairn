@@ -11,12 +11,12 @@ import { OutboxItem } from "./connection/Outbox.ts";
 import { Connection } from "./connection/Reconnect.ts";
 import { Model as RequestCardModel } from "./next/card/Model.ts";
 import { Model as MetersModel } from "./next/meters/Model.ts";
+import { Model as HoldModel } from "./next/shell/Hold.ts";
 import { Model as NextShellModel } from "./next/shell/Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Model as PushModel } from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
 import { Model as SettingsModel } from "./settings/Model.ts";
-import { Model as ParkedModel } from "./shell/Parked.ts";
 import { BootData } from "./shell/ShellStore.ts";
 import { Model as SidebarModel } from "./sidebar/Model.ts";
 
@@ -76,7 +76,7 @@ export const Model = Schema.Struct({
   composer: Composer.Model,
   push: PushModel,
   settings: SettingsModel,
-  parked: ParkedModel,
+  hold: HoldModel,
   /** The `next` views' shell: the rail, the project's list, the scratch overlay (ADR 0040). */
   nextShell: NextShellModel,
   /** The scratch thread's page, for the `next` shell's overlay; no thread while it is hidden. */

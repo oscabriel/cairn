@@ -5,7 +5,7 @@
 // are Cairn's shell rows.
 // Removed: drag, sweep, multi-select, pull request, fork, prewarm, jump hint, stage badge, project
 // sort and Working shelf cases (not ported). Added: the partition into shelves, settled paging,
-// parked rows, the project monogram and leaving an open thread.
+// the project monogram and leaving an open thread.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -94,7 +94,6 @@ const base = ThreadShell.make({
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
 });
 

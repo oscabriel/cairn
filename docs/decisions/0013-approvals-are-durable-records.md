@@ -20,3 +20,5 @@ Permission modes follow t3code's, defaulting to full access, which asks for noth
 Gate S4: an approval pending across a brain restart can still be answered from the phone and runs exactly once. Passed on 2026-10-21; measured in `spikes/4-approvals/NOTES.md`.
 
 On pi-durable 1.4.0 (rerun 2026-10-22), the crash-loop guard parks a task cut off by 5 crashes in a row without a new state, which a waiting approval never commits. So at boot Cairn calls `retryTask()` for each task whose approval is still pending, and the brain closes the Harness on SIGTERM so clean restarts never count.
+
+Amended on 2026-11-09 (ADR 0046): pi-durable 1.5 removed park and `retryTask()`, and ends a task at its restart limit instead. The brain opens its Harness with no restart limit and boot's crash accounting keeps every tool call, so a pending approval's call waits across any number of crashes; `judges/approval-kill.ts` holds the gate at six.

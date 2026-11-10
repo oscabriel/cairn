@@ -93,9 +93,8 @@ export const isRestingChildStatus = (status: ChildStatus): boolean =>
   status === "idle" || isTerminalSubagentState(status);
 
 /**
- * Statuses a stop can end: a run working or held on a request. A `waiting` or `parked` child is
- * held by its own children or tasks, which a child's stop keeps, and a `limited` one has no run, so
- * none of them offers Stop.
+ * Statuses a stop can end: a run working or held on a request. A `waiting` child is held by its
+ * own children, which a child's stop keeps, and a `limited` one has no run, so neither offers Stop.
  */
 const STOPPABLE: ReadonlySet<ChildStatus> = new Set<ChildStatus>([
   "working",

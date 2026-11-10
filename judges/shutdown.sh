@@ -6,10 +6,9 @@
 #
 # 1. sigterm-six: six `systemctl --user restart`s while `slow` runs. Each stop logs `closing` then
 #    `closed <ms>` with ms under 5,000, no `shutdown_slow`, systemd's Stopping-to-Stopped time under
-#    5,000 ms, NRestarts unchanged, nothing parked, and `mark` runs once (durability.ts checks the
-#    last three).
-# 2. kill-six: five `kill -9`s while `slow` runs park its task; `thread.retryTask` completes the
-#    turn with each effect once (durability.ts).
+#    5,000 ms, NRestarts unchanged, and `mark` runs once (durability.ts checks the last two).
+# 2. kill-six: six `kill -9`s while `slow` runs; crashes end no tool call (ADR 0046), so the turn
+#    finishes with each effect once and nothing retried (durability.ts).
 # 3. Control: `stubborn` ignores its abort signal under TimeoutStopSec=3, so systemd must log the
 #    stop timing out and SIGKILL the brain, and the stop must take at least 3 s. If the control does
 #    not show that, the 5 s check above proves nothing and the judge fails.
@@ -19,7 +18,7 @@
 #
 # `--unit` judges the deployed unit instead (plan 5F): production loads no judge tools, so
 # `judges/deployed-unit.ts restarts` makes six restarts during a `bash sleep 20` turn on a cheap
-# real model and checks `closed <ms>` under 5,000, NRestarts unchanged and nothing parked.
+# real model and checks `closed <ms>` under 5,000, NRestarts unchanged and the turn not failed.
 #
 # Prints one line per check and exits 0 when all hold. Uses only `systemctl --user`, `journalctl
 # --user` and node; no sudo, no secrets.
@@ -97,7 +96,7 @@ else
 	fail closing-closed "no events log from the sigterm-six window"
 fi
 
-# --- 2. Five crashes park, retry finishes ------------------------------------------------------
+# --- 2. Six crashes, the turn finishes ---------------------------------------------------------
 line=$(window kill-six)
 dir=$(field "$line" dir)
 kept+=("$dir")

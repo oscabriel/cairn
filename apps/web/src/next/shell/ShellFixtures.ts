@@ -8,7 +8,7 @@ import {
   rowId,
   shellRow,
 } from "@cairn/client-logic/ShellRowTestKit";
-import { ApprovalId, ProjectId, TaskId } from "@cairn/protocol/Ids";
+import { ApprovalId, ProjectId } from "@cairn/protocol/Ids";
 import type {
   ProjectShell,
   ShellSnapshot,
@@ -97,8 +97,9 @@ export const MANAGED: ReadonlyArray<ThreadShell> = [
     lastErrorClass: Option.some("provider_error"),
   }),
   managed(5, "Steps panel projection", 21, {
-    activity: "parked",
-    parkedTaskIds: [TaskId.make(7)],
+    activity: "failed",
+    lastError: Option.some("The model plan's usage limit was reached."),
+    lastErrorClass: Option.some("usage_limit"),
   }),
   managed(6, "Brief: port the fold line tallies", 60, {
     latestRunCompletedAt: Option.some(minutesAgo(50)),

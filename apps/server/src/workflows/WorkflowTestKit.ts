@@ -28,14 +28,14 @@ import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { Envelope, RuntimeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   AssistantMessage,
   Message,
   Context as ModelContext,
 } from "@earendil-works/pi-ai";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -63,11 +63,13 @@ import {
   Result,
   Schema,
 } from "effect";
+import { Type } from "typebox";
 
 import { Approvals, UNDECIDED } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { CodeMode } from "../brain/CodeMode.ts";
 import { messageText } from "../brain/CommitFeed.ts";
+import { errorText } from "../brain/Durable.ts";
 import {
   EVENT_KIND_PREFIX,
   EventsDoc,
@@ -550,7 +552,10 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
   return { models, registry, faux };
 });
 
-/** Opens a Harness over `storage` with `parts`, and its root thread. */
+/**
+ * Opens a Harness over `storage` with `parts`, and its root thread. Crashes end no task, as in the
+ * brain (`RestartLimit.ts`, ADR 0046), unless `restartLimit` says otherwise.
+ */
 export const openKit = async (
   storage: Storage,
   parts: Pick<
@@ -558,16 +563,17 @@ export const openKit = async (
     "models" | "registry"
   >,
   context: ChordContext,
-  report: (text: string) => void = Function.constVoid
+  report: (text: string) => void = Function.constVoid,
+  restartLimit = Number.POSITIVE_INFINITY
 ): Promise<KitBrain> => {
   const harness = await DurableHarness.open(
     storage,
     {
       models: parts.models,
       registry: parts.registry,
-      settings: { retry: { enabled: false } },
-      onReport: (error) => {
-        report(String(error));
+      settings: { retry: { enabled: false }, restartLimit },
+      onReport: (found) => {
+        report(`${found.kind}: ${errorText(found.error)}`);
       },
     },
     context

@@ -58,7 +58,6 @@ export const shellRow = (
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
   ...overrides,
 });

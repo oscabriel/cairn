@@ -7,8 +7,8 @@
 import path from "node:path";
 
 import { ArtifactDetails } from "@cairn/protocol/Reach";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 import {

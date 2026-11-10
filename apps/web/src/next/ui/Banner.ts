@@ -1,5 +1,5 @@
 // The `next` banner: one line across a page or above the composer that says something holds (a
-// parked thread, a provider limit, a parent waiting on its child), in a tone, with its mark, its
+// provider limit, a parent waiting on its child), in a tone, with its mark, its
 // words and at most two actions. Its words wrap on the phone and the actions drop under them, so
 // nothing is cut. A failed or waiting banner is announced (`role="alert"` or `"status"`).
 

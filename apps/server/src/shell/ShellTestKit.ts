@@ -70,7 +70,6 @@ export const ShellRpcs = CairnRpcs.omit(
   "thread.withdraw",
   "thread.configure",
   "thread.respond",
-  "thread.retryTask",
   "thread.subscribe",
   "thread.history",
   "thread.entry",

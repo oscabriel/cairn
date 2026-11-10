@@ -1,4 +1,4 @@
-// Text the settings page, the usage meter and the parked banner print: a reset time and the used
+// Text the settings page, the usage meter and the hold banner print: a reset time and the used
 // share of a plan window, in the device's locale and the user's clock.
 
 import { DateTime, Option } from "effect";

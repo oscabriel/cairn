@@ -76,7 +76,6 @@ export const thread = (id: ThreadId = threadId): ThreadShell =>
     activeOrderKey: Option.none(),
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
-    parkedTaskIds: [],
     ...BARE_ROW_FIELDS,
   });
 

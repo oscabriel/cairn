@@ -1,7 +1,7 @@
 // The shell projector over recorded harness event sequences: each sequence's rows are written out
 // by hand from the field mapping (notes/server.md, "Shell store and the projector"); the debounce
 // commits at most one activity event per thread per 50 ms window and nothing when nothing changed;
-// a parked task shows and clears; and the boot reconcile repairs rows a lost event left wrong.
+// and the boot reconcile repairs rows a lost event left wrong.
 
 import { threadStatus } from "@cairn/client-logic/ThreadState";
 import {
@@ -9,7 +9,6 @@ import {
   ConversationId,
   EntryId,
   RunId,
-  TaskId,
 } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
@@ -42,7 +41,6 @@ import {
   RuntimeRequestUpdated,
   SubagentTallyUpdated,
   SubagentUpdated,
-  TaskParked,
   ThreadEnsured,
   UsageUpdated,
 } from "../brain/HarnessSeam.ts";
@@ -136,7 +134,6 @@ const FakeLayer = Layer.effectContext(
       entryImage: () => unsupported("read images"),
       events: Stream.fromPubSub(events),
       inspect: Ref.get(live),
-      retry: () => unsupported("retry"),
       capabilities: { durable: false, live: false },
     });
 
@@ -725,56 +722,6 @@ describe("the shell projector", () => {
       )
   );
 
-  it.effect(
-    "a parked task parks the thread, and the next event clears it once the brain no longer has it",
-    () =>
-      run(
-        Effect.gen(function* () {
-          yield* seedThreads();
-
-          const fake = yield* FakeHarness;
-          const task = TaskId.make(11);
-
-          yield* emit([
-            RunStarted.make({ threadId: THREAD, runId: run7, at: at(1) }),
-            TaskParked.make({ threadId: THREAD, taskId: task }),
-          ]);
-
-          const parked = yield* shellOf(THREAD);
-
-          assert.strictEqual(parked.activity, "parked");
-          assert.deepStrictEqual(parked.parkedTaskIds, [task]);
-
-          // Retried: the brain no longer lists the task, and the run goes on.
-          yield* Ref.set(fake.live, [
-            {
-              threadId: THREAD,
-              conversationId: ConversationId.make(1),
-              runId: Option.some(run7),
-              queueLength: 0,
-              parkedTaskIds: [],
-              pendingApprovals: [],
-            },
-          ]);
-
-          yield* emit([
-            MessageCommitted.make({
-              threadId: THREAD,
-              entryId: EntryId.make(5),
-              role: "assistant",
-              text: "back",
-              at: at(9),
-            }),
-          ]);
-
-          const retried = yield* shellOf(THREAD);
-
-          assert.strictEqual(retried.activity, "running");
-          assert.deepStrictEqual(retried.parkedTaskIds, []);
-        })
-      )
-  );
-
   it.effect("projector signals set waitingFor and the reset time", () =>
     run(
       Effect.gen(function* () {
@@ -1101,7 +1048,6 @@ describe("the shell projector", () => {
               conversationId: ConversationId.make(2),
               runId: Option.some(RunId.make(9)),
               queueLength: 2,
-              parkedTaskIds: [TaskId.make(4)],
               // A subagent's question still with its parent: it waits for the parent, not the user.
               pendingApprovals: [
                 {
@@ -1118,7 +1064,6 @@ describe("the shell projector", () => {
               conversationId: ConversationId.make(3),
               runId: Option.some(RunId.make(10)),
               queueLength: 0,
-              parkedTaskIds: [],
               // A question whose event a crash lost: the row names it from its record.
               pendingApprovals: [
                 {
@@ -1155,13 +1100,12 @@ describe("the shell projector", () => {
             Option.some("all done")
           );
 
-          const parked = yield* shellOf(testThreadId(2));
+          const asking = yield* shellOf(testThreadId(2));
 
-          assert.strictEqual(parked.activity, "parked");
-          assert.strictEqual(parked.queueLength, 2);
-          assert.deepStrictEqual(parked.parkedTaskIds, [TaskId.make(4)]);
-          assert.strictEqual(parked.waitingFor, "parent");
-          assert.deepStrictEqual(parked.pendingRuntimeRequest, Option.none());
+          assert.strictEqual(asking.activity, "running");
+          assert.strictEqual(asking.queueLength, 2);
+          assert.strictEqual(asking.waitingFor, "parent");
+          assert.deepStrictEqual(asking.pendingRuntimeRequest, Option.none());
 
           const waiting = yield* shellOf(testThreadId(3));
 

@@ -95,7 +95,6 @@ describe(rpcJsonSchemas, () => {
       "thread.history",
       "thread.launch",
       "thread.respond",
-      "thread.retryTask",
       "thread.send",
       "thread.stop",
       "thread.subscribe",

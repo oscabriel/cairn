@@ -119,7 +119,6 @@ export const ThreadActivityPatch = Schema.Struct({
   pendingCount: patchField(ThreadShell.fields.pendingCount),
   latestVisibleMessage: patchField(ThreadShell.fields.latestVisibleMessage),
   latestUserMessageAt: patchField(ThreadShell.fields.latestUserMessageAt),
-  parkedTaskIds: patchField(ThreadShell.fields.parkedTaskIds),
   provider: patchField(ThreadShell.fields.provider),
   modelId: patchField(ThreadShell.fields.modelId),
   thinkingLevel: patchField(ThreadShell.fields.thinkingLevel),
@@ -157,7 +156,6 @@ export const emptyActivityPatch: ThreadActivityPatch = {
   pendingCount: Option.none(),
   latestVisibleMessage: Option.none(),
   latestUserMessageAt: Option.none(),
-  parkedTaskIds: Option.none(),
   provider: Option.none(),
   modelId: Option.none(),
   thinkingLevel: Option.none(),
@@ -765,10 +763,6 @@ const applyPatch = (
       patch.latestUserMessageAt,
       () => shell.latestUserMessageAt
     ),
-    parkedTaskIds: Option.getOrElse(
-      patch.parkedTaskIds,
-      () => shell.parkedTaskIds
-    ),
     provider: Option.getOrElse(patch.provider, () => shell.provider),
     modelId: Option.getOrElse(patch.modelId, () => shell.modelId),
     thinkingLevel: Option.getOrElse(
@@ -1247,7 +1241,6 @@ export const planShellCommand = (
             activeOrderKey: Option.none(),
             autoSettleDisabledAt: Option.none(),
             lastVisitedAt: Option.none(),
-            parkedTaskIds: [],
             ...BARE_ROW_FIELDS,
             lineage: create.lineage ?? Option.none(),
           };

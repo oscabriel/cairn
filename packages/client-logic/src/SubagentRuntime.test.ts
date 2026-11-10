@@ -279,7 +279,7 @@ describe(summarizeSubagentStates, () => {
         "failed",
         "waiting",
         "go",
-        "parked",
+        "limited",
         "expired",
       ]),
       "1 need you · 2 working · 1 held · 1 done · 1 failed · 1 not started"
@@ -302,7 +302,6 @@ describe("the state sets", () => {
       "asking-parent",
       "working",
       "waiting",
-      "parked",
       "limited",
       "done",
       "failed",
@@ -591,7 +590,6 @@ describe("a child's row", () => {
           { activity: "failed", lastErrorClass: Option.some("usage_limit") },
           "limited",
         ],
-        [{ activity: "parked" }, "parked"],
       ];
 
     for (const [fields, state] of cases) {

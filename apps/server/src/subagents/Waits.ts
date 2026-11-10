@@ -11,10 +11,11 @@ import type {
   ConversationId,
   DocumentObserver,
   JsonObject,
+  WatchCall,
 } from "@earendil-works/pi-durable";
 import { Effect, Option, Queue, Stream } from "effect";
 
-import { durable, handOff } from "../brain/Durable.ts";
+import { documentCall, durable, handOff } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 
 /**
@@ -47,8 +48,10 @@ export const awaitDoc = <T extends JsonObject, A>(
         } else {
           Queue.offerUnsafe(queue, watch.value);
           watch.start(
-            handOff((value: Readonly<T> | null) => {
-              Queue.offerUnsafe(queue, value);
+            handOff((call: WatchCall<Readonly<T>>) => {
+              for (const value of Option.toArray(documentCall(call))) {
+                Queue.offerUnsafe(queue, value);
+              }
             })
           );
         }

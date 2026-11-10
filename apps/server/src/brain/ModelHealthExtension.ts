@@ -15,7 +15,7 @@
 // selections"). The hook runs `ModelHealth.record` through one runtime made from the layer's scope
 // (S43), and a failed write is logged, never thrown, so health never breaks a run.
 
-import type { Context as ChordContext } from "@earendil-works/chord";
+import type { Context as ChordContext } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";

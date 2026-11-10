@@ -34,7 +34,6 @@ import {
   NonNegativeInt,
   ProjectId,
   RunId,
-  TaskId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./Ids.ts";
@@ -83,7 +82,6 @@ export const ThreadActivity = Schema.Literals([
   "preparing",
   "running",
   "waiting",
-  "parked",
   "failed",
 ]);
 
@@ -188,8 +186,6 @@ export const ThreadShell = Schema.Struct({
   activeOrderKey: Schema.OptionFromNullOr(TrimmedNonEmptyString),
   autoSettleDisabledAt: OptionalTime,
   lastVisitedAt: OptionalTime,
-  /** Tasks pi-durable stopped retrying after repeated crashes; each can be retried. */
-  parkedTaskIds: Schema.Array(TaskId),
   /** A subagent's place under its parent (ADR 0028); a row with one is hidden from the sidebar. */
   lineage: added(Schema.OptionFromNullOr(ThreadLineage), null),
   /** This thread's own children by what they are doing; zeros when it has none. */

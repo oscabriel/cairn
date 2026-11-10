@@ -264,8 +264,6 @@ export const EscalationWhy = {
   parentRunEnded: "The parent's run ended without answering.",
   /** The parent is stopped or failed, so no run of its own will read the question. */
   parentStopped: "The parent is stopped.",
-  /** The crash-loop guard parked the parent's run, which waits for a Retry. */
-  parentParked: "The parent's run is parked.",
   /** The user archived the parent thread. */
   parentArchived: "The parent thread was archived.",
   /** The user deleted the parent thread. */

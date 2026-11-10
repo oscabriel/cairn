@@ -18,8 +18,8 @@
 // child really saw rather than what the ledger says it saw.
 
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 import {

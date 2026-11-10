@@ -7,8 +7,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { CriterionProposal } from "@cairn/protocol/Policy";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import {
   createModels,

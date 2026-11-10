@@ -2,7 +2,7 @@
 // set (the subagents extension with its Go commit, start, tell and expiry tasks) over pi-ai's faux
 // provider, a scratch data folder (its own `brain.sqlite` and `cairn.sqlite`, never the deployed
 // unit's) and a scratch git repository. Each run of this script is one life of the brain: it boots
-// (the production repairs that touch approvals, parked tasks and child workspaces, in
+// (the production repairs that touch approvals, crash-looped tasks and child workspaces, in
 // `BootRepairs.ts`'s order, then the Harness resumes), does its step, waits for the brief to come to rest, prints its report as
 // the last stdout line and exits. The orchestrator kills it, or it kills itself at a planted
 // window, and runs the next life over the same folder.
@@ -20,7 +20,6 @@
 //   kills itself before a second commit would have created the start task: what ADR 0030's one
 //   commit rules out. The judge must fail on what it leaves.
 // - `boot`: boots and waits; nothing else.
-// - `retry`: retries the parked start task, as the parent's Retry would.
 //
 // `--fault <point>` (`BriefFaultPoint`) kills the brain with SIGKILL at that window of the Go, at
 // most `--times` times across lives (counted in `<run>/fault-count`), so the next life runs clean.
@@ -53,7 +52,6 @@ import {
   Schema,
 } from "effect";
 
-import { retryParkedApprovalWaits } from "../../../apps/server/src/Boot.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import {
@@ -63,6 +61,7 @@ import {
 } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { repairChildWorkspacesAtBoot } from "../../../apps/server/src/brain/ChildWorkspaceRepair.ts";
 import { messageText } from "../../../apps/server/src/brain/CommitFeed.ts";
+import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
 import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
@@ -90,9 +89,11 @@ import {
   ChildDoc,
   isLinked,
 } from "../../../apps/server/src/subagents/SubagentDocs.ts";
-import { retryParkedSubagentTasks } from "../../../apps/server/src/subagents/SubagentRepairs.ts";
 import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
-import { START_TASK } from "../../../apps/server/src/subagents/SubagentTasks.ts";
+import {
+  START_TASK,
+  SUBAGENT_WAIT_TASKS,
+} from "../../../apps/server/src/subagents/SubagentTasks.ts";
 import {
   cairnWorktrees,
   workspacesAt,
@@ -453,12 +454,10 @@ const respond = (approvalId: string, decision: "accept" | "decline") =>
 const program = Effect.gen(function* () {
   const brainService = yield* Brain;
 
-  // The production boot repairs that touch approvals, parked tasks and child workspaces, in
-  // `BootRepairs.ts`'s order (the approval-wait retry among them, which a parent with a second brief
-  // pending reaches), then the Harness resumes.
+  // The production boot repairs that touch approvals, crash-looped tasks and child workspaces, in
+  // `BootRepairs.ts`'s order, then the Harness resumes.
   yield* cancelAbandonedApprovalsAtBoot;
-  yield* retryParkedApprovalWaits.repair;
-  yield* retryParkedSubagentTasks;
+  yield* endCrashLoopedTasks(SUBAGENT_WAIT_TASKS);
   yield* repairChildWorkspacesAtBoot;
   yield* brainService.resume;
 
@@ -548,23 +547,6 @@ const program = Effect.gen(function* () {
     );
 
     process.kill(process.pid, "SIGKILL");
-  }
-
-  if (step === "retry") {
-    const parked = yield* read("judge.inspect", async (harness, context) => {
-      const inspection = await harness.inspect(context);
-
-      return inspection.tasks.filter(
-        (task) =>
-          task.record.kind === START_TASK && task.state.kind === "blocked"
-      );
-    });
-
-    for (const task of parked) {
-      yield* read("judge.retry", async (harness, context) => {
-        await harness.retryTask(task.record.id, context);
-      });
-    }
   }
 
   const final = yield* step === "spawn"

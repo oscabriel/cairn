@@ -50,7 +50,7 @@ import {
   SUBAGENTS_DOCUMENT,
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import type {
   CommitChange,
@@ -428,6 +428,14 @@ const goalEvents = (
   return [GoalUpdated.make({ threadId, tally })];
 };
 
+/**
+ * A document change's new value, or null for a retirement (pi-durable 1.5 tags a document change
+ * `change` or `retire`).
+ */
+export const documentValue = (
+  change: Extract<CommitChange, { readonly type: "document" }>
+): JsonObject | null => (change.kind === "change" ? change.value : null);
+
 /** The events of one document change. */
 const documentEvents = (
   state: FeedState,
@@ -438,20 +446,14 @@ const documentEvents = (
   now: number
 ): Array<HarnessEvent> => {
   const { kind } = change.record;
+  const value = documentValue(change);
 
   if (kind === "pi.live") {
-    return liveEvents(
-      state,
-      threadId,
-      conversationId,
-      change.value,
-      terminal,
-      now
-    );
+    return liveEvents(state, threadId, conversationId, value, terminal, now);
   }
 
   if (kind === "pi.inbox") {
-    const length = queuedInputs(change.value);
+    const length = queuedInputs(value);
 
     if (state.queueLengths.get(conversationId) === length) {
       return [];
@@ -463,7 +465,7 @@ const documentEvents = (
   }
 
   if (kind === "pi.usage") {
-    const totals = usageTotals(change.value);
+    const totals = usageTotals(value);
 
     return [
       UsageUpdated.make({
@@ -475,17 +477,17 @@ const documentEvents = (
   }
 
   if (kind === GOAL_DOCUMENT) {
-    return goalEvents(state, threadId, conversationId, change.value);
+    return goalEvents(state, threadId, conversationId, value);
   }
 
-  if (kind === SUBAGENTS_DOCUMENT && isRecord(change.value?.items)) {
-    return subagentEvents(state, threadId, conversationId, change.value.items);
+  if (kind === SUBAGENTS_DOCUMENT && isRecord(value?.items)) {
+    return subagentEvents(state, threadId, conversationId, value.items);
   }
 
-  if (kind === "cairn.approvals" && isRecord(change.value?.items)) {
+  if (kind === "cairn.approvals" && isRecord(value?.items)) {
     const events: Array<HarnessEvent> = [];
 
-    for (const record of Object.values(change.value.items)) {
+    for (const record of Object.values(value.items)) {
       if (isRecord(record)) {
         const id = decodeApprovalId(record.id);
         const status = decodeApprovalStatus(record.status);
@@ -566,7 +568,7 @@ const ensuredEvents = (
       change.conversationId !== undefined
     ) {
       for (const parent of Option.toArray(
-        decodeThreadId(change.value?.parentThreadId)
+        decodeThreadId(documentValue(change)?.parentThreadId)
       )) {
         parents.set(change.conversationId, parent);
       }
@@ -579,7 +581,7 @@ const ensuredEvents = (
       change.record.kind === ThreadMeta.definition.kind &&
       change.conversationId !== undefined
     ) {
-      const threadId = decodeThreadId(change.value?.threadId);
+      const threadId = decodeThreadId(documentValue(change)?.threadId);
 
       if (Option.isSome(threadId)) {
         state.threads.set(change.conversationId, threadId);

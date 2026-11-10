@@ -19,8 +19,8 @@
 // memos and must not wait on anything else. Ported in intent from `CodeMode.ts`'s `deadlineGuard`
 // and the workflows probe's `brain2.ts` (a `beforeTool` rewrite of the code mode call).
 
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   HookApi,
   HookRegistration,

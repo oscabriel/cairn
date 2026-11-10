@@ -10,7 +10,7 @@
 // ancestors' in `readPermissions` (Permissions.ts), and Stop all stops each working child.
 
 import { ThreadId } from "@cairn/protocol/Ids";
-import { copyJson } from "@earendil-works/chord";
+import { copyJson } from "@earendil-works/chord/json";
 import type {
   AgentChange,
   ConversationId,

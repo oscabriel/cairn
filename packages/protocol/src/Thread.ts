@@ -357,11 +357,3 @@ export const RespondInput = Schema.Struct({
 });
 
 export type RespondInput = typeof RespondInput.Type;
-
-/** `thread.retryTask` input: run a parked task again. */
-export const RetryTaskInput = Schema.Struct({
-  threadId: ThreadId,
-  taskId: TaskId,
-});
-
-export type RetryTaskInput = typeof RetryTaskInput.Type;

@@ -8,15 +8,16 @@
 // - `routeQuestion` offers it to the parent's model as a follow-up input (request id
 //   `subagent-q-<child>-<approvalId>`), which the parent answers or escalates with
 //   `subagent_reply`, and escalates it by itself when the parent cannot: the parent is halted when
-//   it is asked (stopped, failed or parked), the run that was shown the question ends without
+//   it is asked (stopped or failed), the run that was shown the question ends without
 //   settling it, the parent is left idle after a failed or stopped run with the question still
 //   queued (it is withdrawn there), or the parent's model saw it `QUESTION_WINDOW_MILLIS` ago (from
 //   the input's placement, kept as a memo so a rerun keeps the time). Something else escalating it
 //   first (the parent's own `subagent_reply`, the `QuestionRoutes` fiber) withdraws the queued
 //   input too.
 // - The `QuestionRoutes` fiber escalates the open questions of a parent the route cannot watch from
-//   inside pi-durable: one whose run the crash-loop guard parked (`TaskParked`), and one the user
-//   archived or deleted (shell events), plus, once at start, any such parent it missed.
+//   inside pi-durable: one the user archived or deleted (shell events), plus, once at start, any
+//   such parent it missed. A parent run that crashes cut off too often is ended at boot
+//   (`CrashLimit.ts`), which the route sees as a run that ended without settling.
 // - `escalateIn` writes the escalation in one commit: the child's record turns to the user, a
 //   mirror lands in the parent's `cairn.approvals`, and the parent's `cairn.escalations` indexes it
 //   with why it reached the user. An answer from either thread settles both once
@@ -41,11 +42,7 @@ import type {
   Submission,
   Tx,
 } from "@earendil-works/pi-durable";
-import {
-  DEFAULT_RESTART_LIMIT,
-  InboxDoc,
-  LiveDoc,
-} from "@earendil-works/pi-durable";
+import { InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import {
   Clock,
   Effect,
@@ -67,7 +64,6 @@ import {
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { RUN_TASK } from "../brain/CommitFeed.ts";
 import { durable } from "../brain/Durable.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import {
@@ -78,7 +74,7 @@ import {
 } from "../brain/SubagentText.ts";
 import { EventStore } from "../shell/EventStore.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
-import { conversationOf, parentHalt, taskOf } from "../subagents/Delivery.ts";
+import { conversationOf, parentHalt } from "../subagents/Delivery.ts";
 import {
   ChildDoc,
   EscalationsDoc,
@@ -686,64 +682,6 @@ const escalateForThread = (
     return escalated;
   });
 
-/**
- * Whether the crash-loop guard parked the parent's run (table reads): the parked task is the run's
- * task, or a task the run owns (a tool call), so the run waits for a Retry. A parked background
- * task of the parent (a reporter, a brief) leaves its model free to answer.
- */
-const runParked = (taskId: number) => async (tx: Tx) => {
-  const task = await tx.task(taskOf(taskId));
-
-  if (task === undefined) {
-    return Option.none<string>();
-  }
-
-  if (task.kind === RUN_TASK) {
-    return Option.some<string>(EscalationWhy.parentParked);
-  }
-
-  const owner =
-    task.owner === undefined ? undefined : await tx.task(task.owner);
-
-  return owner?.kind === RUN_TASK
-    ? Option.some<string>(EscalationWhy.parentParked)
-    : Option.none<string>();
-};
-
-/** The statuses a parked task keeps: it waits for a Retry without ending. */
-const PARKABLE = ["pending", "running"] as const;
-
-/**
- * A parked parent's reason for the start scan (table reads), as `TaskParked` decides it: a task of
- * the parent's that the crash-loop guard cut off `DEFAULT_RESTART_LIMIT` times, which is its run's
- * task or one the run owns (`runParked`). None for any other state.
- */
-const parkedOnly = async (
-  tx: Tx,
-  parent: PiConversationId
-): Promise<Option.Option<string>> => {
-  for (const status of PARKABLE) {
-    // oxlint-disable-next-line no-await-in-loop -- table reads, one status at a time
-    const page = await tx.scanTasks(
-      { conversationId: parent, status, abortRequested: false },
-      SCAN_PAGE
-    );
-
-    for (const task of page.items) {
-      if ((task.restarts ?? 0) >= DEFAULT_RESTART_LIMIT) {
-        // oxlint-disable-next-line no-await-in-loop -- table reads, until one is found
-        const why = await runParked(Number(task.id))(tx);
-
-        if (Option.isSome(why)) {
-          return why;
-        }
-      }
-    }
-  }
-
-  return Option.none();
-};
-
 /** Why the shell row of `threadId` no longer holds questions: archived or deleted. */
 const goneWhy = (threadId: ThreadId) =>
   Effect.gen(function* () {
@@ -818,8 +756,8 @@ const logged = <A, E extends { readonly message: string }, R>(
   );
 
 /**
- * The start scan: every parent with a question still routed to it whose run is parked or whose
- * thread is archived or deleted escalates it. Parents are found by their `cairn.subagents`.
+ * The start scan: every parent with a question still routed to it whose thread is archived or
+ * deleted escalates it. Parents are found by their `cairn.subagents`.
  */
 export const escalateStrandedQuestions = Effect.gen(function* () {
   const found = yield* Effect.serviceOption(Brain);
@@ -869,6 +807,10 @@ export const escalateStrandedQuestions = Effect.gen(function* () {
           Effect.map(Option.flatten)
         );
 
+        if (Option.isNone(gone)) {
+          continue;
+        }
+
         const now = yield* Clock.currentTimeMillis;
 
         const count = yield* logged(
@@ -876,8 +818,7 @@ export const escalateStrandedQuestions = Effect.gen(function* () {
           escalateForThread(
             session,
             threadId,
-            async (tx, parent) =>
-              Option.isSome(gone) ? gone : await parkedOnly(tx, parent),
+            async () => await Promise.resolve(gone),
             now
           )
         );
@@ -894,8 +835,7 @@ export const escalateStrandedQuestions = Effect.gen(function* () {
 
 /**
  * The fiber that escalates the questions a parent can no longer settle, which the route cannot see
- * from inside pi-durable: a `TaskParked` on the parent's run, and a `thread.archived` or
- * `thread.deleted` shell event for the parent. It first escalates any it missed while down
+ * from inside pi-durable: a `thread.archived` or `thread.deleted` shell event for the parent. It first escalates any it missed while down
  * (`escalateStrandedQuestions`). Off without pi-durable. Leaves `HarnessSeam`, `EventStore` and
  * `ThreadRows` to the composition root.
  */
@@ -911,18 +851,6 @@ export const QuestionRoutes = Layer.effectDiscard(
     }
 
     const now = Clock.currentTimeMillis;
-
-    const onParked = (threadId: ThreadId, taskId: number) =>
-      Effect.gen(function* () {
-        const session = yield* brain.value.session;
-
-        return yield* escalateForThread(
-          session,
-          threadId,
-          runParked(taskId),
-          yield* now
-        );
-      }).pipe((effect) => logged(threadId, effect));
 
     const onGone = (threadId: ThreadId, why: string) =>
       Effect.gen(function* () {
@@ -977,17 +905,13 @@ export const QuestionRoutes = Layer.effectDiscard(
       Effect.forkScoped({ startImmediately: true })
     );
 
-    yield* Stream.runForEach(harness.events, (event) => {
-      if (Predicate.isTagged(event, "TaskParked")) {
-        return onParked(event.threadId, event.taskId);
-      }
-
-      return Predicate.isTagged(event, "RuntimeRequestUpdated") &&
-        event.kind === "user-input" &&
-        event.status === "pending"
+    yield* Stream.runForEach(harness.events, (event) =>
+      Predicate.isTagged(event, "RuntimeRequestUpdated") &&
+      event.kind === "user-input" &&
+      event.status === "pending"
         ? onAsked(event.threadId)
-        : Effect.void;
-    }).pipe(Effect.forkScoped({ startImmediately: true }));
+        : Effect.void
+    ).pipe(Effect.forkScoped({ startImmediately: true }));
 
     yield* logged("all", escalateStrandedQuestions).pipe(
       Effect.provideContext(context),

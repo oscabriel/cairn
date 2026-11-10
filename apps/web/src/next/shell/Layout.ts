@@ -64,9 +64,9 @@ const header = (h: H, model: Model, controls: ReadonlyArray<Html>): Html =>
 const hold = (h: H, model: Model): Html =>
   h.submodel({
     slotId: "thread-hold",
-    model: model.parked,
+    model: model.hold,
     view: Hold.view,
-    toParentMessage: (message) => Message.GotParkedMessage({ message }),
+    toParentMessage: (message) => message,
   });
 
 const routeBody = (

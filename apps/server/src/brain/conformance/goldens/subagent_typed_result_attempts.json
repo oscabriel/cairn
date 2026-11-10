@@ -231,7 +231,7 @@
         {
           "kind": "pi.tool-result",
           "role": "toolResult",
-          "text": "submit_result rejected (attempt 1 of 2):\n  - result.count: must be integer\nFix these and call submit_result again.",
+          "text": "submit_result rejected (attempt 1 of 2):\n  - result.count: expected integer, got string\nFix these and call submit_result again.",
           "images": 0,
           "toolCalls": [],
           "toolName": "submit_result",

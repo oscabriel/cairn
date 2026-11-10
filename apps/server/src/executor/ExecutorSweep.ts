@@ -171,8 +171,8 @@ export class ExecutorSweep extends Context.Service<
 
 /**
  * The boot repair's effect. `BootRepairs.ts` lists it as
- * `bootRepair("executor-sweep", sweepUnfinishedExecutorRequests)`, before the parked approval waits
- * are retried.
+ * `bootRepair("executor-sweep", sweepUnfinishedExecutorRequests)`, before any repair that can
+ * start scheduling.
  */
 export const sweepUnfinishedExecutorRequests = ExecutorSweep.use(
   (sweeper) => sweeper.sweep

@@ -9,7 +9,7 @@ import type {
   SimpleStreamOptions,
   Tool,
 } from "@earendil-works/pi-ai";
-import { normalizeContext, Type } from "@earendil-works/pi-ai";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Duration,
@@ -23,6 +23,7 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
+import { Type } from "typebox";
 
 import { Claude } from "./Claude.ts";
 import { ClaudeAccount } from "./ClaudeAccount.ts";

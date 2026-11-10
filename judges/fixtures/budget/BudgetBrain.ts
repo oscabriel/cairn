@@ -11,8 +11,8 @@
 //
 // Each life boots in the order the brain's boot repairs must: the ledger's reconcile, the budget
 // guard's boot repair (halt a stopped scope before anything can start scheduling; under `--control
-// no-boot` earlier lives only read the book and the last life has no repair), then the repairs that retry parked tasks (pi-durable's `retryTask` resumes
-// scheduling), the budget declared in the first life only, then the Harness resumes
+// no-boot` earlier lives only read the book and the last life has no repair), then the crash
+// accounting (`CrashLimit.ts`, ADR 0046), the budget declared in the first life only, then the Harness resumes
 // and every child's input is submitted (request id `work-<n>`, so a killed life's input lands
 // once). A life that boots with the scope past its line prints `exhausted` before the Harness
 // resumes. The guard's first stop prints `stopping`; each later stop in that pass waits
@@ -40,7 +40,7 @@ import { DEFAULT_BUDGET, Micros, SpendScope } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import { ThreadLineage } from "@cairn/protocol/Subagents";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import type { TranscriptContext } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
@@ -61,12 +61,13 @@ import {
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
+import { Type } from "typebox";
 
-import { retryParkedApprovalWaits } from "../../../apps/server/src/Boot.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
 import { ThreadReceipt } from "../../../apps/server/src/brain/CairnDocs.ts";
+import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import type { CairnExtension } from "../../../apps/server/src/brain/Extensions.ts";
 import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
@@ -95,8 +96,8 @@ import {
   testThreadId,
 } from "../../../apps/server/src/shell/ShellTestKit.ts";
 import { ThreadRows } from "../../../apps/server/src/shell/ThreadRows.ts";
-import { retryParkedSubagentTasks } from "../../../apps/server/src/subagents/SubagentRepairs.ts";
 import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
+import { SUBAGENT_WAIT_TASKS } from "../../../apps/server/src/subagents/SubagentTasks.ts";
 import { BudgetBook } from "../../../apps/server/src/usage/BudgetBook.ts";
 import { BudgetGuard } from "../../../apps/server/src/usage/BudgetGuard.ts";
 import { Budgets } from "../../../apps/server/src/usage/Budgets.ts";
@@ -180,7 +181,12 @@ const Models = Layer.succeed(
   ModelSource,
   ModelSource.of({
     models: () => models,
-    settings: () => ({ ...BASE_HARNESS_SETTINGS, retry: { enabled: false } }),
+    // pi-durable 1.5 charges a request a kill cut off as a failed attempt instead of resending it;
+    // the brain retries as pi's default policy does, here with a short backoff.
+    settings: () => ({
+      ...BASE_HARNESS_SETTINGS,
+      retry: { enabled: true, maxRetries: 10, baseDelayMs: 50 },
+    }),
     completeSimple: () => Effect.die("the budget judge makes no direct calls"),
   })
 );
@@ -526,9 +532,8 @@ const program = Effect.gen(function* () {
     yield* (yield* BudgetGuard).boot;
   }
 
-  // After the budget repair, as in the brain's boot: these may resume scheduling.
-  yield* retryParkedApprovalWaits.repair;
-  yield* retryParkedSubagentTasks.pipe(Effect.orDie);
+  // After the budget repair, as in the brain's boot.
+  yield* endCrashLoopedTasks(SUBAGENT_WAIT_TASKS).pipe(Effect.orDie);
 
   // Declared once, in the first life; later lives read it from the documents through the guard's
   // boot repair, as the brain does, so a brain without the repair has an empty book after a restart.

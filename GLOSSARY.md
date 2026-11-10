@@ -94,7 +94,7 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Brief task**: The parent's background task that holds a pending brief's 7-day expiry; if no answer comes by then, it expires the brief and tells the parent.
 
-**Start task**: The parent's background task (`cairn.subagent-start`) that Go's commit creates: it checks the model the brief names at Go (none: the parent's), makes the child's workspace, then creates and starts the child in one commit. When parked, it waits for a human Retry on the parent and is never retried at boot.
+**Start task**: The parent's background task (`cairn.subagent-start`) that Go's commit creates: it checks the model the brief names at Go (none: the parent's), makes the child's workspace, then creates and starts the child in one commit. Crashes never end it (the crash limit keeps it), so a Go'd brief starts its child once however often the brain dies.
 
 **Tell task**: The parent's background task (`cairn.subagent-brief-tell`) that tells it of a Decline, a Send back, an expiry, or a Go whose child could not start.
 
@@ -192,7 +192,7 @@ _Avoid_: Claude provider, proxy
 
 **Held query**: A child's open Claude query that the bridge keeps waiting across a tool call, so the tool result returns into the same query instead of a new turn.
 
-_Avoid_: parked query (Parked is a pi-durable task)
+_Avoid_: parked query
 
 **Stamp**: The record on a Claude reply's final assistant message (`cairn.claude`) naming the Claude Code session that answered, so the next turn resumes it. Committed with the reply, and never sent to clients.
 
@@ -236,7 +236,7 @@ _Avoid_: plugin
 
 **Turn content stage**: One step that turns a user turn into model content and its `cairn.user` entry, in the order listed in `apps/server/src/threads/TurnContentStages.ts`.
 
-**Shell projector**: The brain fiber that keeps each thread row's derived fields (activity, run times, queue, last error, waiting, approval, preview, parked tasks) equal to what pi-durable holds, committing at most once per thread per 50 ms window. It is recomputed, never replayed.
+**Shell projector**: The brain fiber that keeps each thread row's derived fields (activity, run times, queue, last error, waiting, approval, preview) equal to what pi-durable holds, committing at most once per thread per 50 ms window. It is recomputed, never replayed.
 
 **Boot reconcile**: The shell projector's pass at boot, after the harness resumes, that rebuilds every thread row from `inspect()` and the rows themselves, so an event lost to a crash cannot leave a row wrong. _Avoid_: replay.
 
@@ -292,7 +292,7 @@ _Avoid_: plugin
 
 **Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
 
-**Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.
+**Hold**: What keeps an open thread from moving on without the user: a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.
 
 **Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.
 
@@ -334,7 +334,7 @@ _Avoid_: revise (in prose; it is the decision's wire name), reject
 
 **Decider**: Who settled an approval record: the user, a parent thread answering its child's question, the permission mode, a workflow's envelope, a judge, expiry, or the system (a stop or boot). Every record past pending names one.
 
-**Escalate**: To pass a child's question up from its parent to the user, because the parent chose to, the parent was stopped, failed or parked, the run that saw the question ended, the parent thread was archived or deleted, or 15 minutes passed after the parent's model saw it. The parent's `cairn.escalations` records each one and why. The user answers it in the parent thread, and either answer settles both records once.
+**Escalate**: To pass a child's question up from its parent to the user, because the parent chose to, the parent was stopped or failed, the run that saw the question ended, the parent thread was archived or deleted, or 15 minutes passed after the parent's model saw it. The parent's `cairn.escalations` records each one and why. The user answers it in the parent thread, and either answer settles both records once.
 
 _Avoid_: forward, bubble up
 
@@ -352,7 +352,7 @@ _Avoid_: forward, bubble up
 
 _Avoid_: prompt, modal, panel
 
-**Parked**: A task pi-durable stopped running after the brain crashed 5 times in a row while it ran without progress. It shows in the UI with a retry; a task waiting on a pending approval is retried at boot by itself.
+**Crash limit**: Cairn's own count of crashes in a row that cut a task off without progress (ADR 0046). pi-durable ends no task for crashes in Cairn's brain; at boot, a task cut off five times in a row is aborted, except a tool call (an approval wait among them) and the subagent and workflow tasks that wait, which run on however often the brain dies. _Avoid_: parked, which pi-durable 1.5 no longer does.
 
 **Permission mode**: A thread's rule for which tool calls need an approval, after t3code's modes, kept in `cairn.permissions` and read by each gated tool at call time. Full access, the default, asks for none; Auto-accept edits asks before commands and Executor calls; Supervised asks before everything but reads. Auto is listed for later. A thread may also allow one tool for the rest of its life (Allow for this thread). A subagent's mode is never wider than its parent's.
 

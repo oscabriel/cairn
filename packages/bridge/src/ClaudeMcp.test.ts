@@ -1,6 +1,6 @@
-import { Type } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import { Option } from "effect";
+import { Type } from "typebox";
 
 import {
   ALWAYS_LOAD_META,

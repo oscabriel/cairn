@@ -35,9 +35,9 @@
 // from the layer's scope (S43).
 
 import type { ThinkingLevel } from "@cairn/protocol/Models";
-import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Context, Effect, FiberSet, Layer, Option } from "effect";
+import { Type } from "typebox";
 
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { ModelSpecs, modelsText } from "./ModelSpecs.ts";

@@ -51,7 +51,7 @@ describe(isThreadWorking, () => {
       );
     }
 
-    for (const activity of ["idle", "parked", "failed"] as const) {
+    for (const activity of ["idle", "failed"] as const) {
       assert.isFalse(
         isThreadWorking({ activity, pendingRuntimeRequest: Option.none() })
       );

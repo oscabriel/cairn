@@ -66,7 +66,6 @@ import {
   HistoryInput,
   HistoryPage,
   RespondInput,
-  RetryTaskInput,
   SendInput,
   SendResult,
   StopInput,
@@ -176,7 +175,6 @@ export const CairnRpcs = RpcGroup.make(
   }),
   Rpc.make("thread.configure", { payload: ConfigureInput, error: Change }),
   Rpc.make("thread.respond", { payload: RespondInput, error: Change }),
-  Rpc.make("thread.retryTask", { payload: RetryTaskInput, error: Change }),
 
   // Stream 2: pi-durable's view of one conversation; a fresh snapshot on every subscribe.
   Rpc.make("thread.subscribe", {

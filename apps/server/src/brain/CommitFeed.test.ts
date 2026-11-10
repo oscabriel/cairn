@@ -13,8 +13,8 @@ import path from "node:path";
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { Message } from "@earendil-works/pi-ai";
 import { defineDoc, InboxDoc } from "@earendil-works/pi-durable";
@@ -391,14 +391,17 @@ describe("CommitFeed subagent events", () => {
           yield* setSettledItem(brain, parentConversation, "settled", 1);
           yield* waitFor(
             Effect.map(tallies, (found) =>
-              found.length >= 3 ? Option.some(true) : Option.none()
+              found.length >= 4 ? Option.some(true) : Option.none()
             )
           );
           // The same tally again is no event.
           yield* setSettledItem(brain, parentConversation, "settled", 1);
           yield* Effect.sleep(Duration.millis(200));
 
+          // The thread's creating commit wrote its empty registry, which pi-durable 1.5 publishes
+          // with its first value: one tally of nothing, before the child.
           assert.deepStrictEqual(yield* tallies, [
+            ["SubagentTallyUpdated", 0, 0],
             ["SubagentUpdated", 1, 0],
             ["SubagentUpdated", 1, 0],
             ["SubagentTallyUpdated", 0, 1],

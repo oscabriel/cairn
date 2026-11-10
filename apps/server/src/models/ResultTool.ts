@@ -31,10 +31,10 @@
 import type { ModelRef } from "@cairn/protocol/Models";
 import { JsonObject } from "@cairn/protocol/Policy";
 import { RESULT_DOCUMENT } from "@cairn/protocol/Subagents";
-import type { Context as ChordContext, JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
+import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
-import { Type } from "@earendil-works/pi-ai";
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
 import type {
   AgentChange,
@@ -63,6 +63,7 @@ import {
   Result,
   Schema,
 } from "effect";
+import { Type } from "typebox";
 
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";

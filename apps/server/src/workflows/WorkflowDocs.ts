@@ -37,8 +37,8 @@ import type {
   WorkflowOutcome,
   WorkflowState,
 } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson } from "@earendil-works/chord/json";
 import type { UsageState } from "@earendil-works/pi-durable";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { Option, Schema } from "effect";

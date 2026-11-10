@@ -31,9 +31,8 @@ import {
   MAX_LIVE_CHILDREN_PER_BRAIN,
   MAX_SUBAGENT_DEPTH,
 } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   AgentChange,
   ToolExecutionApi,
@@ -41,6 +40,7 @@ import type {
 } from "@earendil-works/pi-durable";
 import { defineTool } from "@earendil-works/pi-durable";
 import { Duration, Effect, Function, Option, Result } from "effect";
+import { Type } from "typebox";
 
 import {
   endUnanswered,

@@ -7,7 +7,7 @@
 //   node judges/fixtures/workflows/WorkflowBrain.ts --dir <run> --script <file>
 //     [--hold <point>:<label>:<ms>] [--stop <label>:<ms>] [--answer] [--defer-run]
 //     [--diverge] [--control] [--plan] [--answer-launch] [--briefs accept|decline] [--grant-all]
-//     [--retry-parked] [--repair]
+//     [--crash-limit] [--default-restart-limit]
 //
 // - The first life plants an approved launch of the script (as 5A's answer path will) unless the
 //   ledger has it; every life submits the run under one request id, so it is admitted once.
@@ -26,12 +26,12 @@
 //   `thread.respond` does; `--briefs` answers every node's own brief card so. It prints
 //   `launch-pending` and `card-pending <title>` once each. `--grant-all` plants the envelope
 //   judge's broken control: every node fits, so no card is raised.
-// - `--retry-parked` retries, before the Harness resumes, every task the restart limit parked
-//   except the workflow's watchers, as the user's Retry on the thread would; `--repair` then runs
-//   the boot repair's own filter (`parkedWorkflowTasks`, WorkflowRepairs.ts) on the watchers. It
-//   prints `parked <n>` and `repaired <n>`. A life with either flag ends with `workflow stalled`
-//   when the script call has ended and its row still runs 5 s later: a parked watcher that nobody
-//   retried never records the ending.
+// - `--crash-limit` runs the brain's crash accounting (`CrashLimit.ts`, ADR 0046) before the
+//   Harness resumes: it counts the tasks crashes cut off the limit's number of times in a row and
+//   aborts the ones that are neither a tool call nor a workflow wait; it prints `cut-off <n>` and
+//   `ended <n>`. `--default-restart-limit` opens the Harness with pi-durable's own restart limit
+//   instead of none, the crash-loop case's broken control. A life with `--crash-limit` ends with
+//   `workflow stalled` when the script call has ended and its row still runs 5 s later.
 //
 // It prints `node <label> <state>`, `workflow <state>`, `approval-pending` and `effect <node>
 // <what>` as they happen, and `done` once the workflow ended and `report.json` is written.
@@ -46,9 +46,9 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { defineDoc } from "@earendil-works/pi-durable";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { DEFAULT_RESTART_LIMIT, defineDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeRuntime } from "@effect/platform-node";
 import { Effect, Option, Predicate } from "effect";
@@ -57,9 +57,14 @@ import {
   answerApproval,
   Approvals,
 } from "../../../apps/server/src/brain/CairnDocs.ts";
+import {
+  CRASH_LIMIT,
+  crashLooped,
+} from "../../../apps/server/src/brain/CrashLimit.ts";
 import { taskOf } from "../../../apps/server/src/subagents/Delivery.ts";
 import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
 import { PRELUDE_MARK } from "../../../apps/server/src/workflows/Prelude.ts";
+import { STOPPER_TASK } from "../../../apps/server/src/workflows/WorkflowBudget.ts";
 import {
   isWorkflowEnded,
   ledgerProblems,
@@ -75,10 +80,6 @@ import {
   launchAnswered,
 } from "../../../apps/server/src/workflows/WorkflowLaunch.ts";
 import {
-  parkedWorkflowTasks,
-  WORKFLOW_TASKS,
-} from "../../../apps/server/src/workflows/WorkflowRepairs.ts";
-import {
   codemodeResultText,
   kitParts,
   KitLayer,
@@ -92,6 +93,7 @@ import type {
   KitBrain,
   WorkEffect,
 } from "../../../apps/server/src/workflows/WorkflowTestKit.ts";
+import { WATCH_TASK } from "../../../apps/server/src/workflows/WorkflowTools.ts";
 import type { HoldPoint } from "../../../apps/server/src/workflows/WorkflowTools.ts";
 
 const { values } = parseArgs({
@@ -108,8 +110,8 @@ const { values } = parseArgs({
     "answer-launch": { type: "boolean", default: false },
     briefs: { type: "string" },
     "grant-all": { type: "boolean", default: false },
-    "retry-parked": { type: "boolean", default: false },
-    repair: { type: "boolean", default: false },
+    "crash-limit": { type: "boolean", default: false },
+    "default-restart-limit": { type: "boolean", default: false },
   },
 });
 
@@ -189,42 +191,38 @@ const diverge = async (brain: KitBrain) => {
 /** How long a row may keep running after its script call ended before the life calls it stalled. */
 const STALL_MS = 5000;
 
-/** What the parked-task retries found at this life's boot. */
-const parking = { parked: 0, repaired: 0 };
+/** The workflow waits the brain's crash accounting keeps, as `BootRepairs.ts` lists them. */
+const WORKFLOW_WAIT_TASKS: ReadonlySet<string> = new Set([
+  WATCH_TASK,
+  STOPPER_TASK,
+]);
+
+/** What the crash accounting found at this life's boot. */
+const crashes = { cutOff: 0, ended: 0 };
 
 /**
- * Retries the tasks the restart limit parked: every one but the workflow's watchers (the user's
- * Retry), then with `--repair` the watchers by the boot repair's own filter.
+ * The brain's crash accounting (`CrashLimit.ts`, ADR 0046) on the kit's Harness, before it resumes:
+ * every live task cut off the limit's number of times in a row is counted, and the ones that are
+ * neither a tool call nor a workflow wait are aborted.
  */
-const retryParked = async (brain: KitBrain) => {
+const crashLimit = async (brain: KitBrain) => {
   const { tasks } = await brain.harness.inspect(context);
+  const records = tasks.map((task) => task.record);
 
-  const parked = tasks.filter(
-    ({ state }) => state.kind === "blocked" && state.reason === "restart_limit"
-  );
+  crashes.cutOff = records.filter(
+    (record) => (record.restarts ?? 0) >= CRASH_LIMIT
+  ).length;
 
-  parking.parked = parked.length;
-  say(`parked ${String(parked.length)}`);
+  const looped = crashLooped(records, WORKFLOW_WAIT_TASKS);
 
-  for (const { record } of parked) {
-    if (!WORKFLOW_TASKS.has(record.kind)) {
-      // oxlint-disable-next-line no-await-in-loop
-      await brain.harness.retryTask(record.id, context);
-    }
+  for (const record of looped) {
+    // oxlint-disable-next-line no-await-in-loop
+    await brain.harness.abortTask(record.id, context);
   }
 
-  if (values.repair) {
-    const watchers = parkedWorkflowTasks(tasks);
-
-    for (const id of watchers) {
-      // oxlint-disable-next-line no-await-in-loop
-      await brain.harness.retryTask(id, context);
-    }
-
-    parking.repaired = watchers.length;
-  }
-
-  say(`repaired ${String(parking.repaired)}`);
+  crashes.ended = looped.length;
+  say(`cut-off ${String(crashes.cutOff)}`);
+  say(`ended ${String(crashes.ended)}`);
 };
 
 /** True once the row has run `STALL_MS` past the end of its script call (`ended` keeps the time). */
@@ -234,7 +232,7 @@ const stalled = async (
   ended: { at: number | null }
 ): Promise<boolean> => {
   if (
-    !(values["retry-parked"] || values.repair) ||
+    !values["crash-limit"] ||
     row.state !== "running" ||
     row.codemodeTaskId === null
   ) {
@@ -529,9 +527,9 @@ const writeReport = async (brain: KitBrain) => {
     problems: ledgerProblems(ledger ?? { items: {} }, approvals?.items ?? {}),
     /** Each life that saw its script call running: whether it stored the gate's rewrite. */
     storedRewrites: stored.map((line) => line === "true"),
-    /** Tasks this life found parked at boot, and watchers the boot repair's filter retried. */
-    parked: parking.parked,
-    repaired: parking.repaired,
+    /** Tasks this life found cut off past the limit at boot, and tasks its crash accounting ended. */
+    cutOff: crashes.cutOff,
+    ended: crashes.ended,
   };
 
   writeFileSync(path.join(dir, "report.json"), JSON.stringify(report, null, 2));
@@ -556,9 +554,17 @@ const program = Effect.gen(function* () {
 
   const brain = yield* Effect.promise(
     async () =>
-      await openKit(storage, parts, context, (text) => {
-        appendFileSync(path.join(dir, "reports.log"), `${text}\n`);
-      })
+      await openKit(
+        storage,
+        parts,
+        context,
+        (text) => {
+          appendFileSync(path.join(dir, "reports.log"), `${text}\n`);
+        },
+        values["default-restart-limit"]
+          ? DEFAULT_RESTART_LIMIT
+          : Number.POSITIVE_INFINITY
+      )
   );
 
   const ledger = yield* Effect.promise(
@@ -576,9 +582,9 @@ const program = Effect.gen(function* () {
     });
   }
 
-  if (values["retry-parked"] || values.repair) {
+  if (values["crash-limit"]) {
     yield* Effect.promise(async () => {
-      await retryParked(brain);
+      await crashLimit(brain);
     });
   }
 

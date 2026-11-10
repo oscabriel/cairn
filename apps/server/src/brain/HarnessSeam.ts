@@ -41,7 +41,7 @@ import type {
   WhenBusy,
   WithdrawResult,
 } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { Effect, Option, Stream } from "effect";
 import { Context, Schema } from "effect";
@@ -54,7 +54,6 @@ export const HarnessErrorReason = Schema.Literals([
   "thread_busy",
   "submission_not_found",
   "approval_not_found",
-  "task_not_found",
   "entry_not_found",
   /** The request named something the thread cannot do now, such as a cwd change while it runs. */
   "invalid_input",
@@ -208,7 +207,6 @@ export interface LiveThreadState {
   readonly conversationId: ConversationId;
   readonly runId: Option.Option<RunId>;
   readonly queueLength: number;
-  readonly parkedTaskIds: ReadonlyArray<TaskId>;
   readonly pendingApprovals: ReadonlyArray<PendingApproval>;
 }
 
@@ -344,12 +342,6 @@ export const GoalUpdated = Schema.TaggedStruct("GoalUpdated", {
   tally: Schema.Option(GoalTally),
 });
 
-/** The crash-loop guard parked a task; `retry` runs it again. */
-export const TaskParked = Schema.TaggedStruct("TaskParked", {
-  threadId: ThreadId,
-  taskId: TaskId,
-});
-
 /** A compaction began summarizing the thread. */
 export const CompactionStarted = Schema.TaggedStruct("CompactionStarted", {
   threadId: ThreadId,
@@ -375,7 +367,6 @@ export const HarnessEvent = Schema.Union([
   SubagentUpdated,
   SubagentTallyUpdated,
   GoalUpdated,
-  TaskParked,
   CompactionStarted,
   CompactionEnded,
 ]);
@@ -483,13 +474,11 @@ export class HarnessSeam extends Context.Service<
     ): Effect.Effect<EntryImage, HarnessError>;
     /** Committed changes of every thread, in commit order. Each subscriber sees changes after it joined. */
     readonly events: Stream.Stream<HarnessEvent>;
-    /** Every thread with a run, a queue, an approval or a parked task: the boot reconcile reads it. */
+    /** Every thread with a run, a queue or an approval: the boot reconcile reads it. */
     readonly inspect: Effect.Effect<
       ReadonlyArray<LiveThreadState>,
       HarnessError
     >;
-    /** Runs a task the crash-loop guard parked again. */
-    retry(taskId: TaskId): Effect.Effect<void, HarnessError>;
     readonly capabilities: HarnessCapabilities;
   }
 >()("cairn/server/brain/HarnessSeam") {}

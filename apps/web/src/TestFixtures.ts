@@ -13,12 +13,12 @@ import { ConnectionState } from "./connection/Reconnect.ts";
 import type { Model } from "./Model.ts";
 import * as RequestCard from "./next/card/Model.ts";
 import * as Meters from "./next/meters/Model.ts";
+import * as Hold from "./next/shell/Hold.ts";
 import * as NextShell from "./next/shell/Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import * as Push from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
 import * as Settings from "./settings/Model.ts";
-import * as Parked from "./shell/Parked.ts";
 import { initial as initialSidebar } from "./sidebar/Model.ts";
 
 /** An empty shell at sequence 0. */
@@ -48,7 +48,7 @@ export const connectingModel: Model = {
   composer: Composer.initial,
   push: Push.initial,
   settings: Settings.initial,
-  parked: Parked.initial,
+  hold: Hold.initial,
   // Started, as after the first update: its scratch thread read (`LoadScratch`) is not under test.
   nextShell: { ...NextShell.initial, started: true },
   scratchThread: Thread.Model.initial,

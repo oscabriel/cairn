@@ -8,9 +8,9 @@ import type {
   SystemMessage,
   Tool,
 } from "@earendil-works/pi-ai";
-import { Type } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import { Option } from "effect";
+import { Type } from "typebox";
 
 import {
   heldOf,

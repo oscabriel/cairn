@@ -6,15 +6,15 @@
 // `kill -9`s it again and again; the last life runs every turn, waits for the ledger, then writes
 // `report.json` and exits.
 //
-//   node judges/fixtures/spend/SpendBrain.ts --dir <run> --turns N [--control] [--retry-parked]
+//   node judges/fixtures/spend/SpendBrain.ts --dir <run> --turns N [--control] [--crash-limit]
 //
 // - Boot: the ledger's reconcile (the boot repair), then the Harness resumes.
 // - Producer: turn n goes to thread n % 4 with request id `turn-<n>`, so a turn a killed life
 //   already admitted is not admitted twice; each round waits for its four threads.
 // - Truth, computed here and not by the ledger: each conversation's `pi.usage` tokens, and each of
 //   its own assistant responses priced alone with pi-ai's `calculateCost` at the twin's catalog.
-// - `--retry-parked` (the last life): retries every task the crash-loop guard parked before the
-//   Harness resumes, so five kills that land on one request do not leave its turn parked.
+// - `--crash-limit` (the last life): runs the brain's crash accounting (`CrashLimit.ts`, ADR 0046)
+//   before the Harness resumes, as the brain's boot does.
 // - `--control`: the broken control, a ledger that adds each response it reads and, at boot,
 //   catches up by adding every response again (its cursor lived in memory), so each life counts
 //   what earlier lives counted once more.
@@ -56,13 +56,13 @@ import {
   ThreadMeta,
   ThreadReceipt,
 } from "../../../apps/server/src/brain/CairnDocs.ts";
+import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import { Extensions } from "../../../apps/server/src/brain/Extensions.ts";
 import {
   BASE_HARNESS_SETTINGS,
   ModelSource,
 } from "../../../apps/server/src/brain/ModelSource.ts";
-import { Parked } from "../../../apps/server/src/brain/Parked.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import type { RecordedUsage } from "../../../apps/server/src/brain/SpendFeed.ts";
@@ -88,7 +88,7 @@ const { values } = parseArgs({
     dir: { type: "string" },
     turns: { type: "string", default: "48" },
     control: { type: "boolean", default: false },
-    "retry-parked": { type: "boolean", default: false },
+    "crash-limit": { type: "boolean", default: false },
   },
 });
 
@@ -172,7 +172,12 @@ const Models = Layer.succeed(
   ModelSource,
   ModelSource.of({
     models: () => models,
-    settings: () => ({ ...BASE_HARNESS_SETTINGS, retry: { enabled: false } }),
+    // pi-durable 1.5 charges a request a kill cut off as a failed attempt instead of resending it;
+    // the brain retries as pi's default policy does, here with a short backoff.
+    settings: () => ({
+      ...BASE_HARNESS_SETTINGS,
+      retry: { enabled: true, maxRetries: 10, baseDelayMs: 50 },
+    }),
     completeSimple: () => Effect.die("the spend judge makes no direct calls"),
   })
 );
@@ -180,7 +185,6 @@ const Models = Layer.succeed(
 const BrainLayer = Brain.layerNoDeps.pipe(
   Layer.provide(BrainStore.layer),
   Layer.provide(Arms.layer),
-  Layer.provide(Parked.layer),
   Layer.provide(Extensions.fromSources<never, never>([])),
   Layer.provide(Models),
   Layer.provide(BrainConfig.layerFrom(dir))
@@ -367,34 +371,6 @@ const bootControl = Effect.fnUntraced(function* (
   );
 });
 
-/**
- * The last life's boot: runs again every task the crash-loop guard parked. Five kills that land
- * while a thread waits on its request park its generation (`restart_limit`), and nothing else in
- * this brain retries it, so without this the last life would wait for a turn that never runs.
- */
-const retryParked = Effect.gen(function* () {
-  const brain = yield* Brain;
-  const session = yield* brain.session;
-
-  const inspection = yield* durable(
-    "judge.inspect",
-    async (context) => await session.harness.inspect(context)
-  );
-
-  let retried = 0;
-
-  for (const { record, state } of inspection.tasks) {
-    if (state.kind === "blocked" && state.reason === "restart_limit") {
-      yield* durable("judge.retry", async (context) => {
-        await session.harness.retryTask(record.id, context);
-      });
-      retried += 1;
-    }
-  }
-
-  return retried;
-});
-
 /** Every turn, a round of four at a time; an admitted turn is not admitted again. */
 const produce = Effect.fnUntraced(function* (
   conversations: ReadonlyMap<number, number>
@@ -526,9 +502,13 @@ const readLedger = Effect.fnUntraced(function* (
 
     ledger = rows;
 
+    // Input and output both: a faux model's input is zero, so input alone is caught up at once.
     const caughtUp = [...truth].every(([id, expected]) =>
       rows.some(
-        (row) => row.conversation_id === id && row.input === expected.input
+        (row) =>
+          row.conversation_id === id &&
+          row.input === expected.input &&
+          row.output === expected.output
       )
     );
 
@@ -574,11 +554,8 @@ const program = Effect.gen(function* () {
     yield* Console.error(JSON.stringify({ reconcile: report }));
   }
 
-  if (values["retry-parked"]) {
-    writeFileSync(
-      path.join(dir, "retried.json"),
-      JSON.stringify(yield* retryParked)
-    );
+  if (values["crash-limit"]) {
+    yield* endCrashLoopedTasks(new Set()).pipe(Effect.orDie);
   }
 
   yield* brain.resume;

@@ -76,8 +76,8 @@ import type {
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
 import { ThreadOpsItem, ThreadSnapshotItem } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
-import { copyJson, isJsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson, isJsonValue } from "@earendil-works/chord/json";
 import type {
   AssistantMessage,
   ImageContent,
@@ -918,7 +918,9 @@ const viewOf = (
     conversation: {
       id: piConversationId(ConversationId.make(thread.conversationId)),
     },
-    entries: thread.entries.slice(thread.head),
+    // pi-durable 1.5's view: the whole history in entry id order, a compaction's summary where it
+    // was written (the newest), not cutting the entries before it.
+    entries: thread.entries.toSorted((a, b) => a.id - b.id),
     docs,
   };
 };
@@ -4681,7 +4683,8 @@ const layerNoDeps = Layer.effectContext(
             data: { reason: "manual" },
           });
 
-          // The view starts at the summary and keeps the newest entry verbatim, as pi-durable's does.
+          // The model's context starts at the summary and keeps the newest entry verbatim, as
+          // pi-durable's does; the view keeps every entry in id order (`viewOf`).
           const withHead: EntryRecord =
             kept === undefined ? entry : { ...entry, head: kept.id };
 
@@ -4725,7 +4728,7 @@ const layerNoDeps = Layer.effectContext(
                       seq: next,
                       view: snapshot,
                       entriesOffset: 0,
-                      hasMoreHistory: thread.head > 0,
+                      hasMoreHistory: false,
                     })
                   );
                 }
@@ -4890,7 +4893,6 @@ const layerNoDeps = Layer.effectContext(
             conversationId: ConversationId.make(thread.conversationId),
             runId: Option.map(thread.run, (run) => RunId.make(run.runId)),
             queueLength: thread.queue.length,
-            parkedTaskIds: [],
             pendingApprovals: pending,
           });
         }
@@ -4916,16 +4918,6 @@ const layerNoDeps = Layer.effectContext(
       entryImage,
       events: Stream.fromPubSub(events),
       inspect,
-      // Nothing parks in a scripted store.
-      retry: (taskId) =>
-        Effect.fail(
-          new HarnessError({
-            message: `Task ${taskId} is not parked; the scripted harness parks nothing.`,
-            reason: "task_not_found",
-            retryable: false,
-            threadId: Option.none(),
-          })
-        ),
       capabilities: { durable: true, live: false },
     });
 

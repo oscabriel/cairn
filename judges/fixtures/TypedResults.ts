@@ -23,11 +23,11 @@
 import { Claude } from "@cairn/bridge/Claude";
 import type { ModelRef } from "@cairn/protocol/Models";
 import type { JsonObject } from "@cairn/protocol/Policy";
-import { copyJson } from "@earendil-works/chord";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { copyJson } from "@earendil-works/chord/json";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message, Models } from "@earendil-works/pi-ai";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
 import type { AgentChange, Extension } from "@earendil-works/pi-durable";
 import {
@@ -47,6 +47,7 @@ import {
   Result,
   Schema,
 } from "effect";
+import { Type } from "typebox";
 
 import { BridgeCwd } from "../../apps/server/src/brain/BridgeCwdExtension.ts";
 import {

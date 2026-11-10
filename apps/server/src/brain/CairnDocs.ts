@@ -41,8 +41,8 @@ import type {
   QuestionAnswer,
   RuntimeMode,
 } from "@cairn/protocol/Policy";
-import { copyJson } from "@earendil-works/chord";
-import type { JsonValue } from "@earendil-works/chord";
+import { copyJson } from "@earendil-works/chord/json";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ConversationId,
   Cursor,
@@ -50,6 +50,7 @@ import type {
   TaskId as PiTaskId,
   ToolExecutionApi,
   Tx,
+  WatchCall,
 } from "@earendil-works/pi-durable";
 import {
   defineDoc,
@@ -82,7 +83,7 @@ import {
 } from "../workflows/WorkflowDocs.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
-import { durable, handOff } from "./Durable.ts";
+import { documentCall, durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { emit } from "./Events.ts";
 import { piConversationId, piTaskId } from "./PiIds.ts";
@@ -802,7 +803,13 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
         );
 
         offer(watch.value);
-        watch.start(handOff(offer));
+        watch.start(
+          handOff((call: WatchCall<Readonly<ApprovalsState>>) => {
+            for (const value of Option.toArray(documentCall(call))) {
+              offer(value);
+            }
+          })
+        );
       });
     },
     { bufferSize: 1, strategy: "sliding" }
@@ -1730,7 +1737,7 @@ const sweepApprovals = (
  * abandoned are cancelled (`cancelAbandonedApprovals`), so no request nobody can answer stays
  * pending. Every conversation is read, not only those with live tasks, because the tool task of
  * such a record may already be terminal. None without a pi-durable `Brain`. Returns how many it
- * cancelled. `BootRepairs.ts` lists it before the parked approval waits are retried.
+ * cancelled. `BootRepairs.ts` lists it before the crash accounting (`CrashLimit.ts`).
  */
 export const cancelAbandonedApprovalsAtBoot = Effect.gen(function* () {
   const found = yield* Effect.serviceOption(Brain);

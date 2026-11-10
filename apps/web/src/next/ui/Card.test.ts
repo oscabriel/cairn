@@ -67,11 +67,11 @@ const app = appOf((h) => [
     {
       tone: "waiting",
       mark: Option.some("warning"),
-      title: "Parked.",
+      title: "Waiting.",
       detail: Option.none(),
       actions: [h.span([h.DataAttribute("testid", "retry")], ["Retry"])],
     },
-    [h.DataAttribute("testid", "parked")]
+    [h.DataAttribute("testid", "waiting")]
   ),
 ]);
 
@@ -124,7 +124,7 @@ describe("the next banner", () => {
       app,
       given,
       Scene.expect(Scene.testId("failed")).toHaveAttr("role", "alert"),
-      Scene.expect(Scene.testId("parked")).toHaveAttr("role", "status"),
+      Scene.expect(Scene.testId("waiting")).toHaveAttr("role", "status"),
       Scene.expect(Scene.testId("failed")).toHaveText(
         "Run failed. The provider refused the login."
       ),
@@ -143,7 +143,7 @@ describe("the next banner", () => {
         Scene.expect(Scene.selector('[data-glyph="failed"]')).toExist()
       ),
       Scene.inside(
-        Scene.testId("parked"),
+        Scene.testId("waiting"),
         Scene.expect(Scene.selector('[data-glyph="warning"]')).toExist(),
         Scene.expect(Scene.testId("retry")).toExist()
       ),

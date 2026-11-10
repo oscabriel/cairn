@@ -8,10 +8,10 @@
 // under `brain/`, where pi-durable may be imported in a test (S42).
 
 import type { JsonObject } from "@cairn/protocol/Policy";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -29,6 +29,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Context, Effect, Layer, Option } from "effect";
+import { Type } from "typebox";
 
 import {
   CAP_TEXT,

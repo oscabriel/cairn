@@ -20,7 +20,6 @@
 // The search tools run `rg` and `fd` as argv arrays, with no shell between the model and the process.
 
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
@@ -34,7 +33,15 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { Array as Arr, Context, Effect, Layer, Option } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+} from "effect";
+import { Type } from "typebox";
 
 import { Git } from "../git/Git.ts";
 import { threadProcessEnv } from "./Arms.ts";
@@ -207,25 +214,37 @@ export const bashTimeoutSeconds = (asked?: number): number =>
 const BASH_TIMEOUT_NOTE = `Without a timeout a command stops after ${BASH_DEFAULT_TIMEOUT_SECONDS} seconds; pass up to ${BASH_MAX_TIMEOUT_SECONDS} for a longer one.`;
 
 /** pi-durable's `bash` with a default and a maximum timeout, said in its description. */
-const boundedBash = (bash: ReturnType<typeof createBashTool>) => ({
-  ...bash,
-  description: `${bash.description} ${BASH_TIMEOUT_NOTE}`,
-  parameters: {
-    ...bash.parameters,
-    properties: {
-      ...bash.parameters.properties,
-      timeout: {
-        ...bash.parameters.properties.timeout,
-        description: `Timeout in seconds. ${BASH_TIMEOUT_NOTE}`,
+const boundedBash = (bash: ReturnType<typeof createBashTool>) => {
+  // pi-schema types every keyword `unknown`; the built-in `bash` schema has both as objects.
+  const { properties: declared } = bash.parameters;
+  const properties = Predicate.isObject(declared) ? declared : {};
+
+  const timeout =
+    Predicate.hasProperty(properties, "timeout") &&
+    Predicate.isObject(properties.timeout)
+      ? properties.timeout
+      : {};
+
+  return {
+    ...bash,
+    description: `${bash.description} ${BASH_TIMEOUT_NOTE}`,
+    parameters: {
+      ...bash.parameters,
+      properties: {
+        ...properties,
+        timeout: {
+          ...timeout,
+          description: `Timeout in seconds. ${BASH_TIMEOUT_NOTE}`,
+        },
       },
     },
-  },
-  execute: async (...[args, ...rest]: Parameters<typeof bash.execute>) =>
-    await bash.execute(
-      { ...args, timeout: bashTimeoutSeconds(args.timeout) },
-      ...rest
-    ),
-});
+    execute: async (...[args, ...rest]: Parameters<typeof bash.execute>) =>
+      await bash.execute(
+        { ...args, timeout: bashTimeoutSeconds(args.timeout) },
+        ...rest
+      ),
+  };
+};
 
 /** How the brain's `bash` is built. */
 export interface BashOptions {

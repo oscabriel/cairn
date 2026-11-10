@@ -118,7 +118,7 @@ describe("the rail and the project's list", () => {
       "waiting/needs/Approval",
       "working/busy/Working",
       "failed/failed/Failed",
-      "waiting/warning/Parked",
+      "waiting/warning/Limited",
       "done/done/Done",
       "neutral/idle/Idle",
     ]);

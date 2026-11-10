@@ -15,7 +15,7 @@
 // brain closes, and logging through the brain's logger.
 
 import { ThreadId } from "@cairn/protocol/Ids";
-import type { Context as ChordContext } from "@earendil-works/chord";
+import type { Context as ChordContext } from "@earendil-works/chord/context";
 import type { HookApi } from "@earendil-works/pi-durable";
 import {
   AgentDoc,

@@ -5,24 +5,28 @@
 //   (below) resumes at once only once boot resumed, because then its repairs already ran. A reopen
 //   before that waits for boot's `resume()`, which resumes whichever Session is open.
 // - Supervisor: a storage error fails the Session, which closes itself (`closed` resolves
-//   `failed`) and ends every watch with `session_failed`. The supervisor reopens from storage with
+//   `failed`) and ends every watch `failed`. The supervisor reopens from storage with
 //   backoff, and every client stream restarts from a fresh snapshot of the new Harness.
-// - Commits: `subscribeCommits` listeners are attached to each Session as it opens, before anything
-//   resumes it, so no commit of a resumed task is missed across a reopen.
-// - Reports: `onReport` only enqueues; a fiber logs each report, and `task_parked` reports feed
-//   `Parked`. pi-durable drops a throwing report callback, so nothing here may throw.
+// - Commits: `subscribeCommits` listeners are attached to each Session as it opens (pi-durable's
+//   `observeCommits`), before anything resumes it, so no commit of a resumed task is missed across a
+//   reopen. pi-durable hands them stored commits only: streamed progress arrives with the next
+//   commit that stores it, not one partial at a time.
+// - Reports: `onReport` only enqueues; a fiber logs each report. pi-durable drops a throwing report
+//   callback, so nothing here may throw.
+// - Restarts: the Harness never ends a task for crashes (`RestartLimit`, ADR 0046); boot's
+//   `crash limit` repair does Cairn's own crash accounting (`CrashLimit.ts`).
 // - Close: on scope close, the supervisor stops first, so a reopen it was making either published
 //   its Session or opened nothing (an open that hangs gives up at `BrainOpenTimeout`); then
 //   `harness.close` with a 5 s timeout. A task that ignores its
 //   signal keeps close pending; past the timeout the process exits anyway and the task counts one
 //   restart.
 //
-// Open and close follow cairn-v1, apps/server/src/Harnesses.ts at 1a5cd4a; the boot order and
-// retry come from spikes/3-workflows/brain.ts and spikes/4-approvals/brain.ts in this repo.
+// Open and close follow cairn-v1, apps/server/src/Harnesses.ts at 1a5cd4a; the boot order comes
+// from spikes/3-workflows/brain.ts and spikes/4-approvals/brain.ts in this repo.
 
-import { ConversationId, TaskId } from "@cairn/protocol/Ids";
 import type {
   CommitPublication,
+  Report,
   ReportInfo,
   Storage,
 } from "@earendil-works/pi-durable";
@@ -32,6 +36,7 @@ import {
   Context,
   Duration,
   Effect,
+  Function,
   Layer,
   Option,
   Queue,
@@ -49,7 +54,7 @@ import { BrainStore } from "./BrainStore.ts";
 import { durable, errorText } from "./Durable.ts";
 import { Extensions } from "./Extensions.ts";
 import { ModelSource } from "./ModelSource.ts";
-import { Parked } from "./Parked.ts";
+import { RestartLimit } from "./RestartLimit.ts";
 
 /** How long shutdown waits for running tasks to stop. What still runs resumes as interrupted. */
 const CLOSE_TIMEOUT = Duration.seconds(5);
@@ -81,21 +86,15 @@ export type CommitListener = (
   publication: CommitPublication
 ) => void;
 
-/** A report pi-durable made, as the brain logs it. */
-interface Report {
-  readonly error: string;
-  readonly info: ReportInfo;
-}
-
 const reportFields = (info: ReportInfo) =>
   "task" in info && info.task !== undefined
     ? {
-        type: info.type,
+        type: info.kind,
         taskId: info.task.id,
         task: info.task.kind,
         conversationId: info.task.conversationId,
       }
-    : { type: info.type };
+    : { type: info.kind };
 
 const reopenSchedule = Schedule.min([
   Schedule.exponential(Duration.millis(250)),
@@ -133,7 +132,7 @@ export class Brain extends Context.Service<
       const models = yield* ModelSource;
       const arms = yield* Arms;
       const extensions = yield* Extensions;
-      const parked = yield* Parked;
+      const restartLimit = yield* RestartLimit;
       const clock = yield* Clock.Clock;
 
       const now = () => clock.currentTimeMillisUnsafe();
@@ -147,19 +146,12 @@ export class Brain extends Context.Service<
       const reports = yield* Queue.unbounded<Report>();
 
       const logReport = Effect.fn("Brain.report")(function* (report: Report) {
-        const { info } = report;
-
         yield* Effect.logWarning("pi-durable report").pipe(
-          Effect.annotateLogs({ ...reportFields(info), error: report.error })
+          Effect.annotateLogs({
+            ...reportFields(report),
+            error: errorText(report.error),
+          })
         );
-
-        if (info.type === "task_parked") {
-          yield* parked.add({
-            taskId: TaskId.make(info.task.id),
-            conversationId: ConversationId.make(info.task.conversationId),
-            kind: info.task.kind,
-          });
-        }
       });
 
       yield* Queue.take(reports).pipe(
@@ -181,12 +173,17 @@ export class Brain extends Context.Service<
       const detach = new Map<CommitListener, () => void>();
 
       const attach = (session: BrainSession, listener: CommitListener) => {
-        detach.set(
-          listener,
-          session.harness.subscribeCommits((publication) => {
+        const observation = session.harness.observeCommits({
+          advance: (publication) => {
             listener(session, publication);
-          })
-        );
+          },
+          // The Session's close or failure; the supervisor hears it through `closed`.
+          end: Function.constVoid,
+        });
+
+        detach.set(listener, () => {
+          observation.detach();
+        });
       };
 
       let latest: BrainSession | undefined;
@@ -201,13 +198,16 @@ export class Brain extends Context.Service<
               storage,
               {
                 models: () => models.models(),
-                settings: () => models.settings(),
+                settings: () => ({
+                  ...models.settings(),
+                  restartLimit,
+                }),
                 registry,
                 env: arms.env,
                 now,
                 // pi-durable calls this on its own stack; it only enqueues.
-                onReport: (cause, info) => {
-                  Queue.offerUnsafe(reports, { error: errorText(cause), info });
+                onReport: (report) => {
+                  Queue.offerUnsafe(reports, report);
                 },
               },
               context
@@ -285,7 +285,7 @@ export class Brain extends Context.Service<
             async () => await session.harness.closed
           );
 
-          if (end.reason === "closed") {
+          if (end.kind === "closed") {
             return yield* Effect.void;
           }
 

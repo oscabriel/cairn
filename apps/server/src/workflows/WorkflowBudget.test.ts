@@ -8,8 +8,8 @@ import type { Envelope } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
@@ -19,14 +19,12 @@ import { DateTime, Effect, Option, Predicate } from "effect";
 
 import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { taskOf } from "../subagents/Delivery.ts";
 import {
   effectiveBudget,
   raisedBudget,
   responsePrice,
   RAISE_TOOL,
   spendOf,
-  STOPPER_TASK,
   standingOf,
   workflowBudgetReactor,
   workflowRaiseIdOf,
@@ -36,7 +34,6 @@ import type { BudgetState, WorkflowItemState } from "./WorkflowDocs.ts";
 import { isNodeEnded, isWorkflowEnded, WorkflowsDoc } from "./WorkflowDocs.ts";
 import { isNodeBrief } from "./WorkflowLaunch.ts";
 import { BUDGET_STOP_TEXT, CHILD_STOPPED_TEXT } from "./WorkflowNodes.ts";
-import { parkedWorkflowTasks } from "./WorkflowRepairs.ts";
 import {
   ALT_MODEL,
   codemodeResultText,
@@ -51,11 +48,7 @@ import {
   runScript,
 } from "./WorkflowTestKit.ts";
 import type { KitBrain, KitEvent, WorkEffect } from "./WorkflowTestKit.ts";
-import {
-  CONTINUE_TEXT,
-  NO_WORKFLOW_FAULTS,
-  WATCH_TASK,
-} from "./WorkflowTools.ts";
+import { CONTINUE_TEXT, NO_WORKFLOW_FAULTS } from "./WorkflowTools.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -662,8 +655,9 @@ const b = await agent("node:b", { label: "b" });
 await approve({ summary: "Go on?" });
 const c = await agent("node:c", { label: "c" });
 return { a, b, c };`,
-          // Past what a's first response uses, short of both: a's answer reaches the line.
-          { ...DEFAULT_BUDGET, maxTokens: 6000 },
+          // Short of what a's first response uses (5,518 tokens on pi-ai 1.5's faux provider), so
+          // a's answer reaches the line.
+          { ...DEFAULT_BUDGET, maxTokens: 5000 },
           { raise: true }
         );
 
@@ -717,28 +711,6 @@ return { a, b };`,
       }),
     30_000
   );
-});
-
-/** A task as the boot repair inspects it: blocked for `reason`. */
-const blockedTask = (id: number, kind: string, reason: string) => ({
-  record: { id: taskOf(id), kind },
-  state: { kind: "blocked", reason },
-});
-
-describe("the boot repair", () => {
-  it("retries a parked watcher or stopper, and nothing else", () => {
-    const task = blockedTask;
-
-    assert.deepStrictEqual(
-      parkedWorkflowTasks([
-        task(1, WATCH_TASK, "restart_limit"),
-        task(2, STOPPER_TASK, "restart_limit"),
-        task(3, STOPPER_TASK, "waiting"),
-        task(4, "cairn.subagent-reporter", "restart_limit"),
-      ]),
-      [taskOf(1), taskOf(2)]
-    );
-  });
 });
 
 describe("usage holds on pi-durable", () => {

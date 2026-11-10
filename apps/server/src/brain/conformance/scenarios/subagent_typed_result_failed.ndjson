@@ -13,7 +13,7 @@
 {"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
 {"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
 {"type":"expect_view","path":["transcriptLength"],"equals":6,"thread":"child1"}
-{"type":"expect_view","path":["transcript",4,"text"],"equals":"submit_result rejected (attempt 2 of 2):\n  - result.count: must have required properties count\nThe result was rejected twice; reply in plain text with what you found.","thread":"child1"}
+{"type":"expect_view","path":["transcript",4,"text"],"equals":"submit_result rejected (attempt 2 of 2):\n  - result.count: missing\nThe result was rejected twice; reply in plain text with what you found.","thread":"child1"}
 {"type":"expect_view","path":["running"],"equals":false,"thread":"child1"}
 {"type":"expect_view","path":["transcript",-3],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) failed.\n<subagent_result>\nThere are 4 files; I could not fit the schema.\n</subagent_result>\nDivergence: not reported\nError: The result was rejected twice; reply in plain text with what you found.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"The child could not report.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

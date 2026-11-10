@@ -7,8 +7,8 @@
 // descendant's request shown on its ancestors, a finished run whose children still work reading
 // "Waiting", and the top label falling back to "Woke", then "Done". Changed: one function over
 // Cairn's shell row gives the state, its category from docs/golden/thread-states.md, the word and
-// its tone, and the hold the banner shows; Cairn adds parked, a brief ("Go"), a child that asked its
-// parent and queued input, and holds for a parked task, a spent plan window and a Claude slot.
+// its tone, and the hold the banner shows; Cairn adds a brief ("Go"), a child that asked its parent
+// and queued input, and holds for a spent plan window and a Claude slot.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -27,9 +27,9 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import type { TaskId, ThreadId } from "@cairn/protocol/Ids";
+import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
-import { Array, Data, DateTime, Option } from "effect";
+import { Data, DateTime, Option } from "effect";
 
 import { hasUnseenCompletion } from "./PresentThreadShell.ts";
 import type { SubagentRequest } from "./SubagentRollup.ts";
@@ -43,7 +43,6 @@ export type ThreadStatus =
   | "asking-parent"
   | "working"
   | "waiting"
-  | "parked"
   | "failed"
   | "limited"
   | "ready";
@@ -96,7 +95,6 @@ export const THREAD_LABELS: Readonly<Record<ThreadLabelKind, ThreadLabel>> = {
   },
   working: { kind: "working", word: "Working", tone: "info" },
   waiting: { kind: "waiting", word: "Waiting", tone: "muted" },
-  parked: { kind: "parked", word: "Parked", tone: "warning" },
   failed: { kind: "failed", word: "Failed", tone: "error" },
   limited: { kind: "limited", word: "Limited", tone: "warning" },
   woke: { kind: "woke", word: "Woke", tone: "warning" },
@@ -105,7 +103,6 @@ export const THREAD_LABELS: Readonly<Record<ThreadLabelKind, ThreadLabel>> = {
 
 /** What holds the thread up beyond the user, most urgent first: the banner above an open thread. */
 export type ThreadHold = Data.TaggedEnum<{
-  Parked: { readonly taskId: TaskId };
   Limited: { readonly resetsAt: ThreadShell["usageLimitResetAt"] };
   WaitingForSlot: { readonly threadId: ThreadId };
 }>;
@@ -120,7 +117,6 @@ export const HOLD_LABELS: Readonly<
     { readonly word: string; readonly tone: ThreadTone }
   >
 > = {
-  Parked: { word: "Parked", tone: "warning" },
   Limited: { word: "Limited", tone: "warning" },
   WaitingForSlot: { word: "Waiting", tone: "info" },
 };
@@ -135,7 +131,6 @@ export type ThreadStateRow = Pick<
   | "usageLimitResetAt"
   | "waitingFor"
   | "pendingRuntimeRequest"
-  | "parkedTaskIds"
   | "subagents"
 >;
 
@@ -145,24 +140,13 @@ const isUsageLimited = (
   thread.activity === "failed" &&
   Option.contains(thread.lastErrorClass, "usage_limit");
 
-/** What holds `thread` up beyond the user, if anything: a parked task, a spent window, a slot. */
+/** What holds `thread` up beyond the user, if anything: a spent window, a slot. */
 export const threadHold = (
   thread: Pick<
     ThreadShell,
-    | "id"
-    | "activity"
-    | "lastErrorClass"
-    | "usageLimitResetAt"
-    | "waitingFor"
-    | "parkedTaskIds"
+    "id" | "activity" | "lastErrorClass" | "usageLimitResetAt" | "waitingFor"
   >
 ): Option.Option<ThreadHold> => {
-  const parked = Array.head(thread.parkedTaskIds);
-
-  if (Option.isSome(parked)) {
-    return Option.some(ThreadHold.Parked({ taskId: parked.value }));
-  }
-
   if (isUsageLimited(thread)) {
     return Option.some(
       ThreadHold.Limited({ resetsAt: thread.usageLimitResetAt })
@@ -183,7 +167,7 @@ const hasChildrenAtWork = (thread: Pick<ThreadShell, "subagents">): boolean =>
 /**
  * A thread's status. A request for the user first, its own (approval, a brief's Go, then a
  * question) or a descendant's (`subagentRequest`, approval over input); then a child waiting on
- * its parent's answer; then busy work; then a parked task; then the latest run's failure (a spent
+ * its parent's answer; then busy work; then the latest run's failure (a spent
  * plan window reads as limited); then a finished run whose children still work, "Waiting".
  */
 export const threadStatus = (
@@ -227,10 +211,6 @@ export const threadStatus = (
     return "waiting";
   }
 
-  if (thread.activity === "parked" || thread.parkedTaskIds.length > 0) {
-    return "parked";
-  }
-
   if (thread.activity === "failed") {
     return Option.contains(thread.lastErrorClass, "usage_limit")
       ? "limited"
@@ -247,7 +227,6 @@ const STATUS_CATEGORIES: Readonly<Record<ThreadStatus, ThreadCategory>> = {
   "asking-parent": "held",
   working: "active",
   waiting: "active",
-  parked: "held",
   failed: "failed",
   limited: "held",
   ready: "resting",

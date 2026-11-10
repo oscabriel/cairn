@@ -13,8 +13,8 @@ import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { ApprovalsDocument, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
-import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { copyJson } from "@earendil-works/chord/json";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import {
   createSession,
@@ -22,6 +22,7 @@ import {
   defineTask,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { commitWrites } from "@earendil-works/pi-durable/testing";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
 
@@ -1233,7 +1234,8 @@ describe("an escalated question's mirror", () => {
           assert.isDefined(task);
 
           if (task !== undefined) {
-            await storage.commit(
+            await commitWrites(
+              storage,
               [{ type: "task", value: { ...task, abortRequested: true } }],
               context
             );

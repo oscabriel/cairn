@@ -10,5 +10,6 @@
 {"type":"input","step":"compact"}
 {"type":"expect_event","event":{"_tag":"CompactionStarted"}}
 {"type":"expect_event","event":{"_tag":"CompactionEnded","failed":false}}
-{"type":"expect_view","path":["transcript",0,"kind"],"equals":"pi.compaction"}
-{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"two","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["transcript",-1,"kind"],"equals":"pi.compaction"}
+{"type":"expect_view","path":["transcript",0],"equals":{"kind":"pi.user","role":"user","text":"turn one","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["transcript",-2],"equals":{"kind":"pi.assistant","role":"assistant","text":"two","images":0,"toolCalls":[],"toolName":null,"isError":null}}

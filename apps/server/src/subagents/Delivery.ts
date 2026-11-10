@@ -13,12 +13,11 @@ import type {
   SubagentSettlement,
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ConversationId as PiConversationId,
   Tx,
 } from "@earendil-works/pi-durable";
-import { DEFAULT_RESTART_LIMIT } from "@earendil-works/pi-durable";
 import { Option } from "effect";
 
 import { RUN_TASK } from "../brain/CommitFeed.ts";
@@ -35,10 +34,10 @@ export const taskOf = (id: number) => piTaskId(TaskId.make(id));
 
 /**
  * Why a parent cannot take a child's result or question now (table reads): its newest run ended by
- * a stop or a failure, or the crash-loop guard parked it (cut off `DEFAULT_RESTART_LIMIT` times in
- * a row), and no input started another since. None while it runs or idles after a completed run.
- * Nothing restarts a thread the user stopped and a parked run waits for a retry, so a halted
- * parent is not woken and its child's questions go to the user (ADR 0027, ADR 0028).
+ * a stop or a failure (boot's crash accounting ends a run crashes cut off too often, `CrashLimit.ts`)
+ * and no input started another since. None while it runs or idles after a completed run. Nothing
+ * restarts a thread the user stopped, so a halted parent is not woken and its child's questions go
+ * to the user (ADR 0027, ADR 0028).
  */
 export const parentHalt = async (
   tx: Tx,
@@ -55,16 +54,9 @@ export const parentHalt = async (
     return Option.none();
   }
 
-  if (last.state.status === "terminal") {
-    return last.state.outcome.status === "completed"
-      ? Option.none()
-      : Option.some(EscalationWhy.parentStopped);
-  }
-
-  return last.state.status !== "completing" &&
-    !last.abortRequested &&
-    (last.restarts ?? 0) >= DEFAULT_RESTART_LIMIT
-    ? Option.some(EscalationWhy.parentParked)
+  return last.state.status === "terminal" &&
+    last.state.outcome.status !== "completed"
+    ? Option.some(EscalationWhy.parentStopped)
     : Option.none();
 };
 

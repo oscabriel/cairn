@@ -1,6 +1,5 @@
 // Boot: its order (repairs, resume, reconcile, then ready), the serving gate on a real socket (`/ws`
-// answers 503 until boot is done, then upgrades), the repair that retries parked approval waits,
-// and the one number that matters from the 300-conversation scale probe (plan D1): under 3 s from
+// answers 503 until boot is done, then upgrades), and the one number that matters from the 300-conversation scale probe (plan D1): under 3 s from
 // opening the stores to ready over a brain of 300 threads.
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -8,13 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  ApprovalId,
-  ConversationId,
-  ProjectId,
-  RunId,
-  TaskId,
-} from "@cairn/protocol/Ids";
+import { ProjectId, RunId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it, layer } from "@effect/vitest";
@@ -29,7 +22,6 @@ import {
   Ref,
   References,
   Schema,
-  Stream,
 } from "effect";
 import { HttpServer } from "effect/http";
 import { TestClock } from "effect/testing";
@@ -41,11 +33,10 @@ import {
   ThreadsLive,
   withCatalog,
 } from "./AppLayer.ts";
-import { retryParkedApprovalWaits, runBoot } from "./Boot.ts";
+import { runBoot } from "./Boot.ts";
+import { endCrashLoopedTasks } from "./brain/CrashLimit.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
-import type { LiveThreadState } from "./brain/HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "./brain/ModelSource.ts";
-import { Parked } from "./brain/Parked.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
@@ -84,37 +75,7 @@ import {
 import { ThreadRows } from "./shell/ThreadRows.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
-import { START_TASK } from "./subagents/SubagentTasks.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
-
-const unsupported = (operation: string) =>
-  Effect.die(`the fake harness does not ${operation}`);
-
-/** A harness that answers `inspect` from a list and records `retry`. */
-const fakeHarness = (
-  live: ReadonlyArray<LiveThreadState>,
-  retried: Ref.Ref<ReadonlyArray<TaskId>>
-) =>
-  HarnessSeam.of({
-    ensureThread: () => unsupported("ensure threads"),
-    configure: () => unsupported("configure"),
-    submit: () => unsupported("submit"),
-    stop: () => unsupported("stop"),
-    withdraw: () => unsupported("withdraw"),
-    respond: () => unsupported("respond"),
-    write: () => unsupported("write"),
-    compact: () => unsupported("compact"),
-    watch: () => Stream.die("the fake harness does not watch"),
-    whenEnsured: () => unsupported("wait for threads"),
-    document: () => unsupported("read documents"),
-    history: () => unsupported("page history"),
-    entry: () => unsupported("read entries"),
-    entryImage: () => unsupported("read images"),
-    events: Stream.never,
-    inspect: Effect.succeed(live),
-    retry: (taskId) => Ref.update(retried, (tasks) => [...tasks, taskId]),
-    capabilities: { durable: false, live: false },
-  });
 
 describe("boot", () => {
   it.effect(
@@ -131,7 +92,6 @@ describe("boot", () => {
           reconcile: record("reconcile").pipe(
             Effect.as({ threads: 2, live: 1, patched: 1 })
           ),
-          refresh: () => Effect.void,
           flushAll: Effect.void,
         });
 
@@ -188,7 +148,6 @@ describe("boot", () => {
 
       const projector = ShellProjector.of({
         reconcile: Effect.succeed({ threads: 0, live: 0, patched: 0 }),
-        refresh: () => Effect.void,
         flushAll: Effect.void,
       });
 
@@ -212,96 +171,6 @@ describe("boot", () => {
       yield* TestClock.adjust("1 minute");
       assert.deepStrictEqual(slow, ["resume"], "the reconcile was quick");
     }).pipe(Effect.provide(Health.layer))
-  );
-
-  it.effect(
-    "the repair retries every parked task of a thread waiting on an approval, and no other",
-    () =>
-      Effect.gen(function* () {
-        const retried = yield* Ref.make<ReadonlyArray<TaskId>>([]);
-
-        const live: ReadonlyArray<LiveThreadState> = [
-          {
-            threadId: testThreadId(1),
-            conversationId: ConversationId.make(1),
-            runId: Option.some(RunId.make(3)),
-            queueLength: 0,
-            parkedTaskIds: [TaskId.make(4), TaskId.make(5)],
-            pendingApprovals: [
-              {
-                id: ApprovalId.make("apr_pending"),
-                kind: "tool-call",
-                askedAt: 0,
-                route: "user",
-                origin: Option.none(),
-              },
-            ],
-          },
-          {
-            threadId: testThreadId(2),
-            conversationId: ConversationId.make(2),
-            runId: Option.some(RunId.make(6)),
-            queueLength: 0,
-            parkedTaskIds: [TaskId.make(7)],
-            pendingApprovals: [],
-          },
-        ];
-
-        yield* retryParkedApprovalWaits.repair.pipe(
-          Effect.provideService(HarnessSeam, fakeHarness(live, retried))
-        );
-
-        assert.deepStrictEqual(yield* Ref.get(retried), [
-          TaskId.make(4),
-          TaskId.make(5),
-        ]);
-      })
-  );
-
-  it.effect(
-    "the repair leaves a parked start task for a human Retry, even beside a pending approval",
-    () =>
-      Effect.gen(function* () {
-        const retried = yield* Ref.make<ReadonlyArray<TaskId>>([]);
-        const parked = yield* Parked;
-
-        // A parent with a second brief pending, whose Go'd start the guard parked (ADR 0030).
-        yield* parked.add({
-          taskId: TaskId.make(4),
-          conversationId: ConversationId.make(1),
-          kind: "pi.tool",
-        });
-        yield* parked.add({
-          taskId: TaskId.make(5),
-          conversationId: ConversationId.make(1),
-          kind: START_TASK,
-        });
-
-        const live: ReadonlyArray<LiveThreadState> = [
-          {
-            threadId: testThreadId(1),
-            conversationId: ConversationId.make(1),
-            runId: Option.none(),
-            queueLength: 0,
-            parkedTaskIds: [TaskId.make(4), TaskId.make(5)],
-            pendingApprovals: [
-              {
-                id: ApprovalId.make("apr_second_brief"),
-                kind: "brief",
-                askedAt: 0,
-                route: "user",
-                origin: Option.none(),
-              },
-            ],
-          },
-        ];
-
-        yield* retryParkedApprovalWaits.repair.pipe(
-          Effect.provideService(HarnessSeam, fakeHarness(live, retried))
-        );
-
-        assert.deepStrictEqual(yield* Ref.get(retried), [TaskId.make(4)]);
-      }).pipe(Effect.provide(Parked.layer))
   );
 });
 
@@ -576,7 +445,7 @@ const bootBrain = (dataDir: string) =>
     );
 
     const report = yield* runBoot({
-      repairs: retryParkedApprovalWaits.repair,
+      repairs: endCrashLoopedTasks(new Set()).pipe(Effect.orDie),
       resume: HarnessBoot.use((boot) => boot.resume),
     }).pipe(Effect.provideContext(context));
 

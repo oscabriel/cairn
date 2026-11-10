@@ -29,7 +29,7 @@ import { parseArgs } from "node:util";
 
 import { ConversationId } from "@cairn/protocol/Ids";
 import type { EventName } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Tx } from "@earendil-works/pi-durable";
 import {
   defineDoc,
@@ -61,7 +61,6 @@ import {
   Extensions,
 } from "../../../apps/server/src/brain/Extensions.ts";
 import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
-import { Parked } from "../../../apps/server/src/brain/Parked.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { ReactorSet } from "../../../apps/server/src/brain/ReactorSet.ts";
 
@@ -266,7 +265,6 @@ const JudgeLayer = hostLayer.pipe(
       Layer.provide(Arms.layer)
     )
   ),
-  Layer.provide(Parked.layer),
   Layer.provide(
     Extensions.fromSources([
       Effect.succeed({ order: ExtensionOrder.judge, extension: JudgeTasks }),

@@ -27,7 +27,7 @@ import type { FakeScript } from "@cairn/bridge/ClaudeSdk";
 import { ClaudeSdkScripts } from "@cairn/bridge/ClaudeSdk";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import {
   createRegistry,
@@ -40,6 +40,7 @@ import type { ModelRef } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option, Ref, Schedule } from "effect";
+import { Type } from "typebox";
 
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";

@@ -147,15 +147,21 @@ const playSteps = (source: string) =>
 
       const seen: Array<Revision> = [merged()];
 
-      watch.start(async (value) => {
-        latest = value;
-        seen.push(merged());
+      watch.start(async (call) => {
+        if (call.kind === "value") {
+          latest = call.value;
+          seen.push(merged());
+        }
+
         await Promise.resolve();
       });
 
-      docWatch.start(async (value) => {
-        ledger = value;
-        seen.push(merged());
+      docWatch.start(async (call) => {
+        if (call.kind === "value") {
+          ledger = call.value;
+          seen.push(merged());
+        }
+
         await Promise.resolve();
       });
 

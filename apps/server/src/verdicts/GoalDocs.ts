@@ -15,7 +15,7 @@
 
 import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import type { CriterionState, JudgeRef } from "@cairn/protocol/Policy";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { Match } from "effect";
 

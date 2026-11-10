@@ -22,7 +22,7 @@ const failed: Partial<ThreadShell> = {
   lastErrorClass: Option.some("provider_error"),
 };
 
-// The managed rows that ask: the approval, the failure, the parked task and the unseen result.
+// The managed rows that ask: the approval, the failure, the spent plan window and the unseen result.
 const ASKING = 4;
 
 describe("the favicon badge", () => {

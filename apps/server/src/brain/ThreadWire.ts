@@ -49,9 +49,9 @@ import {
   VISIBLE_DOCUMENTS,
   WIRE_STRING_LIMIT_BYTES,
 } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
-import { isJsonValue } from "@earendil-works/chord";
 import { diffRevisions } from "@earendil-works/chord/delta";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { isJsonValue } from "@earendil-works/chord/json";
 import type {
   EntryRecord,
   ConversationView as PiConversationView,

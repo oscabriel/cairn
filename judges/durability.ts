@@ -17,9 +17,9 @@
 // send-in-flight (the kill lands before `thread.send` answers; the client resends the same request
 // id), mid-upload (the kill lands while a 20 MB upload streams to its `.part` file; the client
 // retries with a new signed URL and sends the turn), during-launch (the kill lands inside
-// `thread.launch`; the client resends the same command id), kill-six (five kills while `slow` runs
-// park its tasks, then `thread.retryTask` finishes the turn), sigterm-six (six clean restarts while
-// `slow` runs park nothing).
+// `thread.launch`; the client resends the same command id), kill-six (six kills while `slow` runs:
+// crashes end no tool call (ADR 0046), so the turn finishes with nothing retried), sigterm-six (six
+// clean restarts while `slow` runs count no crash).
 //
 // Gated windows (ADR 0031): a thread in Supervised calls the real `bash`, which asks first, so
 // each kill lands somewhere in the gated wrapper. gated-bash-wait (while `bash` waits for its
@@ -91,7 +91,6 @@ import {
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { AttachmentRef } from "@cairn/protocol/Attachments";
-import type { TaskId } from "@cairn/protocol/Ids";
 import { CommandId, ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import type { CairnRpcs } from "@cairn/protocol/Rpc";
@@ -2097,7 +2096,7 @@ const plans: Readonly<Record<WindowName, Plan>> = {
       Effect.gen(function* () {
         let committed: ReadonlyArray<Entry> = [];
 
-        for (let kill = 1; kill <= 5; kill += 1) {
+        for (let kill = 1; kill <= 6; kill += 1) {
           yield* until(
             "slow to run",
             Effect.map(viewOf(context.follower), (view) =>
@@ -2116,48 +2115,9 @@ const plans: Readonly<Record<WindowName, Plan>> = {
           yield* measureRestart(context, restart);
         }
 
-        // Five crashes in a row without new state park the tool: the shell lists it with Retry.
-        const parked = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(context.brain);
-            const watcher = yield* makeFollower;
-
-            yield* follow(client, context.threadId, watcher, false);
-
-            yield* until(
-              "the parked task in the shell",
-              Effect.map(rowOf(watcher, context.threadId), (row) =>
-                Option.exists(row, (thread) => thread.parkedTaskIds.length > 0)
-              ),
-              "20 seconds"
-            );
-
-            const row = yield* rowOf(watcher, context.threadId);
-
-            const tasks = Option.match(row, {
-              onNone: (): ReadonlyArray<TaskId> => [],
-              onSome: (thread) => thread.parkedTaskIds,
-            });
-
-            for (const taskId of tasks) {
-              yield* client["thread.retryTask"]({
-                threadId: context.threadId,
-                taskId,
-              }).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new WindowFailed({
-                      message: `thread.retryTask ${taskId} failed: ${String(error)}`,
-                    })
-                )
-              );
-            }
-
-            return tasks.length;
-          })
-        );
-
-        context.measures.notes.push(`parked ${parked} tasks, retried each`);
+        // Six crashes in a row without new state: past pi-durable's default limit, and the turn
+        // still finishes, with nobody retrying anything (ADR 0046).
+        context.measures.notes.push("six kills, nothing retried");
 
         return { committed };
       }),
@@ -2224,29 +2184,7 @@ const plans: Readonly<Record<WindowName, Plan>> = {
           );
         }
 
-        const parkedRow = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(context.brain);
-            const watcher = yield* makeFollower;
-
-            yield* follow(client, context.threadId, watcher, false);
-            yield* until(
-              "the shell after the restarts",
-              Effect.map(rowOf(watcher, context.threadId), Option.isSome),
-              "10 seconds"
-            );
-
-            return yield* rowOf(watcher, context.threadId);
-          })
-        );
-
-        if (
-          Option.exists(parkedRow, (thread) => thread.parkedTaskIds.length > 0)
-        ) {
-          return yield* fail("a clean restart parked a task");
-        }
-
-        context.measures.notes.push("six clean restarts parked nothing");
+        context.measures.notes.push("six clean restarts, no crash counted");
 
         return { committed };
       }),

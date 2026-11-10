@@ -66,9 +66,8 @@ import { Budget, DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
 import { MAX_WORKFLOW_NODES } from "@cairn/protocol/Workflows";
 import type { NodeRefusal } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   AgentChange,
   ConversationId,
@@ -87,6 +86,7 @@ import {
   UsageDoc,
 } from "@earendil-works/pi-durable";
 import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
+import { Type } from "typebox";
 
 import {
   approvalIdOf,

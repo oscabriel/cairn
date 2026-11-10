@@ -5,13 +5,16 @@ packages:
 # Versions that must move together are pinned here once.
 catalog:
   # pi, one release for every package.
-  "@earendil-works/chord": 1.4.0
-  "@earendil-works/pi-ai": 1.4.0
-  "@earendil-works/pi-codemode": 1.4.0
-  "@earendil-works/pi-coding-agent": 1.4.0
-  "@earendil-works/pi-durable": 1.4.0
-  "@earendil-works/pi-env": 1.4.0
-  "@earendil-works/pi-mcp": 1.4.0
+  "@earendil-works/chord": 1.5.1
+  "@earendil-works/pi-ai": 1.5.1
+  "@earendil-works/pi-codemode": 1.5.1
+  "@earendil-works/pi-coding-agent": 1.5.1
+  "@earendil-works/pi-durable": 1.5.1
+  "@earendil-works/pi-env": 1.5.1
+  "@earendil-works/pi-mcp": 1.5.1
+  # TypeBox, for tool parameter schemas: pi-ai stopped re-exporting `Type` in 1.5.0. The version
+  # pi-coding-agent 1.5.1 depends on.
+  typebox: 1.3.27
   # Effect and every @effect/* package.
   "@effect/platform-browser": 4.1.2
   "@effect/platform-node": 4.1.2

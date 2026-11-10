@@ -3,7 +3,7 @@
 // in a scratch directory with Cairn's code mode, workflows and results extensions, never the
 // deployed unit) runs a workflow while the judge `kill -9`s it at named moments. Spike 3's kill
 // cases are carried over onto the real node tools and ledger, and extended; its whole-workflow
-// `abort`, `decline` and five-kill park cases are not yet (see the package report).
+// `abort` and `decline` cases are not yet (see the package report).
 //
 //   node judges/workflow-kill.ts [--case <name>]... [--keep]
 //
@@ -14,11 +14,12 @@
 // while the script's question waits), divergence (the stored start data changed between lives, as
 // a pi bump does), and control (a dispatch that ignores its row; it must fail by dispatching twice).
 //
-// Park: five kills while a node is held park the run's tasks (pi-durable's restart limit); the
-// last life retries every parked task but the watchers, as the user's Retry would, and the boot
-// repair retries the watchers (WorkflowRepairs.ts), so the workflow still ends `finished` with
-// every node once. Its control leaves the watchers parked: the script ends, its row stays
-// `running`, and the case must fail by stalling.
+// Crash loop (ADR 0046): six kills while a node is held cut every task of the run off past
+// pi-durable's default restart limit; the last life runs the brain's crash accounting, which ends
+// none of the workflow's tasks (tool calls and watchers are waits it keeps), so the workflow still
+// ends `finished` with every node once and nobody retries anything. Its control opens the last life
+// with pi-durable's own restart limit, as a bump that kept it would: the script call ends with a
+// restart-limit error, its row stays `running`, and the case must fail by stalling.
 //
 // Stop matrix (the probe's five cases on the real `agent` tool, plus one): stop, stop-kill,
 // kill-stop, mark-kill (a kill between the abort mark and the node seeing it), uncaught-stop-kill
@@ -82,8 +83,8 @@ interface CaseSpec {
   readonly lives: ReadonlyArray<Life>;
   /** A broken control, and the failure it must show; none for a case that must pass. */
   readonly control: Option.Option<Failure["kind"]>;
-  /** Whether the last life must find tasks parked and the boot repair retry its watchers. */
-  readonly parks: boolean;
+  /** Whether the last life must find tasks cut off past the limit, and end none of them. */
+  readonly loops: boolean;
   readonly expect: {
     /** Node briefs the envelope did not cover: cards the user saw. */
     readonly cards: number;
@@ -130,7 +131,7 @@ const killCase = (
   script,
   lives,
   control: Option.none(),
-  parks: false,
+  loops: false,
   expect: FINISHED_ALL,
 });
 
@@ -146,7 +147,7 @@ const stopCase = (
   script,
   lives,
   control: Option.none(),
-  parks: false,
+  loops: false,
   expect: {
     ...FINISHED_ALL,
     stopped: Option.some(stopped),
@@ -176,15 +177,15 @@ const envelopeCase = (
   script: "envelope.workflow",
   lives,
   control,
-  parks: false,
+  loops: false,
   expect,
 });
 
 /**
- * Five lives killed while node b is held after its reserve, so every task of the run is cut off
- * five times in a row and the next life finds them parked by the restart limit.
+ * Six lives killed while node b is held after its reserve, so every task of the run is cut off six
+ * times in a row, past pi-durable's default restart limit, when the next life opens.
  */
-const PARKING_LIVES: ReadonlyArray<Life> = Array.from({ length: 5 }, () =>
+const CRASH_LIVES: ReadonlyArray<Life> = Array.from({ length: 6 }, () =>
   life(["--hold", "after-reserve:b:60000"], {
     line: "holding after-reserve b",
     delayMs: 200,
@@ -249,7 +250,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(["--answer"]),
     ],
     control: Option.none(),
-    parks: false,
+    loops: false,
     expect: { ...FINISHED_ALL, settled: ["a"], approveRecords: 1 },
   },
   {
@@ -261,7 +262,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(["--diverge"]),
     ],
     control: Option.none(),
-    parks: false,
+    loops: false,
     expect: {
       ...FINISHED_ALL,
       state: "failed",
@@ -283,25 +284,25 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(["--control", "--briefs", "accept"]),
     ],
     control: Option.some("duplicate"),
-    parks: false,
+    loops: false,
     expect: FINISHED_ALL,
   },
   {
-    name: "park-watcher",
+    name: "crash-loop",
     matrix: "kill",
     script: "fan.workflow",
-    lives: [...PARKING_LIVES, life(["--retry-parked", "--repair"])],
+    lives: [...CRASH_LIVES, life(["--crash-limit"])],
     control: Option.none(),
-    parks: true,
+    loops: true,
     expect: FINISHED_ALL,
   },
   {
-    name: "park-watcher-control",
+    name: "crash-loop-control",
     matrix: "kill",
     script: "fan.workflow",
-    lives: [...PARKING_LIVES, life(["--retry-parked"])],
+    lives: [...CRASH_LIVES, life(["--crash-limit", "--default-restart-limit"])],
     control: Option.some("stalled"),
-    parks: true,
+    loops: true,
     expect: FINISHED_ALL,
   },
   stopCase("stop", [life(["--stop", "b:800"])], "b", ["a", "c", "d"]),
@@ -339,7 +340,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(),
     ],
     control: Option.none(),
-    parks: false,
+    loops: false,
     expect: {
       ...FINISHED_ALL,
       state: "failed",
@@ -408,9 +409,9 @@ interface Report {
     readonly problem: string;
   }>;
   readonly storedRewrites: ReadonlyArray<boolean>;
-  /** Tasks the last life found parked, and watchers its boot repair retried. */
-  readonly parked: number;
-  readonly repaired: number;
+  /** Tasks the last life found cut off past the limit, and tasks its crash accounting ended. */
+  readonly cutOff: number;
+  readonly ended: number;
 }
 
 /** One `effects.log` line. */
@@ -726,20 +727,22 @@ const checkEnvelope = (
   }
 };
 
-/** A park case: its last life found tasks parked, and the boot repair retried its watchers. */
-const checkParked = (spec: CaseSpec, report: Report, failures: Failures) => {
-  if (!spec.parks) {
+/** A crash-loop case: its last life found tasks cut off past the limit, and ended none of them. */
+const checkCrashLoop = (spec: CaseSpec, report: Report, failures: Failures) => {
+  if (!spec.loops) {
     return;
   }
 
-  if (report.parked === 0) {
+  if (report.cutOff === 0) {
     failures.other(
-      "the last life found no task parked: the kills did not park the run"
+      "the last life found no task cut off past the limit: the kills did not loop the run"
     );
   }
 
-  if (Option.isNone(spec.control) && report.repaired === 0) {
-    failures.other("the boot repair retried no parked watcher");
+  if (report.ended > 0) {
+    failures.other(
+      `the crash accounting ended ${String(report.ended)} of the workflow's tasks`
+    );
   }
 };
 
@@ -757,7 +760,7 @@ const check = (
   checkStopped(spec, report, rows, effects, failures);
   checkWorkflow(spec, report, failures);
   checkEnvelope(spec, report, rows, effects, failures);
-  checkParked(spec, report, failures);
+  checkCrashLoop(spec, report, failures);
 
   return failures.list;
 };

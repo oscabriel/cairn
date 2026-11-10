@@ -32,7 +32,7 @@ import { Brief, BudgetRaisePayload } from "@cairn/protocol/Policy";
 import { Budget } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
 import type { NoticeEntryData } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ConversationId,
   Cursor,

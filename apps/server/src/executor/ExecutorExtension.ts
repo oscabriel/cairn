@@ -29,7 +29,6 @@ import {
   ProgramPayload,
 } from "@cairn/protocol/Policy";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
-import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import {
@@ -42,6 +41,7 @@ import {
   Schema,
   Result,
 } from "effect";
+import { Type } from "typebox";
 
 import { Brain } from "../brain/Brain.ts";
 import { Approvals, approvalLedger } from "../brain/CairnDocs.ts";

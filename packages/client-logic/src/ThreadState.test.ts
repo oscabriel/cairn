@@ -6,7 +6,7 @@
 // while the latest run failed, Waiting static and Working timed, a finished thread whose background
 // work still runs reading Waiting and receding, and a nested subagent's approval bringing its root
 // back from Working. Changed: Cairn's shell rows and its one `threadState`, which also gives the
-// category, words, tone and hold. Added: parked, a brief's Go, a child asking its parent, queued
+// category, words, tone and hold. Added: a brief's Go, a child asking its parent, queued
 // input, the holds and their order, and the label fallbacks.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
@@ -26,13 +26,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import {
-  ApprovalId,
-  ProjectId,
-  RunId,
-  TaskId,
-  ThreadId,
-} from "@cairn/protocol/Ids";
+import { ApprovalId, ProjectId, RunId, ThreadId } from "@cairn/protocol/Ids";
 import type { RuntimeRequestKind } from "@cairn/protocol/Policy";
 import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
@@ -97,7 +91,6 @@ const base = ThreadShell.make({
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
 });
 
@@ -262,17 +255,6 @@ describe(threadStatus, () => {
     assert.strictEqual(threadStatus(recovered, none), "ready");
   });
 
-  it("reports parked when a task is parked, so the row can offer a retry", () => {
-    assert.strictEqual(
-      threadStatus({ ...base, activity: "parked" }, none),
-      "parked"
-    );
-    assert.strictEqual(
-      threadStatus({ ...base, parkedTaskIds: [TaskId.make(7)] }, none),
-      "parked"
-    );
-  });
-
   it("says a child asked its parent while the parent decides, before its run's work", () => {
     const asking = {
       ...base,
@@ -297,25 +279,20 @@ describe(threadStatus, () => {
 });
 
 describe(threadHold, () => {
-  it("holds for a parked task first, then a spent window, then a Claude slot", () => {
+  it("holds for a spent window first, then a Claude slot", () => {
     const all: ThreadShell = {
       ...base,
       activity: "failed",
       lastErrorClass: Option.some("usage_limit"),
       waitingFor: "claude_slot",
-      parkedTaskIds: [TaskId.make(3), TaskId.make(4)],
     };
 
     assert.deepStrictEqual(
       threadHold(all),
-      Option.some(ThreadHold.Parked({ taskId: TaskId.make(3) }))
-    );
-    assert.deepStrictEqual(
-      threadHold({ ...all, parkedTaskIds: [] }),
       Option.some(ThreadHold.Limited({ resetsAt: Option.none() }))
     );
     assert.deepStrictEqual(
-      threadHold({ ...all, parkedTaskIds: [], activity: "running" }),
+      threadHold({ ...all, activity: "running" }),
       Option.some(ThreadHold.WaitingForSlot({ threadId: base.id }))
     );
     assert.isTrue(Option.isNone(threadHold(base)));
@@ -323,12 +300,8 @@ describe(threadHold, () => {
 
   it("names each hold's badge", () => {
     assert.deepStrictEqual(
-      [
-        HOLD_LABELS.Parked.word,
-        HOLD_LABELS.Limited.word,
-        HOLD_LABELS.WaitingForSlot.word,
-      ],
-      ["Parked", "Limited", "Waiting"]
+      [HOLD_LABELS.Limited.word, HOLD_LABELS.WaitingForSlot.word],
+      ["Limited", "Waiting"]
     );
   });
 

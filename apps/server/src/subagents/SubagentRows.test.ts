@@ -223,7 +223,6 @@ const harnessWith = (events: Stream.Stream<HarnessEvent>) =>
     entryImage: () => unsupported("entryImage"),
     events,
     inspect: Effect.succeed([]),
-    retry: () => unsupported("retry"),
     capabilities: { durable: true, live: true },
   });
 

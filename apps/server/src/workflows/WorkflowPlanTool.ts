@@ -21,15 +21,15 @@ import type { ThinkingLevel } from "@cairn/protocol/Models";
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result, Schema } from "effect";
+import { Type } from "typebox";
 
 import {
   approvalIdOf,

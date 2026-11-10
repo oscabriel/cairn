@@ -156,10 +156,10 @@ export const rowStatusOf = (
   return {
     category: state.category,
     status: Option.match(state.label, {
-      // A parked or limited thread is not asking anything: its mark is the warning, so it does
-      // not read as the needs-you dot it shares a tone with.
+      // A limited thread is not asking anything: its mark is the warning, so it does not read as
+      // the needs-you dot it shares a tone with.
       onSome: (label) =>
-        state.status === "parked" || state.status === "limited"
+        state.status === "limited"
           ? { ...statusOfLabel(label), mark: "warning" as const }
           : statusOfLabel(label),
       onNone: () => (Option.isSome(thread.latestRunCompletedAt) ? DONE : IDLE),

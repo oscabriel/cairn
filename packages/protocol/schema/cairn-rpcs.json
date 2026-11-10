@@ -430,7 +430,6 @@
                             "preparing",
                             "running",
                             "waiting",
-                            "parked",
                             "failed"
                           ]
                         },
@@ -500,6 +499,7 @@
                                 "usage_limit",
                                 "provider_error",
                                 "transport_error",
+                                "brain_restart",
                                 "unknown"
                               ]
                             },
@@ -727,14 +727,6 @@
                             }
                           ]
                         },
-                        "parkedTaskIds": {
-                          "type": "array",
-                          "items": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9007199254740991
-                          }
-                        },
                         "lineage": {
                           "anyOf": [
                             {
@@ -916,8 +908,7 @@
                         "pinOrderKey",
                         "activeOrderKey",
                         "autoSettleDisabledAt",
-                        "lastVisitedAt",
-                        "parkedTaskIds"
+                        "lastVisitedAt"
                       ],
                       "additionalProperties": true
                     }
@@ -1154,7 +1145,6 @@
                       "preparing",
                       "running",
                       "waiting",
-                      "parked",
                       "failed"
                     ]
                   },
@@ -1224,6 +1214,7 @@
                           "usage_limit",
                           "provider_error",
                           "transport_error",
+                          "brain_restart",
                           "unknown"
                         ]
                       },
@@ -1451,14 +1442,6 @@
                       }
                     ]
                   },
-                  "parkedTaskIds": {
-                    "type": "array",
-                    "items": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 9007199254740991
-                    }
-                  },
                   "lineage": {
                     "anyOf": [
                       {
@@ -1630,8 +1613,7 @@
                   "pinOrderKey",
                   "activeOrderKey",
                   "autoSettleDisabledAt",
-                  "lastVisitedAt",
-                  "parkedTaskIds"
+                  "lastVisitedAt"
                 ],
                 "additionalProperties": true
               }
@@ -2372,7 +2354,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -2895,7 +2876,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -3319,7 +3299,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -3702,7 +3681,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -4039,7 +4017,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -4394,7 +4371,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -4874,337 +4850,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
-                "approval",
-                "submission",
-                "folder",
-                "checkpoint",
-                "workflow",
-                "node",
-                "recipe",
-                "artifact",
-                "portal"
-              ]
-            },
-            "id": {
-              "type": "string",
-              "maxLength": 4096
-            },
-            "requestId": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "retryable": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "_tag",
-            "code",
-            "message",
-            "resource",
-            "id",
-            "requestId",
-            "retryable"
-          ],
-          "additionalProperties": true
-        },
-        "InvalidInputEncoded": {
-          "type": "object",
-          "properties": {
-            "_tag": {
-              "type": "string",
-              "enum": ["InvalidInput"]
-            },
-            "code": {
-              "type": "string",
-              "enum": ["invalid_input"]
-            },
-            "message": {
-              "type": "string",
-              "maxLength": 4096
-            },
-            "field": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "requestId": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "retryable": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "_tag",
-            "code",
-            "message",
-            "field",
-            "requestId",
-            "retryable"
-          ],
-          "additionalProperties": true
-        },
-        "ConflictEncoded": {
-          "type": "object",
-          "properties": {
-            "_tag": {
-              "type": "string",
-              "enum": ["Conflict"]
-            },
-            "code": {
-              "type": "string",
-              "enum": ["conflict"]
-            },
-            "message": {
-              "type": "string",
-              "maxLength": 4096
-            },
-            "reason": {
-              "type": "string",
-              "enum": [
-                "workspace_in_use",
-                "thread_busy",
-                "stale_state",
-                "mode_too_wide",
-                "limit_reached"
-              ]
-            },
-            "requestId": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "retryable": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "_tag",
-            "code",
-            "message",
-            "reason",
-            "requestId",
-            "retryable"
-          ],
-          "additionalProperties": true
-        },
-        "UnauthorizedEncoded": {
-          "type": "object",
-          "properties": {
-            "_tag": {
-              "type": "string",
-              "enum": ["Unauthorized"]
-            },
-            "code": {
-              "type": "string",
-              "enum": ["unauthorized"]
-            },
-            "message": {
-              "type": "string",
-              "maxLength": 4096
-            },
-            "requestId": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "retryable": {
-              "type": "boolean"
-            }
-          },
-          "required": ["_tag", "code", "message", "requestId", "retryable"],
-          "additionalProperties": true
-        }
-      }
-    }
-  },
-  {
-    "tag": "thread.retryTask",
-    "stream": false,
-    "payload": {
-      "dialect": "draft-2020-12",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "threadId": {
-            "type": "string",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
-            "format": "uuid"
-          },
-          "taskId": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": ["threadId", "taskId"],
-        "additionalProperties": true
-      },
-      "definitions": {}
-    },
-    "success": {
-      "dialect": "draft-2020-12",
-      "schema": {
-        "type": "null"
-      },
-      "definitions": {}
-    },
-    "error": {
-      "dialect": "draft-2020-12",
-      "schema": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/UnavailableEncoded"
-          },
-          {
-            "$ref": "#/$defs/InternalEncoded"
-          },
-          {
-            "$ref": "#/$defs/NotFoundEncoded"
-          },
-          {
-            "$ref": "#/$defs/InvalidInputEncoded"
-          },
-          {
-            "$ref": "#/$defs/ConflictEncoded"
-          },
-          {
-            "$ref": "#/$defs/UnauthorizedEncoded"
-          }
-        ]
-      },
-      "definitions": {
-        "UnavailableEncoded": {
-          "type": "object",
-          "properties": {
-            "_tag": {
-              "type": "string",
-              "enum": ["Unavailable"]
-            },
-            "code": {
-              "type": "string",
-              "enum": ["unavailable"]
-            },
-            "message": {
-              "type": "string",
-              "maxLength": 4096
-            },
-            "requestId": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "retryable": {
-              "type": "boolean"
-            }
-          },
-          "required": ["_tag", "code", "message", "requestId", "retryable"],
-          "additionalProperties": true
-        },
-        "InternalEncoded": {
-          "type": "object",
-          "properties": {
-            "_tag": {
-              "type": "string",
-              "enum": ["Internal"]
-            },
-            "code": {
-              "type": "string",
-              "enum": ["internal"]
-            },
-            "message": {
-              "type": "string",
-              "maxLength": 4096
-            },
-            "requestId": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "retryable": {
-              "type": "boolean"
-            }
-          },
-          "required": ["_tag", "code", "message", "requestId", "retryable"],
-          "additionalProperties": true
-        },
-        "NotFoundEncoded": {
-          "type": "object",
-          "properties": {
-            "_tag": {
-              "type": "string",
-              "enum": ["NotFound"]
-            },
-            "code": {
-              "type": "string",
-              "enum": ["not_found"]
-            },
-            "message": {
-              "type": "string",
-              "maxLength": 4096
-            },
-            "resource": {
-              "type": "string",
-              "enum": [
-                "project",
-                "thread",
-                "entry",
-                "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -5931,7 +5576,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -6203,7 +5847,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -6467,7 +6110,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -6732,7 +6374,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -7203,7 +6844,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -7466,7 +7106,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -7912,7 +7551,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -8171,7 +7809,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -8416,7 +8053,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -9297,7 +8933,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -9541,7 +9176,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -10090,7 +9724,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -11273,7 +10906,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -12074,7 +11706,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -12801,7 +12432,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -13235,7 +12865,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -13572,7 +13201,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -13902,7 +13530,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -14237,7 +13864,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -14644,7 +14270,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -15252,7 +14877,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -15472,7 +15096,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -15796,7 +15419,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",
@@ -16120,7 +15742,6 @@
                 "thread",
                 "entry",
                 "attachment",
-                "task",
                 "approval",
                 "submission",
                 "folder",

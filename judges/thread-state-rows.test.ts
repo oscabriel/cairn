@@ -24,13 +24,7 @@ import type {
   ThreadCategory,
   ThreadState,
 } from "@cairn/client-logic/ThreadState";
-import {
-  ApprovalId,
-  ProjectId,
-  RunId,
-  TaskId,
-  ThreadId,
-} from "@cairn/protocol/Ids";
+import { ApprovalId, ProjectId, RunId, ThreadId } from "@cairn/protocol/Ids";
 import type { RuntimeRequestKind } from "@cairn/protocol/Policy";
 import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
@@ -89,7 +83,6 @@ const base = ThreadShell.make({
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
 });
 
@@ -219,10 +212,6 @@ const CASES = {
     category: "waiting-on-you",
     word: word("Approval"),
   }),
-  "ThreadActivity parked": row(
-    { ...running, activity: "parked", parkedTaskIds: [TaskId.make(7)] },
-    { category: "held", word: word("Parked"), hold: "Parked" }
-  ),
   "ThreadActivity failed": row(failed(Option.some("unknown")), {
     category: "failed",
     word: word("Failed"),
@@ -243,6 +232,10 @@ const CASES = {
       word: word("Failed"),
     }
   ),
+  "RunFailureClass brain_restart": row(failed(Option.some("brain_restart")), {
+    category: "failed",
+    word: word("Failed"),
+  }),
   "RunFailureClass unknown": row(failed(Option.some("unknown")), {
     category: "failed",
     word: word("Failed"),
@@ -507,10 +500,6 @@ const CASES = {
   "state: Goal": elsewhere(
     "the goal strip (6H) reads `goal`; the row's state is its run's"
   ),
-  "state: Parked task": row(
-    { ...base, parkedTaskIds: [TaskId.make(3)] },
-    { category: "held", word: word("Parked"), hold: "Parked" }
-  ),
   "state: Hold": row(
     { ...running, waitingFor: "claude_slot" },
     { category: "held", word: word("Working"), hold: "Waiting" }
@@ -755,7 +744,7 @@ describe("thread-state rows", () => {
   it("has a case for every row of the doc, and no case without a row", () => {
     const rows = [...docRows(doc).keys()];
 
-    assert.isAbove(rows.length, 90);
+    assert.isAbove(rows.length, 85);
     assert.deepStrictEqual(
       rows.filter((key) => !CASE_BY_KEY.has(key)),
       [],

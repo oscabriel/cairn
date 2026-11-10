@@ -164,9 +164,10 @@ describe("validateResult (J-validator)", () => {
       rejected({ result: { ...valid, extra: 1 }, divergence: "None" }),
       "result"
     );
+    // pi-schema's wording (pi-ai 1.5): "extra: unknown field".
     assert.include(
       rejected({ result: valid, divergence: "None", extra: 1 }),
-      "additional"
+      "unknown field"
     );
   });
 

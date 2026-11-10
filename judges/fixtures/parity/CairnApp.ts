@@ -28,7 +28,6 @@ import {
   ConversationId,
   EntryId,
   ProjectId,
-  TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
 import type { ModelListing } from "@cairn/protocol/Models";
@@ -109,7 +108,7 @@ export type ManagedState =
   | "failed"
   | "done"
   | "idle"
-  | "parked";
+  | "limited";
 
 /** A thread the seeded project thread manages (a subagent row, ADR 0028). */
 export interface ManagedSeed {
@@ -142,7 +141,7 @@ export const NO_SHELL_SEED: ShellSeed = { managed: [], projects: [] };
 export const MANAGED_SEED: ShellSeed["managed"] = [
   { title: "Map the favicon resolver", state: "idle", usable: true },
   { title: "Brief: port the fold line tallies", state: "done", usable: false },
-  { title: "Steps panel projection", state: "parked", usable: false },
+  { title: "Steps panel projection", state: "limited", usable: false },
   { title: "Probe the bridge usage endpoint", state: "failed", usable: false },
   { title: "Review: steps panel", state: "working", usable: false },
   {
@@ -304,11 +303,14 @@ const PATCHES: Readonly<
     latestRunStartedAt: Option.some(Option.some(started)),
     latestRunCompletedAt: Option.some(Option.some(started)),
   }),
-  parked: (started) => ({
+  limited: (started) => ({
     ...emptyActivityPatch,
-    activity: Option.some("parked"),
+    activity: Option.some("failed"),
     latestRunStartedAt: Option.some(Option.some(started)),
-    parkedTaskIds: Option.some([TaskId.make(7)]),
+    lastError: Option.some(
+      Option.some("The model plan's usage limit was reached.")
+    ),
+    lastErrorClass: Option.some(Option.some("usage_limit")),
   }),
   idle: () => emptyActivityPatch,
 };

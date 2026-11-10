@@ -6,8 +6,6 @@
 //
 // - the parent's model held it past the window after its placement (a short window here, 15
 //   minutes in production);
-// - the crash-loop guard parked the parent's run (`TaskParked`, which the `QuestionRoutes` fiber
-//   hears; a parked background task of the parent escalates nothing);
 // - the user archived the parent thread (a shell event the fiber hears);
 // - the parent thread was deleted while no fiber ran, and the start scan finds it.
 //
@@ -22,7 +20,6 @@ import path from "node:path";
 import {
   ApprovalId,
   ConversationId as ConversationIdOf,
-  TaskId,
 } from "@cairn/protocol/Ids";
 import type { ConversationId } from "@cairn/protocol/Ids";
 import { ThreadArchive, ThreadDelete } from "@cairn/protocol/ShellCommands";
@@ -45,11 +42,10 @@ import type { Scope } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
 import { Approvals } from "../brain/CairnDocs.ts";
-import { RUN_TASK } from "../brain/CommitFeed.ts";
 import { piDurableLayer } from "../brain/conformance/Targets.ts";
 import { durable } from "../brain/Durable.ts";
 import { FauxModels } from "../brain/FauxModels.ts";
-import { HarnessSeam, TaskParked } from "../brain/HarnessSeam.ts";
+import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { piConversationId } from "../brain/PiIds.ts";
@@ -434,31 +430,6 @@ const answeredInParent = (parent: ConversationId, why: string) =>
     assert.strictEqual(record?.answer?.answers?.[0]?.custom, "src");
   });
 
-/** The parent's newest run task. */
-const runTaskOf = (parent: ConversationId) =>
-  Effect.gen(function* () {
-    const { harness } = yield* Effect.orDie(
-      Effect.flatMap(Brain, (brain) => brain.session)
-    );
-
-    return yield* durable(
-      "test.run-task",
-      async (context) =>
-        await harness.commit(async (tx) => {
-          const page = await tx.scanTasks(
-            {
-              conversationId: piConversationId(parent),
-              kind: RUN_TASK,
-              order: "descending",
-            },
-            1
-          );
-
-          return page.items.at(0)?.id;
-        }, context)
-    );
-  });
-
 /** Whether nothing escalated within a short wait. */
 const nothingEscalated = (parent: ConversationId) =>
   Effect.gen(function* () {
@@ -479,41 +450,6 @@ describe("question routing's automatic escalations", () => {
         { ...DEFAULT_TOOL_OPTIONS, questionWindowMillis: 300 },
         "none",
         ({ parent }) => answeredInParent(parent, EscalationWhy.parentSlow(300))
-      ),
-    30_000
-  );
-
-  it.live(
-    "a question whose parent's run is parked goes to the user, and a parked background task does nothing",
-    () =>
-      withQuestion(LONG_WINDOW, "running", ({ parent, inject }) =>
-        Effect.gen(function* () {
-          const run = yield* runTaskOf(parent);
-
-          assert.isDefined(run);
-
-          // A parked task that is not the run's: the parent's model is still free to answer.
-          const registry = yield* registryOf(parent);
-
-          const anchor = Object.values(registry?.items ?? {}).at(
-            0
-          )?.anchorTaskId;
-
-          yield* inject(
-            TaskParked.make({
-              threadId: PARENT,
-              taskId: TaskId.make(anchor ?? 0),
-            })
-          );
-
-          assert.isTrue(yield* nothingEscalated(parent));
-
-          yield* inject(
-            TaskParked.make({ threadId: PARENT, taskId: TaskId.make(run ?? 0) })
-          );
-
-          yield* answeredInParent(parent, EscalationWhy.parentParked);
-        })
       ),
     30_000
   );

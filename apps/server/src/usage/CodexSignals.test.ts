@@ -149,7 +149,6 @@ const FakeHarness = Layer.effectContext(
           entryImage: unsupported,
           events: Stream.fromPubSub(pubsub),
           inspect: Effect.succeed([]),
-          retry: unsupported,
           capabilities: { durable: false, live: false },
         })
       )

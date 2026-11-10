@@ -12,15 +12,15 @@
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { ArtifactDetails, ArtifactId } from "@cairn/protocol/Reach";
 import type { ArtifactRow } from "@cairn/protocol/Reach";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Context, Effect, FiberSet, Layer, Option, Schema } from "effect";
+import { Type } from "typebox";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";

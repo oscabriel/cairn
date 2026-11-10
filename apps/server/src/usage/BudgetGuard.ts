@@ -30,8 +30,7 @@
 // lineage read and one roll-up per scope, and the guard never falls behind the line.
 //
 // `boot` is the boot repair, run after the spend reconcile and before any repair that can start
-// scheduling (pi-durable's `retryTask` resumes it: the parked approval waits and subagent tasks) and
-// before the Harness resumes: it rebuilds the book from the documents and, for each scope at its
+// scheduling (`BootRepairs.ts` states the rule) and before the Harness resumes: it rebuilds the book from the documents and, for each scope at its
 // line in `stop` mode, marks its runs aborted, withdraws their queued inputs and cancels the
 // approvals they held, without starting scheduling, so a guard killed while stopping does not let
 // a stopped child run again after the restart, and the gate has a full book from the first call.
@@ -499,6 +498,6 @@ export class BudgetGuard extends Context.Service<
 
 /**
  * The boot repair `BootRepairs.ts` lists right after the spend reconcile, both ahead of
- * `cancel abandoned approvals` and every repair that retries parked tasks (module header).
+ * `cancel abandoned approvals` and every repair that can start scheduling (module header).
  */
 export const budgetBootRepair = BudgetGuard.use((guard) => guard.boot);

@@ -1,12 +1,11 @@
 // The brain's supervisor across a storage failure: a reopened Session is resumed with the commit
-// feed already attached, so the run the failure cut off still reaches `RunTerminal`; and
-// `retry` keeps `task_not_found` for a task pi-durable does not have.
+// feed already attached, so the run the failure cut off still reaches `RunTerminal`.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { ProjectId, TaskId, ThreadId } from "@cairn/protocol/Ids";
+import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { Storage } from "@earendil-works/pi-durable";
@@ -17,6 +16,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Function,
   Fiber,
   Latch,
   Layer,
@@ -46,7 +46,6 @@ import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { Parked } from "./Parked.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 
 const isRunTerminal = (
@@ -60,14 +59,14 @@ const THREAD_ID = ThreadId.make("0190f0c0-0000-7000-8000-0000000000b1");
 const failing = (storage: Storage, failNext: { value: boolean }): Storage => {
   const commit = storage.commit.bind(storage);
 
-  storage.commit = async (writes, context) => {
+  storage.commit = async (batches, receive, context) => {
     if (failNext.value) {
       failNext.value = false;
 
       throw new Error("storage reset (test)");
     }
 
-    return await commit(writes, context);
+    return await commit(batches, receive, context);
   };
 
   return storage;
@@ -101,7 +100,6 @@ const brainLayer = (dataDir: string, failNext: { value: boolean }) => {
     Layer.provideMerge(
       Brain.layerNoDeps.pipe(Layer.provide(store), Layer.provide(Arms.layer))
     ),
-    Layer.provideMerge(Parked.layer),
     Layer.provide(ExtensionSet.layer),
     Layer.provide(ExecutorLink.layerDisabled),
     Layer.provide(PiHost.layerEmpty),
@@ -113,7 +111,9 @@ const brainLayer = (dataDir: string, failNext: { value: boolean }) => {
     Layer.provideMerge(
       ModelSource.layerFaux({
         tokensPerSecond: 2000,
-        settings: { retry: { enabled: false } },
+        // pi-durable 1.5 charges a request the failure cut off as a failed attempt instead of
+        // resending it, so the reopened Session answers through one quick retry.
+        settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } },
       })
     ),
     Layer.provide(BrainConfig.layerFrom(dataDir))
@@ -195,7 +195,7 @@ describe("Brain supervisor", () => {
           );
 
           // The first answer arms the failure, so the commit that would record it fails the
-          // Session; the reopened Session runs the generation again and gets the second answer.
+          // Session; the reopened Session retries the cut-off request and gets the second answer.
           faux.setResponses([
             async () => {
               failNext.value = true;
@@ -250,21 +250,6 @@ describe("Brain supervisor", () => {
         })
       ),
     30_000
-  );
-
-  it.live("retry of a task the brain does not have is task_not_found", () =>
-    withBrain((context) =>
-      Effect.gen(function* () {
-        const seam = Context.get(context, HarnessSeam);
-        const brain = Context.get(context, Brain);
-
-        yield* brain.resume;
-
-        const failure = yield* Effect.flip(seam.retry(TaskId.make(987_654)));
-
-        assert.strictEqual(failure.reason, "task_not_found");
-      })
-    )
   );
 
   it.live(
@@ -398,7 +383,6 @@ describe("Brain supervisor", () => {
             const layer = Brain.layerNoDeps.pipe(
               Layer.provide(gated),
               Layer.provide(Arms.layer),
-              Layer.provideMerge(Parked.layer),
               Layer.provide(ExtensionSet.layer),
               Layer.provide(ExecutorLink.layerDisabled),
               Layer.provide(PiHost.layerEmpty),
@@ -459,10 +443,12 @@ describe("Brain supervisor", () => {
             if (Option.isSome(storage)) {
               const after = yield* Effect.promise(
                 async () =>
-                  await storage.value.commit([], BACKGROUND_CONTEXT).then(
-                    () => "open",
-                    () => "closed"
-                  )
+                  await storage.value
+                    .commit([], Function.constVoid, BACKGROUND_CONTEXT)
+                    .then(
+                      () => "open",
+                      () => "closed"
+                    )
               );
 
               assert.strictEqual(after, "closed");
@@ -513,7 +499,6 @@ describe("Brain supervisor", () => {
             const layer = Brain.layerNoDeps.pipe(
               Layer.provide(store),
               Layer.provide(Arms.layer),
-              Layer.provideMerge(Parked.layer),
               Layer.provide(ExtensionSet.layer),
               Layer.provide(ExecutorLink.layerDisabled),
               Layer.provide(PiHost.layerEmpty),

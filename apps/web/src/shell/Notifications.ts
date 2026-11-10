@@ -52,7 +52,6 @@ export const needsAttention = (
     status === "go" ||
     status === "failed" ||
     status === "limited" ||
-    status === "parked" ||
     (status === "ready" && hasUnseenCompletion(thread))
   );
 };

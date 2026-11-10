@@ -16,7 +16,6 @@ import { Message as NextShellMessage } from "./next/shell/Message.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
 import { Message as SettingsMessage } from "./settings/Message.ts";
-import { Message as ParkedMessage } from "./shell/Parked.ts";
 import { Message as SidebarMessage } from "./sidebar/Message.ts";
 
 /** Everything the root reacts to. */
@@ -77,7 +76,6 @@ export const Message = defineMessageUnion({
   GotComposerMessage: { message: ComposerMessage },
   GotPushMessage: { message: PushMessage },
   GotSettingsMessage: { message: SettingsMessage },
-  GotParkedMessage: { message: ParkedMessage },
   GotNextShellMessage: { message: NextShellMessage },
   /** A Message of the scratch thread's page, inside the `next` shell's overlay. */
   GotScratchThreadMessage: { message: Thread.Message },

@@ -30,7 +30,7 @@ import { byCardOrder } from "@cairn/client-logic/PendingRequests";
 import type { RequestOrderKey } from "@cairn/client-logic/PendingRequests";
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
-import type { TaskId, ThreadId } from "@cairn/protocol/Ids";
+import type { ThreadId } from "@cairn/protocol/Ids";
 import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import { ThreadShell } from "@cairn/protocol/Shell";
 import type {
@@ -102,7 +102,6 @@ export type DerivedFields = Pick<
   | "pendingCount"
   | "latestVisibleMessage"
   | "latestUserMessageAt"
-  | "parkedTaskIds"
   | "subagents"
   | "goal"
 >;
@@ -130,14 +129,12 @@ export const FAILURE_TEXT: Readonly<Record<RunFailureClass, string>> = {
     "The model provider refused the request. Send again to retry.",
   transport_error:
     "The model provider could not be reached. Send again to retry.",
+  brain_restart:
+    "The brain restarted while the model was answering. Send again to retry.",
   unknown: "The run failed. Send again to retry.",
 };
 
-const BUSY: ReadonlySet<ThreadActivity> = new Set([
-  "running",
-  "waiting",
-  "parked",
-]);
+const BUSY: ReadonlySet<ThreadActivity> = new Set(["running", "waiting"]);
 
 /** A thread's projection as its row stands. */
 export const projectionOf = (
@@ -159,7 +156,6 @@ export const projectionOf = (
     pendingCount: shell.pendingCount,
     latestVisibleMessage: shell.latestVisibleMessage,
     latestUserMessageAt: shell.latestUserMessageAt,
-    parkedTaskIds: shell.parkedTaskIds,
     subagents: shell.subagents,
     goal: shell.goal,
   },
@@ -171,16 +167,12 @@ export const projectionOf = (
 });
 
 /**
- * The activity the fields mean: parked over everything, then a live run (waiting while an approval
- * is pending), then how the newest run ended; with none of those, a busy row has gone idle and any
- * other row (idle, preparing, failed) keeps its activity.
+ * The activity the fields mean: a live run (waiting while an approval is pending), then how the
+ * newest run ended; with neither, a busy row has gone idle and any other row (idle, preparing,
+ * failed) keeps its activity.
  */
 export const activityOf = (projection: ThreadProjection): ThreadActivity => {
   const { fields, outcome } = projection;
-
-  if (fields.parkedTaskIds.length > 0) {
-    return "parked";
-  }
 
   if (Option.isSome(fields.activeRunId)) {
     return Option.isSome(fields.pendingRuntimeRequest) ? "waiting" : "running";
@@ -385,12 +377,6 @@ export const applyHarnessEvent = (
       );
     },
     UsageUpdated: () => projection,
-    TaskParked: (parked) =>
-      projection.fields.parkedTaskIds.includes(parked.taskId)
-        ? projection
-        : withFields(projection, {
-            parkedTaskIds: [...projection.fields.parkedTaskIds, parked.taskId],
-          }),
     CompactionStarted: () => projection,
     CompactionEnded: () => projection,
   });
@@ -417,7 +403,7 @@ export const applySignal = (
 
 /**
  * A thread's projection set from what pi-durable holds now. `live` is the thread's entry in
- * `inspect()`; none means no run, no queue, no approval and no parked task. A row that was busy
+ * `inspect()`; none means no run, no queue and no approval. A row that was busy
  * with no live run left ends now: the run ended while nothing watched it. An approval the row does
  * not name yet (its event was lost to a crash) is named from `inspect()`'s record: its kind and
  * when it was asked.
@@ -467,10 +453,6 @@ export const reconcileProjection = (
           onNone: () => 0,
           onSome: (state) => state.queueLength,
         }),
-        parkedTaskIds: Option.match(live, {
-          onNone: (): ReadonlyArray<TaskId> => [],
-          onSome: (state) => state.parkedTaskIds,
-        }),
         waitingFor: asking ? "parent" : "none",
         latestRunCompletedAt: endedUnseen
           ? Option.some(now)
@@ -498,7 +480,6 @@ const same = {
   ),
   pendingCount: Schema.toEquivalence(shellFields.pendingCount),
   latestVisibleMessage: Schema.toEquivalence(shellFields.latestVisibleMessage),
-  parkedTaskIds: Schema.toEquivalence(shellFields.parkedTaskIds),
   subagents: Schema.toEquivalence(shellFields.subagents),
   goal: Schema.toEquivalence(shellFields.goal),
 };
@@ -594,11 +575,6 @@ export const patchFor = (
       row.latestUserMessageAt,
       fields.latestUserMessageAt
     ),
-    parkedTaskIds: diff(
-      same.parkedTaskIds,
-      row.parkedTaskIds,
-      fields.parkedTaskIds
-    ),
     subagents: diff(same.subagents, row.subagents, fields.subagents),
     goal: diff(same.goal, row.goal, fields.goal),
   };
@@ -618,7 +594,6 @@ export const patchFor = (
     Option.isSome(patch.pendingCount),
     Option.isSome(patch.latestVisibleMessage),
     Option.isSome(patch.latestUserMessageAt),
-    Option.isSome(patch.parkedTaskIds),
     Option.isSome(patch.subagents),
     Option.isSome(patch.goal),
   ];
@@ -693,7 +668,7 @@ export const latestMessageOf = (
 export interface ReconcileReport {
   /** Thread rows read. */
   readonly threads: number;
-  /** Threads `inspect()` named as busy, queued, waiting or parked. */
+  /** Threads `inspect()` named as busy, queued or waiting. */
   readonly live: number;
   /** Rows the reconcile changed. */
   readonly patched: number;
@@ -729,8 +704,6 @@ export class ShellProjector extends Context.Service<
      * are logged and reported as zero changes; boot goes on.
      */
     readonly reconcile: Effect.Effect<ReconcileReport>;
-    /** Recomputes one thread's run, queue, approvals and parked tasks now, as after a retry. */
-    refresh(threadId: ThreadId): Effect.Effect<void>;
     /** Commits every pending change now, ignoring the window. */
     readonly flushAll: Effect.Effect<void>;
   }
@@ -758,8 +731,6 @@ export class ShellProjector extends Context.Service<
       /** Threads touched since their last flush. */
       const pending = new Map<ThreadId, ThreadProjection>();
 
-      /** Threads whose parked tasks must be checked against `inspect()` at the next flush. */
-      const parkedCheck = new Set<ThreadId>();
       /** Threads with a flush scheduled. */
       const scheduled = new Set<ThreadId>();
       /** When each thread last committed, in clock millis. */
@@ -871,38 +842,7 @@ export class ShellProjector extends Context.Service<
 
         pending.delete(threadId);
 
-        let projection = held;
-
-        if (parkedCheck.has(threadId)) {
-          parkedCheck.delete(threadId);
-
-          const live = yield* inspectLive.pipe(
-            Effect.asSome,
-            Effect.catchTag("HarnessError", (failure: HarnessError) =>
-              Effect.logWarning(
-                "projector could not inspect parked tasks"
-              ).pipe(
-                Effect.annotateLogs({
-                  event: "projector_inspect_failed",
-                  error: failure.message,
-                }),
-                Effect.as(Option.none())
-              )
-            )
-          );
-
-          if (Option.isSome(live)) {
-            const parked = Option.match(
-              Option.fromUndefinedOr(live.value.get(threadId)),
-              {
-                onNone: (): ReadonlyArray<TaskId> => [],
-                onSome: (state) => state.parkedTaskIds,
-              }
-            );
-
-            projection = withFields(projection, { parkedTaskIds: parked });
-          }
-        }
+        const projection = held;
 
         if (Option.isSome(hold) && Option.isSome(projection.outcome)) {
           yield* Effect.logInfo("projector holding").pipe(
@@ -1006,8 +946,7 @@ export class ShellProjector extends Context.Service<
 
       const update = Effect.fnUntraced(function* (
         threadId: ThreadId,
-        apply: (projection: ThreadProjection) => ThreadProjection,
-        checkParked: boolean
+        apply: (projection: ThreadProjection) => ThreadProjection
       ) {
         const loaded = yield* load(threadId);
 
@@ -1019,10 +958,6 @@ export class ShellProjector extends Context.Service<
 
         pending.set(threadId, next);
 
-        if (checkParked && next.fields.parkedTaskIds.length > 0) {
-          parkedCheck.add(threadId);
-        }
-
         yield* touch(threadId);
       });
 
@@ -1030,12 +965,8 @@ export class ShellProjector extends Context.Service<
         Effect.gen(function* () {
           const now = yield* DateTime.now;
 
-          yield* update(
-            event.threadId,
-            (projection) => applyHarnessEvent(projection, event, now),
-            // A parked task leaves no event when it is retried; any later event of its thread
-            // checks the parked list against the brain.
-            !Predicate.isTagged(event, "TaskParked")
+          yield* update(event.threadId, (projection) =>
+            applyHarnessEvent(projection, event, now)
           );
         }).pipe(
           Effect.catchTag("ShellStoreError", readFailed),
@@ -1043,10 +974,8 @@ export class ShellProjector extends Context.Service<
         );
 
       const onSignal = (signal: ProjectorSignal) =>
-        update(
-          signal.threadId,
-          (projection) => applySignal(projection, signal),
-          false
+        update(signal.threadId, (projection) =>
+          applySignal(projection, signal)
         ).pipe(
           Effect.catchTag("ShellStoreError", readFailed),
           lock.withPermits(1)
@@ -1193,18 +1122,6 @@ export class ShellProjector extends Context.Service<
         Effect.withSpan("ShellProjector.reconcile")
       );
 
-      const refresh = Effect.fn("ShellProjector.refresh")(
-        function* (threadId: ThreadId) {
-          yield* reconcileThreads(Option.some(threadId), false);
-        },
-        Effect.catchTags({
-          HarnessError: failedReconcile("refresh"),
-          ShellStoreError: failedReconcile("refresh"),
-        }),
-        Effect.asVoid,
-        lock.withPermits(1)
-      );
-
       // Started at once, so each subscription exists before boot resumes the harness. A stream
       // that merges others subscribes from fibers of its own, so give those a turn as well.
       yield* Stream.runForEach(harness.events, onEvent).pipe(
@@ -1218,7 +1135,6 @@ export class ShellProjector extends Context.Service<
 
       return ShellProjector.of({
         reconcile,
-        refresh,
         flushAll: lock.withPermits(1)(flushAllUnlocked),
       });
     })

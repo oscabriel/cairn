@@ -12,10 +12,10 @@
 // argument only). Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
 import type { ThreadId } from "@cairn/protocol/Ids";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -30,6 +30,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
+import { Type } from "typebox";
 
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";

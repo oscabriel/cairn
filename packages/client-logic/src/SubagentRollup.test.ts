@@ -144,7 +144,6 @@ const ROW_DEFAULTS: ThreadShell = {
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   lineage: Option.none(),
   subagents: { working: 0, asking: 0, settled: 0, failed: 0 },
   goal: Option.none(),

@@ -6,14 +6,12 @@
 // Messages go nowhere: the catalogue shows states, it does not run the shell.
 
 import { shellRow } from "@cairn/client-logic/ShellRowTestKit";
-import { TaskId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { AppRoute } from "../../../Route.ts";
-import * as Parked from "../../../shell/Parked.ts";
 import { classNames } from "../../../ui/ClassNames.ts";
 import {
   chatHeaderBand,
@@ -254,12 +252,10 @@ const DRAWS: ReadonlyArray<{
   },
 ];
 
-const parkedRow = (overrides: Partial<ThreadShell>) =>
+const heldRow = (overrides: Partial<ThreadShell>) =>
   Option.some(
     shellRow(5, {
       title: "Steps panel projection",
-      activity: "parked",
-      parkedTaskIds: [TaskId.make(7)],
       ...overrides,
     })
   );
@@ -267,22 +263,15 @@ const parkedRow = (overrides: Partial<ThreadShell>) =>
 const HOLDS: ReadonlyArray<{
   readonly state: string;
   readonly caption: string;
-  readonly model: Parked.Model;
+  readonly model: Hold.Model;
 }> = [
-  {
-    state: "hold-parked",
-    caption: "The hold banner: a parked task, with Retry",
-    model: { ...Parked.initial, hasClient: true, thread: parkedRow({}) },
-  },
   {
     state: "hold-limited",
     caption: "The hold banner: a spent plan window",
     model: {
-      ...Parked.initial,
-      hasClient: true,
-      thread: parkedRow({
+      ...Hold.initial,
+      thread: heldRow({
         activity: "failed",
-        parkedTaskIds: [],
         lastErrorClass: Option.some("usage_limit"),
       }),
     },
@@ -291,11 +280,9 @@ const HOLDS: ReadonlyArray<{
     state: "hold-slot",
     caption: "The hold banner: waiting for a Claude slot",
     model: {
-      ...Parked.initial,
-      hasClient: true,
-      thread: parkedRow({
+      ...Hold.initial,
+      thread: heldRow({
         activity: "running",
-        parkedTaskIds: [],
         waitingFor: "claude_slot",
       }),
     },
@@ -336,7 +323,7 @@ export const shellSpecimens = <M>(
             slotId: `look-shell-${state}`,
             model,
             view: Hold.view,
-            toParentMessage: () => frame.ignore,
+            toParentMessage: (message) => message,
           }),
         ]
       ),

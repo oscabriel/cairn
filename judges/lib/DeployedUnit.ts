@@ -7,7 +7,7 @@
 //
 // `restarts`: six `systemctl --user restart`s while `bash sleep 20` runs. Each stopped invocation
 // logged `closing` and `closed <ms>` with ms under 5,000 and no `shutdown_slow`; `NRestarts` is
-// unchanged; the turn ends with nothing parked; the reconnected client equals a fresh one.
+// unchanged; the turn ends without failing; the reconnected client equals a fresh one.
 //
 // `streaming`: one `kill -9` of the unit's main pid while the reply streams (80 characters into
 // pi-durable's live reply). Every entry committed before the kill is kept, no `claude` process of
@@ -792,11 +792,6 @@ export const restarts = Effect.fnUntraced(function* (options: Options) {
 
   const restartsAfter = yield* Unit.restarts(target.unit);
 
-  const parked = Option.match(outcome.row, {
-    onNone: () => 0,
-    onSome: (row) => row.parkedTaskIds.length,
-  });
-
   const failed = Option.exists(outcome.row, (row) => row.activity === "failed");
 
   notes.push(
@@ -814,7 +809,6 @@ export const restarts = Effect.fnUntraced(function* (options: Options) {
     closedUnder5s: closedMs.every((ms) => ms < CLOSED_LIMIT_MS),
     noShutdownSlow: slow === 0,
     nRestartsUnchanged: restartsAfter === restartsBefore,
-    nothingParked: parked === 0,
     turnEnded: !failed,
     snapshotsUnder2s: snapshotMs.every((ms) => ms <= CONVERGE_MS),
     everyRestartInterruptedBash: interrupted >= RESTARTS,
@@ -833,7 +827,6 @@ export const restarts = Effect.fnUntraced(function* (options: Options) {
     upToSnapshotMs: snapshotMs,
     quietToEqualMs: outcome.quietToEqualMs,
     nRestarts: { before: restartsBefore, after: restartsAfter },
-    parked,
     followUps,
     bashCalls: outcome.entries.filter((entry) => callsTool(entry, "bash"))
       .length,

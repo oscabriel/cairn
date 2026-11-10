@@ -10,9 +10,9 @@
 #
 #   judges/spend-kill.sh [--case kills|control]... [--kills N] [--turns N] [--quick] [--keep]
 #
-# `--quick` kills 50 to 150 ms after each life starts producing, so five kills land on one request
-# and pi-durable parks it (`restart_limit`). The last life retries every parked task at boot, so it
-# finishes instead of waiting on a turn that never runs; the result counts them as `retriedParked`.
+# `--quick` kills 50 to 150 ms after each life starts producing, so several kills land on one
+# request. pi-durable 1.5 charges a request a kill cut off as a failed attempt, so its turn ends
+# instead of waiting; the last life runs the brain's crash accounting (ADR 0046) at boot.
 #
 # Prints one JSON line per case and a summary line; exits 0 when the real case passes and the
 # control fails. No model, no network, no secrets.

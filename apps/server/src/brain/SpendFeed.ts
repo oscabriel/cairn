@@ -213,7 +213,7 @@ const pendingOf = (publication: CommitPublication): Array<Pending> => {
       change.type === "document" &&
       change.record.kind === usageKind &&
       change.conversationId !== undefined &&
-      change.value !== null
+      change.kind === "change"
     ) {
       const totals = totalsOf(change.value);
 
@@ -241,7 +241,9 @@ const threadsNamedIn = (publication: CommitPublication) => {
       change.record.kind === ThreadMeta.definition.kind &&
       change.conversationId !== undefined
     ) {
-      const threadId = decodeThreadId(change.value?.threadId);
+      const threadId = decodeThreadId(
+        change.kind === "change" ? change.value.threadId : undefined
+      );
 
       if (Option.isSome(threadId)) {
         named.set(change.conversationId, threadId.value);

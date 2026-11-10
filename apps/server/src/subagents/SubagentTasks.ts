@@ -36,8 +36,8 @@
 //   conversation in that cwd with Cairn's thread identity and its `cairn.child` link, the registry
 //   item with its worktree and dispatch record, the first reporter and the parent's note that it
 //   started. A record already started changes nothing. A named model that is not ready or a
-//   workspace that cannot be made starts nothing, and the parent is told why. When the crash-loop
-//   guard parks it, it waits for a human Retry on the parent: the boot repair does not retry it.
+//   workspace that cannot be made starts nothing, and the parent is told why. Crashes never end it
+//   (`CrashLimit.ts` keeps it, ADR 0046): however often the brain dies, a Go'd brief starts once.
 // - BriefTell (`cairn.subagent-brief-tell`), created by the commit that settles a brief without a
 //   child (Decline, Send back, expiry, or a start that could not start): tells the parent as a
 //   follow-up input, or as a note when the parent is halted, under the answer's request id.
@@ -86,7 +86,7 @@ import {
   SUBAGENT_RESULT_ENTRY,
 } from "@cairn/protocol/Subagents";
 import type { SettlementOutcome } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import type {
   Agent,
@@ -107,7 +107,6 @@ import type {
 import {
   configure,
   ConversationBusy,
-  DEFAULT_RESTART_LIMIT,
   defineTask,
   InboxDoc,
   LiveDoc,
@@ -134,6 +133,7 @@ import {
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { messageText } from "../brain/CommitFeed.ts";
+import { documentCall } from "../brain/Durable.ts";
 import {
   admitNote,
   applyNote,
@@ -218,24 +218,17 @@ export const BRIEF_TELL_TASK = "cairn.subagent-brief-tell";
 export const REPORTER_TASK = "cairn.subagent-reporter";
 
 /**
- * The subagent tasks the boot repair retries when the crash-loop guard parked them. The anchor
- * completes in its first phase and waits on nothing, so the guard never parks it. The start task
- * is left out on purpose (ADR 0030): a parked start means something in the spawn path is broken,
- * and a boot retry would loop on it, so it waits for a human Retry on the parent.
+ * The subagent tasks boot's crash accounting never ends (`CrashLimit.ts`, ADR 0046): the brief and
+ * tell tasks sleep on pi-durable's clock and the reporter waits on its child, so a crash cuts them
+ * off without fault of their own, and the start task makes a Go'd child once however often the
+ * brain dies (ADR 0030). The anchor completes in its first phase and waits on nothing.
  */
-export const SUBAGENT_TASKS: ReadonlySet<string> = new Set([
+export const SUBAGENT_WAIT_TASKS: ReadonlySet<string> = new Set([
   BRIEF_TASK,
   BRIEF_TELL_TASK,
   REPORTER_TASK,
+  START_TASK,
 ]);
-
-/**
- * The tasks no boot repair retries when the crash-loop guard parked them, not even the retry of a
- * thread's parked approval waits (`retryParkedApprovalWaits`): the start task (ADR 0030). A parent
- * with another brief or gated call pending would otherwise have its parked start retried on every
- * boot, the crash loop the guard exists to stop. It waits for a human Retry on the parent.
- */
-export const HUMAN_RETRY_TASKS: ReadonlySet<string> = new Set([START_TASK]);
 
 /** A conversation-owned background task: a parent's Stop and idle waits never reach it. */
 const BACKGROUND = {
@@ -1099,7 +1092,7 @@ export const MODEL_REREADS = 20;
 export interface BriefTellInput {
   [key: string]: JsonValue;
   approvalId: string;
-  /** Whether the parent was halted (stopped, failed or parked) when the brief settled. */
+  /** Whether the parent was halted (stopped or failed) when the brief settled. */
   halted: boolean;
   /** Why an accepted brief started nothing; none for a declined, revised or expired one. */
   failure: StartFailure | null;
@@ -1251,9 +1244,8 @@ const HANDING_PHASES: ReadonlySet<JsonValue> = new Set([
 /**
  * Whether the child still has work ahead of it besides `mine` (table reads): another input of its
  * registry item not admitted yet, or another live reporter that will hand it an input (a nudge, or
- * the answer to a relayed question). A reporter the crash-loop guard parked hands nothing until a
- * retry, so it is no work ahead, as `parentHalt` reads a parked run; one marked for abort still
- * ends on its own.
+ * the answer to a relayed question). Crashes never end a reporter (`CrashLimit.ts` keeps it), and
+ * one marked for abort still ends on its own.
  */
 export const workAhead = async (
   tx: Tx,
@@ -1275,14 +1267,8 @@ export const workAhead = async (
     const task = await tx.task(taskOf(taskId));
     const state = task?.state;
 
-    const parked =
-      task !== undefined &&
-      !task.abortRequested &&
-      (task.restarts ?? 0) >= DEFAULT_RESTART_LIMIT;
-
     if (
       state !== undefined &&
-      !parked &&
       state.status !== "completing" &&
       state.status !== "terminal" &&
       isJsonRecord(state.checkpoint) &&
@@ -1575,42 +1561,39 @@ const tellParent = async <I, S, H extends object>(
     };
 
     // `halted` was read when the tell was decided; a parent the user stopped since is not started
-    // either (ADR 0028), so it is read again right before the submit. A rerun after the submit
-    // lands nothing more: the note and the input share one request id.
-    let noted = false;
+    // either (ADR 0028), so it is read again and the input admitted in the same commit
+    // (`submit(tx, draft)`, pi-durable 1.5), which also ends the task: a stop lands either before
+    // the read or after the input. The note and the input share one request id.
+    const conversation = await runtime.conversation(parent, context);
 
-    await runtime.commit(async (tx) => {
-      if (halted || (await parentHalted(tx, parent))) {
-        noted = true;
+    await runtime.commit(async (tx): Promise<NextTaskState<S, null>> => {
+      // Table reads, before any write.
+      const stopped = halted || (await parentHalted(tx, parent));
 
-        await admitNote(
-          tx,
-          parent,
-          requestId,
-          noteEntry({
-            kind: BRIEF_ANSWER_ENTRY,
-            data,
-            text,
-            at: runtime.now(),
-          })
-        );
-      }
+      await (stopped
+        ? admitNote(
+            tx,
+            parent,
+            requestId,
+            noteEntry({
+              kind: BRIEF_ANSWER_ENTRY,
+              data,
+              text,
+              at: runtime.now(),
+            })
+          )
+        : conversation?.submit(tx, {
+            type: "input",
+            requestId,
+            content: text,
+            whenBusy: "followUp",
+            entry: { kind: BRIEF_ANSWER_ENTRY, data },
+          }));
+
+      return completed();
     }, context);
 
-    if (!noted) {
-      const conversation = await runtime.conversation(parent, context);
-
-      await conversation?.submit(
-        {
-          type: "input",
-          requestId,
-          content: text,
-          whenBusy: "followUp",
-          entry: { kind: BRIEF_ANSWER_ENTRY, data },
-        },
-        context
-      );
-    }
+    return;
   }
 
   await runtime.commit(() => completed(), context);
@@ -1888,11 +1871,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     }
 
     await apply(watch.value);
-    watch.start(async (value) => {
-      try {
-        await apply(value);
-      } catch (error) {
-        runtime.report(error);
+    watch.start(async (call) => {
+      for (const value of Option.toArray(documentCall(call))) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- one value per call
+          await apply(value);
+        } catch (error) {
+          runtime.report(error);
+        }
       }
     });
 
@@ -2665,39 +2651,53 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             : undefined;
 
         // The wake was decided in the report's commit; a parent the user stopped since is not woken
-        // (ADR 0028). Read again right before the submit, and kept: a rerun submits nothing either.
-        let halted = false;
+        // (ADR 0028). Each wake reads that again and is admitted in the same commit
+        // (`submit(tx, draft)`, pi-durable 1.5), so a stop lands either before the read or after
+        // the wake. A stop found is kept in the checkpoint, so a rerun submits nothing either; a
+        // rerun after a wake submits it again under its request id, which lands once. pi-durable
+        // admits one submission per commit.
+        let woke = false;
 
-        if (wakes.length > 0 && !faults.wakeStoppedParent) {
-          await runtime.commit(async (tx) => {
-            halted = await parentHalted(tx, parent);
+        for (const wake of wakes) {
+          let stopped = false;
 
-            return halted
-              ? {
+          // oxlint-disable-next-line no-await-in-loop -- in order, one admission per commit
+          await runtime.commit(
+            async (
+              tx
+            ): Promise<NextTaskState<ReporterState, null> | undefined> => {
+              // A table read, before the admission's writes.
+              stopped =
+                !faults.wakeStoppedParent && (await parentHalted(tx, parent));
+
+              if (stopped) {
+                return {
                   status: "running",
                   checkpoint: { phase: "wake", settlement, wakes: [] },
-                }
-              : undefined;
-          }, context);
-        }
+                };
+              }
 
-        if (!halted) {
-          for (const wake of wakes) {
-            // oxlint-disable-next-line no-await-in-loop -- in order
-            await conversation?.submit(
-              {
+              await conversation?.submit(tx, {
                 type: "input",
                 requestId: submitId(wake.requestId, runtime.now()),
                 content: wake.text,
                 whenBusy: "followUp",
-              },
-              context
-            );
+              });
+
+              return undefined;
+            },
+            context
+          );
+
+          if (stopped) {
+            break;
           }
 
-          if (wakes.length > 0 && wokenDelayMillis > 0) {
-            await sleep(wokenDelayMillis);
-          }
+          woke = true;
+        }
+
+        if (woke && wokenDelayMillis > 0) {
+          await sleep(wokenDelayMillis);
         }
 
         crashAt("reporter-woken");

@@ -19,10 +19,10 @@
 // - after-input: killed after the first input was submitted.
 // - race: Go, Decline and Go at once: one answer takes effect.
 // - decline: Decline: nothing made, the parent told once.
-// - parked: killed at the top of the start five times in a row: the task parks, a clean boot does
-//   not retry it (ADR 0030), and a human Retry starts the child once. The parent holds a second
-//   brief pending throughout, so the boot's retry of parked approval waits reaches the parent too
-//   and must leave the start alone.
+// - crash-loop: killed at the top of the start six times in a row, past pi-durable's default
+//   restart limit: the brain's crash accounting keeps the start (ADR 0046), so the life that stays
+//   up starts the child once, with nobody retrying anything. The parent holds a second brief
+//   pending throughout.
 // - control: the broken control, an answer that commits Go without its start, killed before a
 //   second commit would create it. Its brief is accepted and never starts, so the one-child check
 //   must fail on it, or the judge proves nothing.
@@ -243,20 +243,6 @@ const stillPending = (report: Report): Problems => [
   ...nothingMade(report),
 ];
 
-/** Accepted, its start task parked by the crash-loop guard, nothing made. */
-const parkedNow = (report: Report): Problems => [
-  ...failing([
-    [
-      report.starts.length === 1 &&
-        report.starts[0]?.inspected === "blocked" &&
-        report.starts[0].reason === "restart_limit",
-      `start tasks ${JSON.stringify(report.starts)}, expected one parked`,
-    ],
-    [report.status === "accepted", `status ${report.status}`],
-  ]),
-  ...nothingMade(report),
-];
-
 /** Expects `lived` to have been killed by its planted fault. */
 const killed = (lived: Life, problems: Problems) => {
   if (!lived.killed) {
@@ -381,34 +367,32 @@ const CASES: ReadonlyArray<Case> = [
       }),
   },
   {
-    name: "parked",
+    name: "crash-loop",
     run: (dir, problems) =>
       Effect.gen(function* () {
-        const fault = ["--fault", "start", "--times", "5"];
+        const fault = ["--fault", "start", "--times", "6"];
 
-        // A second brief stays pending on the parent, so every boot's approval-wait retry reaches it.
+        // A second brief stays pending on the parent throughout.
         yield* spawned(dir, problems, false, true);
 
         let lived = yield* life(dir, "go", fault);
         let kills = lived.killed ? 1 : 0;
 
-        // Each boot resumes the start task, which dies again, until the crash-loop guard parks it.
-        while (lived.killed && kills < 8) {
+        // Each boot resumes the start task, which dies again, until the fault is spent.
+        while (lived.killed && kills < 9) {
           lived = yield* life(dir, "boot", fault);
           kills += lived.killed ? 1 : 0;
         }
 
-        if (kills !== 5) {
+        if (kills !== 6) {
           problems.push(
-            `${kills} kills before the brain stayed up, expected 5`
+            `${kills} kills before the brain stayed up, expected 6`
           );
         }
 
-        // The life that stayed up booted with the task parked; a second clean boot runs the
-        // subagent boot retry again, which must leave it parked.
-        check(lived, problems, parkedNow);
-        check(yield* life(dir, "boot"), problems, parkedNow);
-        check(yield* life(dir, "retry"), problems, oneChild);
+        // The life that stayed up kept the start through the crash accounting and ran it.
+        check(lived, problems, oneChild);
+        check(yield* life(dir, "boot"), problems, oneChild);
       }),
   },
   {
@@ -458,14 +442,16 @@ const program = Effect.gen(function* () {
   }
 
   const windows = results.filter(
-    (result) => !result.control && result.name !== "parked"
+    (result) => !result.control && result.name !== "crash-loop"
   );
 
   yield* Console.log(
     JSON.stringify({
       summary: "brief-go",
       windows: `${windows.filter((result) => result.pass).length} of ${windows.length}`,
-      parked: results.some((result) => result.name === "parked" && result.pass),
+      crashLoop: results.some(
+        (result) => result.name === "crash-loop" && result.pass
+      ),
       controlFailed: results
         .filter((result) => result.control)
         .every((result) => result.pass),

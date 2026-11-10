@@ -379,7 +379,6 @@ const launchRow = (activity: ThreadShell["activity"]): ThreadShell =>
     activeOrderKey: Option.none(),
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
-    parkedTaskIds: [],
     ...BARE_ROW_FIELDS,
   });
 

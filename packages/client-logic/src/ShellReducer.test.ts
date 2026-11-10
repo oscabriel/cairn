@@ -100,7 +100,6 @@ const thread = (id: ThreadId, title = "A thread") =>
     activeOrderKey: Option.none(),
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
-    parkedTaskIds: [],
     ...BARE_ROW_FIELDS,
   });
 

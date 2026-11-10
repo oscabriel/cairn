@@ -35,7 +35,6 @@ const MISSING: Partial<Record<HarnessError["reason"], NotFound["resource"]>> = {
   thread_not_found: "thread",
   submission_not_found: "submission",
   approval_not_found: "approval",
-  task_not_found: "task",
   entry_not_found: "entry",
 };
 

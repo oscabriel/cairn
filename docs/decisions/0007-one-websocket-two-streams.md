@@ -1,3 +1,5 @@
 # One RPC group over one WebSocket, carrying two streams
 
 Clients speak one Effect RPC group over one WebSocket (`/ws`). The shell stream is Cairn's own state (projects, thread rows, inbox fields), event-sourced in Cairn's SQLite with a sequence number, resuming t3code-style with `afterSequence`, bounded replay and a snapshot fallback. The thread stream is pi-durable's own: a `viewState()` snapshot then `watch()` ops, and every reconnect starts with a fresh snapshot because pi-durable buffers 100 frames and replays nothing (v1 spike 9 proved this converges). Uploads go over signed HTTP POST. Schemas export to JSON Schema so a GPUI client can follow.
+
+Note, 2026-11-09 (pi-durable 1.5): the premise that pi-durable replays nothing is gone. A conversation watch takes a window that can start at a given entry (`ConversationWindow.from`), and `ConversationTranscript.resume` asks for only what a client missed when it fits the window. The thread stream still starts every reconnect with a fresh snapshot; resuming it by entry is open work, not part of the bump.

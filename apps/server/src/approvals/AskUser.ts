@@ -11,7 +11,7 @@
 
 import { answerText } from "@cairn/client-logic/PendingRequests";
 import type { Question } from "@cairn/protocol/Policy";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { JsonObject } from "@earendil-works/pi-ai";
 import { Option, Result, Schema } from "effect";
 

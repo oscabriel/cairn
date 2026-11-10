@@ -18,7 +18,7 @@ import {
   MemoryStorage,
 } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
-import { Context, Effect, Layer, Option, Stream } from "effect";
+import { Context, Effect, Function, Layer, Option, Stream } from "effect";
 
 import { Database } from "../db/Database.ts";
 import { Spend0009 } from "../db/migrations/0009Spend.ts";
@@ -84,11 +84,17 @@ const brainOver = (session: BrainSession) =>
     subscribeCommits: (listener) =>
       Effect.acquireRelease(
         Effect.sync(() =>
-          session.harness.subscribeCommits((publication) => {
-            listener(session, publication);
+          session.harness.observeCommits({
+            advance: (publication) => {
+              listener(session, publication);
+            },
+            end: Function.constVoid,
           })
         ),
-        (detach) => Effect.sync(detach)
+        (observation) =>
+          Effect.sync(() => {
+            observation.detach();
+          })
       ).pipe(Effect.asVoid),
     now: () => 0,
   });

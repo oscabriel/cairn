@@ -27,7 +27,8 @@
     "@earendil-works/pi-mcp": "catalog:",
     "@effect/platform-node": "catalog:",
     "alchemy": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "typebox": "catalog:"
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",

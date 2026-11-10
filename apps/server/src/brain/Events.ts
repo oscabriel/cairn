@@ -42,7 +42,7 @@ import {
   EventName,
   EVENTS_DOCUMENT,
 } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   Cursor,
   EntryRecord,

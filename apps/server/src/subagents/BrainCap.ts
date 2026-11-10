@@ -1,7 +1,7 @@
 // The brain-wide cap on live children (subagents note S3, `MAX_LIVE_CHILDREN_PER_BRAIN`): beside a
 // parent's own cap of 8, the whole brain holds at most 32 children working, waiting, or on their
 // way. A child counts from its ask: a brief waiting for Go, an accepted brief whose start task has
-// not run (parked ones too, since a Retry starts them), and every registry item not settled.
+// not run, and every registry item not settled.
 //
 // The count reads every thread that holds children, which `cairn.subagent-parents` (session scope)
 // lists: the spawn adds its parent, and so do the paths that bring a settled child back to work

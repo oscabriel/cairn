@@ -71,6 +71,7 @@ import type { Message as MetersMessage } from "./next/meters/Message.ts";
 import { initial as initialMeters } from "./next/meters/Model.ts";
 import type { MetersPage, Model as MetersModel } from "./next/meters/Model.ts";
 import { meters as Meters } from "./next/meters/Update.ts";
+import * as Hold from "./next/shell/Hold.ts";
 import { OutMessage as NextShellOutMessage } from "./next/shell/Message.ts";
 import type { Message as NextShellMessage } from "./next/shell/Message.ts";
 import { initial as initialNextShell } from "./next/shell/Model.ts";
@@ -103,7 +104,6 @@ import {
   inform as informSettingsModel,
   update as updateSettings,
 } from "./settings/Update.ts";
-import * as Parked from "./shell/Parked.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
 import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
 import type { Message as SidebarMessage } from "./sidebar/Message.ts";
@@ -465,46 +465,17 @@ const syncSettings: Step = (model) => {
     : informSettings(model, context);
 };
 
-const toGotParkedMessage = (message: Parked.Message): Message =>
-  Message.GotParkedMessage({ message });
-
-const readParked = (model: Model): Option.Option<Parked.Model> =>
-  Option.some(model.parked);
-
-const writeParked = (model: Model, parked: Parked.Model): Model =>
-  modifyFields(model, { parked: () => parked });
-
-const foldParkedMessage = Update.foldChild({
-  update: Parked.update,
-  read: readParked,
-  write: writeParked,
-  toParentMessage: toGotParkedMessage,
-});
-
-const informParked = Update.foldChild({
-  update: Parked.inform,
-  read: readParked,
-  write: writeParked,
-  toParentMessage: toGotParkedMessage,
-});
-
 const sameRow = Option.makeEquivalence<object>((left, right) => left === right);
 
-/** Tells the hold banner the open thread's shell row and the connection, when they changed. */
-const syncParked: Step = (model) => {
+/** Tells the hold banner the open thread's shell row, when it changed. */
+const syncHold: Step = (model) => {
   const thread = Option.flatMap(routedThreadId(model.route), (id) =>
     threadRowOf(model.shell, id)
   );
 
-  const connected = hasClient(model.connection);
-
-  const unchanged =
-    model.parked.hasClient === connected &&
-    sameRow(model.parked.thread, thread);
-
-  return unchanged
+  return sameRow(model.hold.thread, thread)
     ? { model }
-    : informParked(model, { thread, hasClient: connected });
+    : { model: modifyFields(model, { hold: () => ({ thread }) }) };
 };
 
 const toGotMetersMessage = (message: MetersMessage): Message =>
@@ -1335,10 +1306,6 @@ const step = (received: Message): Step =>
       ({ message: settingsMessage }) =>
       (model) =>
         foldSettingsMessage(model, settingsMessage),
-    GotParkedMessage:
-      ({ message: parkedMessage }) =>
-      (model) =>
-        foldParkedMessage(model, parkedMessage),
     GotNextShellMessage:
       ({ message: nextShellMessage }) =>
       (model) =>
@@ -1369,7 +1336,7 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncPush,
     syncSettings,
     syncComposerSettings,
-    syncParked,
+    syncHold,
     syncNextShell,
     syncScratchThread,
     syncRequestCard,
@@ -1405,7 +1372,7 @@ export const init: Runtime.RoutingApplicationInit<
       composer,
       push: initialPush,
       settings: initialSettings,
-      parked: Parked.initial,
+      hold: Hold.initial,
       nextShell: initialNextShell,
       scratchThread: Thread.Model.initial,
       requestCard: initialRequestCard,
@@ -1424,7 +1391,7 @@ export const init: Runtime.RoutingApplicationInit<
     startSettings,
     syncSettings,
     syncComposerSettings,
-    syncParked,
+    syncHold,
     syncNextShell,
     syncScratchThread,
     syncRequestCard,

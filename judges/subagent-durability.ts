@@ -19,8 +19,8 @@
 //   the steer was first sent, and it fired once.
 // - nudge-marked, nudge-submitted: a typed child ends without a result, and the kill lands around
 //   its one nudge.
-// - park: five kills at reporter-noted, so pi-durable's crash-loop guard parks the reporter; the
-//   next boot's repair retries it.
+// - crash-loop: six kills at reporter-noted, past pi-durable's default restart limit; the boot's
+//   crash accounting keeps the reporter (ADR 0046), so it delivers once with nobody retrying it.
 // - question, question-recorded, question-routed, question-answered: question routing (ADR 0027,
 //   4B). The child asks its parent with `ask_parent`; the parent's model answers it with
 //   `subagent_reply` (its script names the child as `$subagent`, `fixtures/JudgeModel.ts`). The
@@ -59,7 +59,7 @@
 // the answer once (by `ask_parent`'s result, or for a relay as its next input), and for an escalation one mirror and one index entry, both settled; one note per
 // settlement, under its `seq`; one wake for a settlement that wakes and none for a steer's quiet
 // one; every settlement delivered; the parent's tally of its child; the kill fired as many times as
-// asked; for park, that a boot repair retried a parked subagent task. Prints one JSON line per case
+// asked; for crash-loop, that a boot found a task cut off past the limit and ended none. Prints one JSON line per case
 // and a summary line; exits 0 when every real case passes and the control fails as it must.
 
 import { spawn } from "node:child_process";
@@ -136,8 +136,8 @@ interface CaseSpec {
   /** What the case must end in: a pass, or (a control) a double delivery and nothing else. */
   readonly expect: "pass" | "double";
   readonly bridge: boolean;
-  /** Expect a boot repair to have retried a parked subagent task. */
-  readonly park: boolean;
+  /** Expect a boot to find a task cut off past the limit, and the crash accounting to end none. */
+  readonly loop: boolean;
 }
 
 const spec = (
@@ -151,7 +151,7 @@ const spec = (
   fault: Option.none(),
   expect: "pass",
   bridge: false,
-  park: false,
+  loop: false,
   ...fields,
   crash: Option.fromUndefinedOr(fields.crash),
 });
@@ -169,7 +169,7 @@ const FAUX_CASES: ReadonlyArray<CaseSpec> = [
   spec("steer-recorded", { crash: "steer-recorded", errand: "steer" }),
   spec("nudge-marked", { crash: "nudge-marked", errand: "nudge" }),
   spec("nudge-submitted", { crash: "nudge-submitted", errand: "nudge" }),
-  spec("park", { crash: "reporter-noted*5", park: true }),
+  spec("crash-loop", { crash: "reporter-noted*6", loop: true }),
   spec("question", { errand: "question" }),
   spec("question-recorded", {
     crash: "question-recorded",
@@ -1163,7 +1163,7 @@ const judge = (
   brain: Brain,
   plan: Plan,
   reading: Reading,
-  retried: number
+  crashes: { readonly cutOff: number; readonly ended: number }
 ): ReadonlyArray<Failure> => {
   const steer = caseSpec.errand === "steer";
   const nudge = caseSpec.errand === "nudge";
@@ -1234,29 +1234,38 @@ const judge = (
     });
   }
 
-  if (caseSpec.park && retried < 1) {
+  if (caseSpec.loop && crashes.cutOff < 1) {
     failures.push({
       kind: "other",
-      text: "no boot repair retried a parked subagent task",
+      text: "no boot found a task cut off past the limit: the kills did not loop the reporter",
+    });
+  }
+
+  if (caseSpec.loop && crashes.ended > 0) {
+    failures.push({
+      kind: "other",
+      text: `the boot's crash accounting ended ${String(crashes.ended)} tasks`,
     });
   }
 
   return failures;
 };
 
-/** Parked subagent tasks retried at boot, over every life. */
-const retriedAtBoot = (brain: Brain) =>
+/** What the boots' crash accounting found and ended, over every life (`CrashLimit.ts`). */
+const crashesAtBoot = (brain: Brain) =>
   Events.read(brain.events).pipe(
-    Effect.map((events) =>
-      events
-        .filter(Events.named("boot_retried_subagent_tasks"))
-        .reduce(
-          (sum, event) =>
-            sum +
-            Option.getOrElse(Events.numberField(event, "retried"), () => 0),
+    Effect.map((events) => {
+      const done = events.filter(Events.named("boot_crash_limit_done"));
+
+      const sum = (field: string) =>
+        done.reduce(
+          (total, event) =>
+            total + Option.getOrElse(Events.numberField(event, field), () => 0),
           0
-        )
-    )
+        );
+
+      return { cutOff: sum("cutOff"), ended: sum("ended") };
+    })
   );
 
 const removeScratch = (brain: Brain) =>
@@ -1290,9 +1299,9 @@ const runCase = (caseSpec: CaseSpec) =>
     const outcome = yield* Effect.gen(function* () {
       const plan = yield* makePlan;
       const reading = yield* drive(brain, caseSpec, plan);
-      const retried = yield* retriedAtBoot(brain);
+      const crashes = yield* crashesAtBoot(brain);
 
-      return judge(caseSpec, brain, plan, reading, retried);
+      return judge(caseSpec, brain, plan, reading, crashes);
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.succeed<ReadonlyArray<Failure>>([

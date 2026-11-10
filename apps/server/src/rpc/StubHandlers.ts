@@ -25,7 +25,6 @@ export const stubHandlers = {
   "thread.withdraw": unary("thread.withdraw"),
   "thread.configure": unary("thread.configure"),
   "thread.respond": unary("thread.respond"),
-  "thread.retryTask": unary("thread.retryTask"),
   "thread.subscribe": stream("thread.subscribe"),
   "thread.history": unary("thread.history"),
   "thread.entry": unary("thread.entry"),

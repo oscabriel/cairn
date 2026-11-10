@@ -69,7 +69,7 @@
 //                         thread"), and under it the managed threads, newest first, each with
 //                         its status mark and word; no Active, Settled, Pinned or Snoozed group;
 //   shell-managed-<w>     a managed thread opens, says it is managed, and takes a message that
-//                         shows in its transcript; a parked one shows the hold banner with Retry;
+//                         shows in its transcript; a limited one shows the hold banner;
 //   shell-foot-<w>        Usage opens the usage page and Settings the settings page, and the foot
 //                         holds no meter;
 //   shell-scratch-<w>     Ctrl+J while typing in the composer (1,440) or the header's button (390)
@@ -484,7 +484,7 @@ const shellChecks = async (browser: Browser, hero: string) => {
         },
         (detail) =>
           detail ===
-          `titles ${JSON.stringify(MANAGED_SEED.map((seed) => seed.title).toReversed())}, marks ${JSON.stringify(["Approval", "Working", "Failed", "Parked", "Done", "Idle"])}, groups 0, opened true, role project thread`
+          `titles ${JSON.stringify(MANAGED_SEED.map((seed) => seed.title).toReversed())}, marks ${JSON.stringify(["Approval", "Working", "Failed", "Limited", "Done", "Idle"])}, groups 0, opened true, role project thread`
       );
     },
     async (width) => {
@@ -501,15 +501,10 @@ const shellChecks = async (browser: Browser, hero: string) => {
             .click();
           await page.getByTestId("thread-hold").waitFor({ timeout: 5000 });
           await page.waitForTimeout(300);
-          await shot(page, "hold-parked", width);
+          await shot(page, "hold-limited", width);
 
           const hold =
             (await page.getByTestId("thread-hold").textContent()) ?? "";
-
-          const retry = await page
-            .getByTestId("thread-hold")
-            .getByRole("button", { name: "Retry" })
-            .count();
 
           await openSidebar(page, width);
           await sidebarOf(page, width)
@@ -540,11 +535,11 @@ const shellChecks = async (browser: Browser, hero: string) => {
           const title =
             (await page.getByTestId("next-header-title").textContent()) ?? "";
 
-          return `hold ${hold.includes("Parked")}, retry ${retry}, title ${title}, sent shown ${shown}`;
+          return `hold ${hold.includes("Limited")}, title ${title}, sent shown ${shown}`;
         },
         (detail) =>
           detail ===
-          "hold true, retry 1, title Map the favicon resolver, sent shown true"
+          "hold true, title Map the favicon resolver, sent shown true"
       );
     },
     async (width) => {

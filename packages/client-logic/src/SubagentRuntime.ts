@@ -18,7 +18,7 @@
 // a live one its progress, and a group's span from its first start to its last end. Changed: the
 // states are Cairn's: a brief waiting for Go and a brief that never started come before any child,
 // and a started child reads its live state from its own shell row (approval, input, a question to
-// its parent, working, waiting on its own children, parked, limited, failed) and, at rest, how its
+// its parent, working, waiting on its own children, limited, failed) and, at rest, how its
 // latest settlement ended. A spawn call is linked to its brief by the brief's summary, which is the
 // call's `description`, newest first, since older calls may not be loaded yet. Not ported: workflow
 // coordinators and members (5E's `WorkflowSteps.ts`), provider avatars, model labels, workspaces,
@@ -88,7 +88,6 @@ export type SubagentState =
   | "asking-parent"
   | "working"
   | "waiting"
-  | "parked"
   | "limited"
   | "done"
   | "failed"
@@ -113,7 +112,6 @@ export const SUBAGENT_LABELS: Readonly<Record<SubagentState, SubagentLabel>> = {
   "asking-parent": THREAD_LABELS["asking-parent"],
   working: THREAD_LABELS.working,
   waiting: THREAD_LABELS.waiting,
-  parked: THREAD_LABELS.parked,
   limited: THREAD_LABELS.limited,
   done: THREAD_LABELS.done,
   failed: THREAD_LABELS.failed,
@@ -232,7 +230,6 @@ const TALLY_OF: Readonly<Record<SubagentState, TallyKey>> = {
   "asking-parent": "asking",
   working: "working",
   waiting: "working",
-  parked: "held",
   limited: "held",
   done: "done",
   failed: "failed",
@@ -768,7 +765,6 @@ const LIVE_STATE: Readonly<
   "asking-parent": "asking-parent",
   working: "working",
   waiting: "waiting",
-  parked: "parked",
   failed: "failed",
   limited: "limited",
 };

@@ -16,14 +16,10 @@
 // live on the threads the user talks to, the project thread first among them (2026-10-29).
 
 import type { ModelRef } from "@cairn/protocol/Models";
-import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionApi, Tx } from "@earendil-works/pi-durable";
-import {
-  DEFAULT_RESTART_LIMIT,
-  defineExtension,
-  defineTool,
-} from "@earendil-works/pi-durable";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
+import { Type } from "typebox";
 
 import { approvalLedger } from "../brain/CairnDocs.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
@@ -140,8 +136,8 @@ const inChild = async (
 
 /**
  * The first of `items` (unsettled index items of one criterion) whose judge run can still settle
- * it. An item whose task is gone, ended without its completing commit (a fault), or parked by the
- * crash-loop guard can never settle on its own: it is settled here at `now`, in the asking commit,
+ * it. An item whose task is gone, or ended without its completing commit (a fault, or boot's crash
+ * accounting, `CrashLimit.ts`), can never settle on its own: it is settled here at `now`, in the asking commit,
  * so the criterion is queued afresh rather than waiting on it for good. Table reads: call it
  * before the commit's first table write.
  */
@@ -157,8 +153,7 @@ const liveRunOf = async (
     const live =
       task !== undefined &&
       task.state.status !== "completing" &&
-      task.state.status !== "terminal" &&
-      (task.restarts ?? 0) < DEFAULT_RESTART_LIMIT;
+      task.state.status !== "terminal";
 
     if (live) {
       return Option.some(item);

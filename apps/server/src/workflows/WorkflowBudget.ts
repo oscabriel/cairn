@@ -49,7 +49,7 @@ import { Budget } from "@cairn/protocol/Spend";
 import type { Budget as BudgetType } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
 import type { NoticeEntryData } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message, Models } from "@earendil-works/pi-ai";
 import type {
   ConversationId,

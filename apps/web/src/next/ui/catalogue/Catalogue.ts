@@ -881,13 +881,13 @@ const banners = (h: H): Html =>
         banner(h, {
           tone: "waiting",
           mark: Option.none(),
-          title: "Parked after five restarts.",
+          title: "Waiting on its subagent.",
           detail: Option.some(
-            "The run stopped at the same tool call each time; retry it or stop the thread."
+            "The run waits for the subagent's answer; send the subagent a note or stop the thread."
           ),
           actions: [
             buttonOf(h, { size: "small", variant: "ghost" }, "Stop"),
-            buttonOf(h, { size: "small" }, "Retry"),
+            buttonOf(h, { size: "small" }, "Send a note"),
           ],
         }),
       ]),

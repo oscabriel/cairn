@@ -10,10 +10,10 @@
 // the run that asked. Routing a child's question to its parent first (ADR 0027) is the question
 // router's; here every question is the user's.
 
-import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
+import { Type } from "typebox";
 
 import { approvalLedger, Approvals } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";

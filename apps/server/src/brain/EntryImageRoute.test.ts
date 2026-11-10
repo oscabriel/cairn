@@ -33,7 +33,6 @@ const seamServing = (mimeType: string) =>
       }),
     events: Stream.never,
     inspect: Effect.succeed([]),
-    retry: unsupported,
     capabilities: { durable: false, live: false },
   });
 

@@ -48,8 +48,6 @@ export interface ThreadPresentation {
   readonly hasPendingUserInput: boolean;
   /** A run finished after the user last looked at the thread. */
   readonly hasUnseenCompletion: boolean;
-  /** pi-durable parked at least one task; the row offers a retry. */
-  readonly isParked: boolean;
   /** The latest run failed. */
   readonly isFailed: boolean;
   /** Waiting for a free Claude slot, not for the user. */
@@ -114,7 +112,6 @@ export const presentThreadShell = (thread: ThreadShell): ThreadPresentation => {
       (kind) => kind === "user-input" || kind === "sign-in"
     ),
     hasUnseenCompletion: hasUnseenCompletion(thread),
-    isParked: thread.activity === "parked" || thread.parkedTaskIds.length > 0,
     isFailed: thread.activity === "failed",
     isWaitingForClaudeSlot: thread.waitingFor === "claude_slot",
   };

@@ -13,7 +13,7 @@ import path from "node:path";
 
 import { ConversationId } from "@cairn/protocol/Ids";
 import { EventEnvelope } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { SessionDocToken, Storage, Tx } from "@earendil-works/pi-durable";
 import {
   defineDoc,
@@ -45,7 +45,6 @@ import type { EventDraft, EventsState, Reactor } from "./Events.ts";
 import { emit, EventsDoc, monthOf, reactor } from "./Events.ts";
 import { Extensions } from "./Extensions.ts";
 import { ModelSource } from "./ModelSource.ts";
-import { Parked } from "./Parked.ts";
 import { piConversationId, piEntryId } from "./PiIds.ts";
 
 /** What the test reactors write, through `tx` only. */
@@ -169,14 +168,14 @@ const failNext = { value: false };
 const failing = (storage: Storage): Storage => {
   const commitWrites = storage.commit.bind(storage);
 
-  storage.commit = async (writes, context) => {
+  storage.commit = async (batches, receive, context) => {
     if (failNext.value) {
       failNext.value = false;
 
       throw new Error("storage reset (test)");
     }
 
-    return await commitWrites(writes, context);
+    return await commitWrites(batches, receive, context);
   };
 
   return storage;
@@ -197,7 +196,6 @@ const brainLayer = (dataDir: string, reactors: ReadonlyArray<Reactor>) =>
         Layer.provide(Arms.layer)
       )
     ),
-    Layer.provide(Parked.layer),
     Layer.provide(
       Extensions.fromSources([
         Effect.succeed({ order: 900, extension: TestTasks }),

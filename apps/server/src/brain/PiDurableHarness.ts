@@ -11,10 +11,13 @@
 //   the next note on an idle thread place them first, keeping notes in the order they were written
 //   (ADR 0028). Queued inputs stay queued, and nothing here starts a run.
 // - watch: a fresh projected snapshot, then ops; after a reopen of the Session the stream carries
-//   on with a new snapshot of the new Session, because a snapshot is legal at any point.
+//   on with a new snapshot of the new Session, because a snapshot is legal at any point. The
+//   conversation watch is asked for a window (`STREAM_WINDOW`) that starts with as many entries as
+//   the thread window can hold and never slides, so appends stay appends for the subscription's
+//   life (pi-durable 1.5 otherwise drops the oldest 50 past 100 entries).
 // - whenEnsured: subscribes to this process's ensures, then reads the receipt, so an ensure that
 //   lands in between is not missed. Only `ensureThread` writes receipts, and only in this process.
-// - events: the commit feed, plus parked tasks from the Harness's reports.
+// - events: the commit feed.
 //
 // The submit, watch and abort wrappers follow cairn-v1, apps/server/src/Harnesses.ts at 1a5cd4a.
 
@@ -27,7 +30,6 @@ import {
   EntryId,
   RunId,
   SubmissionId,
-  TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
 import {
@@ -41,11 +43,13 @@ import type {
   ConversationDocToken,
   ConversationId as PiConversationId,
   ConversationView as PiConversationView,
+  ConversationWindow,
   Cursor,
   InputSubmissionDraft,
   JsonObject,
   LiveState,
   TaskId as PiTaskId,
+  WatchCall,
 } from "@earendil-works/pi-durable";
 import {
   ConversationBusy,
@@ -96,13 +100,12 @@ import {
 } from "./CairnDocs.ts";
 import type { AnsweredHook, ApprovalRecord } from "./CairnDocs.ts";
 import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
-import { durable, errorText, handOff } from "./Durable.ts";
+import { documentCall, durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
-import { HarnessError, HarnessSeam, TaskParked } from "./HarnessSeam.ts";
+import { HarnessError, HarnessSeam } from "./HarnessSeam.ts";
 import type {
   ApprovalAnswerInput,
   EnsureThread,
-  HarnessEvent,
   HarnessTurnInput,
   HistoryQuery,
   LiveThreadState,
@@ -113,16 +116,14 @@ import type {
   ThreadFrame,
 } from "./HarnessSeam.ts";
 import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
-import { Parked } from "./Parked.ts";
 import { parentCeiling } from "./Permissions.ts";
-import {
-  piConversationId,
-  piEntryId,
-  piSubmissionId,
-  piTaskId,
-} from "./PiIds.ts";
+import { piConversationId, piEntryId, piSubmissionId } from "./PiIds.ts";
 import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
-import { WindowFrame, windowedProjector } from "./ThreadWindow.ts";
+import {
+  WINDOW_POLICY,
+  WindowFrame,
+  windowedProjector,
+} from "./ThreadWindow.ts";
 import type { WindowedView } from "./ThreadWindow.ts";
 import {
   entryImages,
@@ -194,10 +195,6 @@ const fromDurable =
     });
   };
 
-/** pi-durable's rejection of `retryTask` for a task it does not have (scheduler.js, `retry`). */
-const isMissingTask = (cause: unknown) =>
-  /^Task \S+ does not exist$/u.test(errorText(cause));
-
 const fromUnavailable =
   (threadId: Option.Option<ThreadId>) => (error: BrainUnavailable) =>
     failure("unavailable", threadId, error.message);
@@ -243,29 +240,36 @@ const call = <A>(
   run: Parameters<typeof durable<A>>[1]
 ) => durable(operation, run).pipe(Effect.mapError(fromDurable(threadId)));
 
-/** Whether entries exist before the first one the view holds. */
-const hasOlder = (
-  threadId: ThreadId,
-  conversation: Conversation,
-  view: PiConversationView
-) => {
-  const [first] = view.entries;
-
-  if (first === undefined || first.id <= 1) {
-    return Effect.succeed(false);
-  }
-
-  return call(Option.some(threadId), "entries", async (context) => {
-    const page = await conversation.entries(
-      { maxEntryId: piEntryId(EntryId.make(first.id - 1)) },
-      1,
-      undefined,
-      context
-    );
-
-    return page.items.length > 0;
-  });
+/**
+ * The conversation watch's window (pi-durable 1.5, `ConversationWindow`): its first value holds the
+ * newest entries the thread window can start with, and it never drops its oldest, so for the life of
+ * one subscription every entry is an append and the thread window's prefix holds (ThreadWindow.ts).
+ */
+const STREAM_WINDOW: ConversationWindow = {
+  min: WINDOW_POLICY.maxEntries,
+  max: Number.MAX_SAFE_INTEGER,
 };
+
+/**
+ * A snapshot frame of a window. The thread window (ThreadWindow.ts) leaves older entries out; with
+ * none left out, pi-durable's own window may still start after the first entry (`before`).
+ */
+const snapshotItem = (
+  seq: Ref.Ref<number>,
+  windowed: WindowedView,
+  current: PiConversationView
+) =>
+  Effect.gen(function* () {
+    const hasMoreHistory =
+      windowed.entriesOffset > 0 || current.before !== undefined;
+
+    return ThreadSnapshotItem.make({
+      seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
+      view: windowed.view,
+      entriesOffset: windowed.entriesOffset,
+      hasMoreHistory,
+    });
+  });
 
 /** The agent a new thread starts with. */
 const firstAgent = (input: EnsureThread) => {
@@ -308,7 +312,6 @@ const layerNoDeps = Layer.effect(
     const feed = yield* CommitFeed;
     const crashes = yield* SubagentCrashes;
     const faults = yield* SubagentFaults;
-    const parked = yield* Parked;
     // Where a judge brain kills itself inside a brief's Go commit; none elsewhere.
     const briefAnswered = answerBrief(yield* BriefFaults);
 
@@ -1030,7 +1033,8 @@ const layerNoDeps = Layer.effect(
               call(
                 Option.some(threadId),
                 "watch",
-                async (context) => await conversation.watch(context)
+                async (context) =>
+                  await conversation.watch(context, STREAM_WINDOW)
               ),
               (handle) =>
                 Effect.promise(async () => {
@@ -1075,9 +1079,7 @@ const layerNoDeps = Layer.effect(
 
             for (const { kind, handle } of docWatches) {
               for (const value of Option.toArray(handle)) {
-                if (value.value !== null) {
-                  latestDocs.set(kind, value.value);
-                }
+                latestDocs.set(kind, value.value);
               }
             }
 
@@ -1089,53 +1091,42 @@ const layerNoDeps = Layer.effect(
                     docs: { ...latest.docs, ...Object.fromEntries(latestDocs) },
                   };
 
-            // A window (ThreadWindow.ts) leaves older entries out; with none left out, pi-durable
-            // may still hold entries before the view (a compaction moved its start).
-            const snapshotItem = (
-              windowed: WindowedView,
-              current: PiConversationView
-            ) =>
-              Effect.gen(function* () {
-                const hasMoreHistory =
-                  windowed.entriesOffset > 0 ||
-                  (yield* hasOlder(threadId, conversation, current));
-
-                return ThreadSnapshotItem.make({
-                  seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
-                  view: windowed.view,
-                  entriesOffset: windowed.entriesOffset,
-                  hasMoreHistory,
-                });
-              });
-
             const first = yield* Effect.fromResult(
               projector.snapshot(withDocs())
             ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
 
-            yield* Queue.offer(queue, yield* snapshotItem(first, watch.value));
+            yield* Queue.offer(
+              queue,
+              yield* snapshotItem(seq, first, watch.value)
+            );
 
             // The listeners only record the newest revision and ring; with the one-frame output
             // buffer below, a slow subscriber gets one larger diff instead of a backlog.
             const ticks = yield* Queue.sliding<true>(1);
 
             watch.start(
-              handOff((value: PiConversationView) => {
-                latest = value;
-                Queue.offerUnsafe(ticks, true);
+              handOff((change: WatchCall<PiConversationView>) => {
+                if (change.kind === "value") {
+                  latest = change.value;
+                  Queue.offerUnsafe(ticks, true);
+                }
               })
             );
 
             for (const { kind, handle } of docWatches) {
               for (const docWatch of Option.toArray(handle)) {
                 docWatch.start(
-                  handOff((value: Readonly<JsonObject> | null) => {
-                    if (value === null) {
-                      latestDocs.delete(kind);
-                    } else {
-                      latestDocs.set(kind, value);
-                    }
+                  handOff((change: WatchCall<Readonly<JsonObject>>) => {
+                    // A retired document keeps its last value on the watch; the view drops it.
+                    for (const value of Option.toArray(documentCall(change))) {
+                      if (value === null) {
+                        latestDocs.delete(kind);
+                      } else {
+                        latestDocs.set(kind, value);
+                      }
 
-                    Queue.offerUnsafe(ticks, true);
+                      Queue.offerUnsafe(ticks, true);
+                    }
                   })
                 );
               }
@@ -1152,8 +1143,9 @@ const layerNoDeps = Layer.effect(
 
                   yield* WindowFrame.$match(frame, {
                     Snapshot: (windowed) =>
-                      Effect.flatMap(snapshotItem(windowed, current), (item) =>
-                        Queue.offer(queue, item)
+                      Effect.flatMap(
+                        snapshotItem(seq, windowed, current),
+                        (item) => Queue.offer(queue, item)
                       ),
                     Ops: ({ ops }) =>
                       ops.length === 0
@@ -1176,7 +1168,7 @@ const layerNoDeps = Layer.effect(
 
             yield* Effect.promise(async () => await watch.closed).pipe(
               Effect.flatMap((end) =>
-                end.reason === "listener_error"
+                end.kind === "listener_error"
                   ? Queue.fail(
                       queue,
                       failure(
@@ -1387,25 +1379,6 @@ const layerNoDeps = Layer.effect(
       };
     });
 
-    const parkedEvents = parked.parked.pipe(
-      Stream.mapEffect((task) =>
-        Effect.gen(function* () {
-          const session = yield* brain.session;
-
-          const threadId = yield* threadOf(
-            session,
-            piConversationId(task.conversationId)
-          );
-
-          return Option.map(threadId, (found) =>
-            TaskParked.make({ threadId: found, taskId: task.taskId })
-          );
-        }).pipe(Effect.orElseSucceed(() => Option.none<HarnessEvent>()))
-      ),
-      Stream.filter(Option.isSome),
-      Stream.map((event) => event.value)
-    );
-
     const inspect = Effect.gen(function* () {
       const session = yield* open(Option.none());
 
@@ -1420,7 +1393,6 @@ const layerNoDeps = Layer.effect(
         {
           runId: Option.Option<RunId>;
           queueLength: number;
-          parkedTaskIds: Array<TaskId>;
         }
       >();
 
@@ -1434,7 +1406,6 @@ const layerNoDeps = Layer.effect(
         const created = {
           runId: Option.none<RunId>(),
           queueLength: 0,
-          parkedTaskIds: [],
         };
 
         byConversation.set(id, created);
@@ -1443,32 +1414,11 @@ const layerNoDeps = Layer.effect(
       };
 
       for (const task of inspection.tasks) {
-        const { record, state } = task;
+        const { record } = task;
         const target = slot(record.conversationId);
 
         if (record.kind === RUN_TASK) {
           target.runId = Option.some(RunId.make(record.id));
-        }
-
-        if (state.kind === "blocked" && state.reason === "restart_limit") {
-          target.parkedTaskIds.push(TaskId.make(record.id));
-          yield* parked.add({
-            taskId: TaskId.make(record.id),
-            conversationId: ConversationId.make(record.conversationId),
-            kind: record.kind,
-          });
-        }
-      }
-
-      // A task that ended without a retry (a stop that cleared the queue, a deleted thread) is no
-      // longer parked: forget it, so the list matches what pi-durable reports (T39).
-      const stillParked = new Set(
-        [...byConversation.values()].flatMap((found) => found.parkedTaskIds)
-      );
-
-      for (const known of yield* parked.list) {
-        if (!stillParked.has(known.taskId)) {
-          yield* parked.remove(known.taskId);
         }
       }
 
@@ -1545,42 +1495,12 @@ const layerNoDeps = Layer.effect(
             conversationId: ConversationId.make(conversationId),
             runId: found.runId,
             queueLength: found.queueLength,
-            parkedTaskIds: found.parkedTaskIds,
             pendingApprovals: pending,
           });
         }
       }
 
       return states;
-    });
-
-    const retry = Effect.fn("PiDurableHarness.retry")(function* (
-      taskId: TaskId
-    ) {
-      const session = yield* open(Option.none());
-
-      yield* durable("retry-task", async (context) => {
-        await session.harness.retryTask(piTaskId(taskId), context);
-      }).pipe(
-        // pi-durable rejects an unknown task with "Task <id> does not exist" and does nothing for one
-        // that is not parked; every other rejection keeps its own classification and cause.
-        Effect.mapError((error) =>
-          !error.closed && isMissingTask(error.cause)
-            ? failure(
-                "task_not_found",
-                Option.none(),
-                `Task ${taskId} is not in the brain. Refresh the thread.`
-              )
-            : fromDurable(Option.none())(error)
-        ),
-        // A task the brain no longer has cannot stay parked either.
-        Effect.tapError((error) =>
-          error.reason === "task_not_found"
-            ? parked.remove(taskId)
-            : Effect.void
-        )
-      );
-      yield* parked.remove(taskId);
     });
 
     return HarnessSeam.of({
@@ -1598,9 +1518,8 @@ const layerNoDeps = Layer.effect(
       history,
       entry,
       entryImage,
-      events: Stream.merge(feed.events, parkedEvents),
+      events: feed.events,
       inspect,
-      retry,
       capabilities: { durable: true, live: true },
     });
   })
@@ -1608,8 +1527,8 @@ const layerNoDeps = Layer.effect(
 
 /**
  * The seam over pi-durable. `layer` puts the brain under it and also exposes `Brain` (boot resumes
- * it after its repairs) and `Parked`; it needs the models, the extension set and the brain's
- * directory from the composition root.
+ * it after its repairs); it needs the models, the extension set and the brain's directory from the
+ * composition root.
  */
 export const PiDurableHarness = {
   layerNoDeps,
@@ -1620,7 +1539,6 @@ export const PiDurableHarness = {
         Layer.provide(BrainStore.layer),
         Layer.provide(Arms.layer)
       )
-    ),
-    Layer.provideMerge(Parked.layer)
+    )
   ),
 };

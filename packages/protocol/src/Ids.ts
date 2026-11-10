@@ -72,7 +72,7 @@ export const ConversationId = PositiveInt.pipe(Schema.brand("ConversationId"));
 
 export type ConversationId = typeof ConversationId.Type;
 
-/** A pi-durable task (a run, a tool call, a generation). A parked task is retried by this id. */
+/** A pi-durable task (a run, a tool call, a generation). */
 export const TaskId = PositiveInt.pipe(Schema.brand("TaskId"));
 
 export type TaskId = typeof TaskId.Type;

@@ -11,10 +11,13 @@
 //
 // The request id makes a note land once. `PiDurableHarness.write` admits a seam note through this,
 // and the subagents extension its notes (a settlement, a brief's answer) inside its own commits.
-// It copies pi-durable 1.4.0's inbox shapes (`LiveDoc`, `InboxDoc`, `harness/inbox.js`
-// `applyBoundary`'s write half); recheck it on any pi-durable upgrade past 1.4.0.
+// It copies pi-durable's inbox shapes (`LiveDoc`, `InboxDoc`, `harness/inbox.js` `applyBoundary`'s
+// write half). Rechecked against 1.5.1: the write half and the item shapes are unchanged, and
+// `applyBoundary` is still not exported. 1.5's `submit(tx, draft)` admits inside a commit but keeps
+// the boundary rule this module exists to avoid (an idle conversation's queued inputs start a run),
+// so it does not replace it. Recheck on any pi-durable upgrade.
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ConversationId,
   EntryDraft,

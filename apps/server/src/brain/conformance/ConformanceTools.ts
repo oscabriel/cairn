@@ -15,9 +15,9 @@
 // "Not run: the approval for this call was <settlement>."
 
 import type { RuntimeMode } from "@cairn/protocol/Policy";
-import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Layer, Option, Predicate } from "effect";
+import { Type } from "typebox";
 
 import { approvalLedger, settlementText } from "../CairnDocs.ts";
 import { ExtensionOrder } from "../Extensions.ts";

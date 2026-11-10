@@ -29,8 +29,8 @@ import type {
   SubagentQuestionState,
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson } from "@earendil-works/chord/json";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { Option, Predicate } from "effect";

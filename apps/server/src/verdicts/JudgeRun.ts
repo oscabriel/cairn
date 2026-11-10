@@ -22,8 +22,8 @@
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ModelRef } from "@cairn/protocol/Models";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import type {
   ConversationId,

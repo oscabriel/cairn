@@ -50,9 +50,27 @@
   "view": {
     "transcript": [
       {
-        "kind": "pi.compaction",
+        "kind": "pi.user",
         "role": "user",
-        "text": "The conversation history before this point was compacted into the following summary:\n\n<summary>\nSUMMARY OF ONE AND TWO\n</summary>",
+        "text": "turn one",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "one",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "turn two",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -66,9 +84,18 @@
         "toolCalls": [],
         "toolName": null,
         "isError": null
+      },
+      {
+        "kind": "pi.compaction",
+        "role": "user",
+        "text": "The conversation history before this point was compacted into the following summary:\n\n<summary>\nSUMMARY OF ONE AND TWO\n</summary>",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
       }
     ],
-    "transcriptLength": 2,
+    "transcriptLength": 5,
     "queue": [],
     "queueLength": 0,
     "running": false,

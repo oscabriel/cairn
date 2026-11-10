@@ -1,6 +1,6 @@
 # Thread states
 
-The one reference for every state a thread can be in, and the run, launch, approval, parked task and hold inside it: what the protocol says, what moves it, who may move it, what must stay true, and the words the UI shows for it.
+The one reference for every state a thread can be in, and the run, launch, approval and hold inside it: what the protocol says, what moves it, who may move it, what must stay true, and the words the UI shows for it.
 
 The shape follows HumanLayer's `golden/session_state_machine.md` (humanlayer/humanlayer at `f16f286`, Apache-2.0): a status table with a category column, a transition diagram, transitions by actor with their handlers, numbered invariants and source references. The content is Cairn's own.
 
@@ -12,7 +12,7 @@ Source references are `path:first-last` at commit `8bb5d5b`. `judges/thread-stat
 | --- | --- |
 | Active | The brain or the arms are working on the thread now. |
 | Waiting on you | Nothing moves until the user answers. |
-| Held | A hold: the thread cannot move on by itself (a parked task, a Claude slot, a spent plan window). |
+| Held | A hold: the thread cannot move on by itself (a Claude slot, a spent plan window). |
 | Resting | Nothing runs and nothing is asked. |
 | Failed | The latest run or launch failed; a send starts a new run. |
 | Ended | Nothing more happens to it: a settled approval, a finished child, node or workflow. |
@@ -29,11 +29,11 @@ The first column names the schema: the export that declares the union, or the ex
 | `ThreadActivity` | `preparing` | Active | A launch is under way: the row exists, the brain prepares the workspace and opens the conversation. No run yet. |
 | `ThreadActivity` | `running` | Active | A run is live (`activeRunId` is set) and no approval is pending. |
 | `ThreadActivity` | `waiting` | Waiting on you | A run is live and holds a tool call for an approval (`pendingRuntimeRequest` is set). |
-| `ThreadActivity` | `parked` | Held | pi-durable parked at least one of the thread's tasks (`parkedTaskIds` is not empty). Wins over every other activity. |
 | `ThreadActivity` | `failed` | Failed | The latest run failed, or the launch failed before its first run; `lastError` says why. |
 | `RunFailureClass` | `usage_limit` | Held | The run was refused because a model plan's usage limit was reached (a Claude plan window, a Codex limit or OpenCode Go's; the failure's `plan` says which); `usageLimitResetAt` says when it resets. |
 | `RunFailureClass` | `provider_error` | Failed | The model provider refused the request. |
 | `RunFailureClass` | `transport_error` | Failed | The model provider could not be reached. |
+| `RunFailureClass` | `brain_restart` | Failed | The brain restarted while the model was answering and no retry was left (pi-durable's `interrupted`), or crashes cut the run off too often (`restart_limit`). |
 | `RunFailureClass` | `unknown` | Failed | The run or launch failed for a reason the brain does not classify. |
 | `WaitingFor` | `claude_slot` | Held | One of the thread's Claude conversations waits for a Claude slot. The run is live; the bridge is full. |
 | `WaitingFor` | `parent` | Held | A subagent asked its parent a question (`ask_parent`) and waits for the parent's model to answer or escalate it. The user is not asked yet (ADR 0027). |
@@ -116,8 +116,7 @@ Some states have no literal of their own; the row says them through other fields
 | Subagent | `lineage` is set: the row is a child, hidden from the sidebar, which resolves it to its nearest ancestor with a row. | Shelf |
 | Children working | `subagents` counts the thread's children by `working`, `asking`, `settled` and `failed`; a thread whose run ended while children still work or ask says "Waiting". | Active |
 | Goal | `goal` is set: the thread has criteria, counted `total`, `met` and `failed`. | Active |
-| Parked task | `parkedTaskIds` lists each parked task; the thread offers Retry for the first. | Held |
-| Hold | Computed by the client from the row: a parked task, else a `usage_limit` failure (Limited), else `waitingFor` `claude_slot`. | Held |
+| Hold | Computed by the client from the row: a `usage_limit` failure (Limited), else `waitingFor` `claude_slot`. | Held |
 | Unseen | `latestRunCompletedAt` is after `lastVisitedAt` (or the thread was never visited). | Resting |
 | Pinned | `pinnedAt` is set. | Shelf |
 | Snoozed | `snoozedUntil` is in the future and nothing woke the thread early (see invariant 12). | Shelf |
@@ -141,10 +140,6 @@ stateDiagram-v2
     running --> idle: run completes, or user stops it
     waiting --> idle: user stops the run
     running --> failed: run fails (brain)
-    running --> parked: brain parks a crash-looping task
-    waiting --> parked: brain parks a crash-looping task
-    parked --> running: user retries, or boot retries an approval wait
-    parked --> idle: retry finds no live run
 ```
 
 ### Approval
@@ -187,7 +182,6 @@ stateDiagram-v2
 | `running`, `waiting` | `idle` | `thread.stop` | `PiDurableHarness.stop` aborts the run; RunTerminal `interrupted` clears `activeRunId`; then `cancelHeld` waits for the run's tasks to end and cancels the records they held | `apps/server/src/brain/PiDurableHarness.ts:476-570`, `apps/server/src/brain/CairnDocs.ts:766-847`, `apps/server/src/shell/ShellProjector.ts:255-270` |
 | `waiting` | `running` | `thread.respond` | `PiDurableHarness.respond` writes the answer with `answerApproval` (`decidedBy` user, the user's `reason`); the record leaves `pending` and the projector drops it | `apps/server/src/brain/PiDurableHarness.ts:601-636`, `apps/server/src/brain/CairnDocs.ts:706-764`, `apps/server/src/shell/ShellProjector.ts:290-305` |
 | approval `pending` | `accepted`, `declined` | `thread.respond` | `applyAnswer` writes status, `answer`, `decidedBy` and `reason` together; a record no longer `pending` answers `already_settled` | `apps/server/src/brain/CairnDocs.ts:706-764` |
-| `parked` | `running` or `idle` | `thread.retryTask` (Retry) | `PiDurableHarness.retry` runs the task again and forgets it; `ShellProjector.refresh` recomputes the row from `inspect()` | `apps/server/src/rpc/ThreadStreamHandlers.ts:150-161`, `apps/server/src/brain/PiDurableHarness.ts:1024-1050`, `apps/server/src/shell/ShellProjector.ts:1040-1050` |
 | shelf | settled | Settle | `ThreadSettle`, refused while busy, waiting or queued (`settleBlocker`); clears pin and snooze | `apps/server/src/shell/ShellCommands.ts:507-571`, `apps/server/src/shell/ShellCommands.ts:898-906` |
 | settled | active | Unsettle | `ThreadUnsettle` sets `settledOverride: active` | `apps/server/src/shell/ShellCommands.ts:908-929` |
 | settled or unsettled by hand, snoozed | active, under auto-settle again | `thread.send` | `Threads.send` commits `ThreadMessageSent` after the turn is admitted, when the row has a manual settle state or a snooze; it clears `settledOverride` and `settledAt` (stamping `unsettledAt` unless the user had unsettled it) and ends the snooze, as t3code's `dispatchMessage` does | `apps/server/src/threads/Threads.ts` (`recordMessageSent`), `apps/server/src/shell/ShellCommands.ts` (`messageSent`); added after `8bb5d5b` |
@@ -209,8 +203,6 @@ stateDiagram-v2
 | `running` | `failed` | The run fails | RunTerminal `failed` with the class from `classifyRunFailure`; `lastError` takes `FAILURE_TEXT` for the class | `apps/server/src/brain/RunFailure.ts:94-136`, `apps/server/src/shell/ShellProjector.ts:109-118`, `apps/server/src/shell/ShellProjector.ts:210-228` |
 | any `lastErrorClass` | none | A run starts | RunStarted clears `lastError`, `lastErrorClass` and `usageLimitResetAt` | `apps/server/src/shell/ShellProjector.ts:238-254` |
 | `waiting` | `running` | The approval expires | `awaitAnswer` times out and `expire` turns `pending` into `expired` | `apps/server/src/brain/CairnDocs.ts:251-264`, `apps/server/src/brain/CairnDocs.ts:308-337` |
-| any | `parked` | pi-durable reports `task_parked` after five crashes in a row without progress | `Brain.report` adds it to `Parked`; the harness emits TaskParked; the projector adds the task id | `apps/server/src/brain/Brain.ts:148-154`, `apps/server/src/brain/PiDurableHarness.ts:905-919`, `apps/server/src/shell/ShellProjector.ts:307-312` |
-| `parked` | `waiting` | Boot finds a parked task whose approval is still pending | `retryParkedApprovalWaits` retries it | `apps/server/src/Boot.ts:125-157` |
 | `running`, `waiting` | `idle` | Boot finds no live run for a busy row | The boot reconcile ends the run it missed (`endedUnseen`) | `apps/server/src/shell/ShellProjector.ts:339-387` |
 | `waitingFor` `none` | `claude_slot` and back | A Claude conversation of the thread waits for, then gets, a slot | `ClaudeSignals` sends the change; `applySignal` merges it; RunTerminal and the boot reconcile reset it to `none` | `apps/server/src/usage/ClaudeSignals.ts:60-91`, `apps/server/src/shell/ShellProjector.ts:317-331` |
 | `usageLimitResetAt` none | set | A run failed with `usage_limit` | `ClaudeSignals` sends the latest reset of every spent plan window | `apps/server/src/usage/ClaudeSignals.ts:1-12` |
@@ -226,16 +218,16 @@ stateDiagram-v2
 
 ## Invariants
 
-1. `activity` is a function of the other derived fields: `parked` when `parkedTaskIds` is not empty; else `waiting` or `running` while `activeRunId` is set, `waiting` exactly when `pendingRuntimeRequest` is also set (a pending request with no run, such as a brief or an escalated question, leaves the row `idle`); else what the newest run's end says; else a busy row becomes `idle` and `idle`, `preparing` or `failed` stays. The shell projector recomputes it on every change and never stores it apart from its inputs (`apps/server/src/shell/ShellProjector.ts:154-175`).
-2. A row whose run is terminal has no `activeRunId`, has `latestRunCompletedAt` set, has `waitingFor` `none`, and its `activity` is `idle`, `failed` or `parked`. It is `failed` exactly when the run failed, and then `lastErrorClass` is set.
+1. `activity` is a function of the other derived fields: `waiting` or `running` while `activeRunId` is set, `waiting` exactly when `pendingRuntimeRequest` is also set (a pending request with no run, such as a brief or an escalated question, leaves the row `idle`); else what the newest run's end says; else a busy row becomes `idle` and `idle`, `preparing` or `failed` stays. The shell projector recomputes it on every change and never stores it apart from its inputs (`apps/server/src/shell/ShellProjector.ts:154-175`).
+2. A row whose run is terminal has no `activeRunId`, has `latestRunCompletedAt` set, has `waitingFor` `none`, and its `activity` is `idle` or `failed`. It is `failed` exactly when the run failed, and then `lastErrorClass` is set.
 3. Only the launch writes `preparing`, and only before the thread's first run. A launched row is created `idle` and marked `preparing` in the next commit, so a client may see one `idle` frame between them (`apps/server/src/threads/ThreadLaunch.ts:943-1005`).
 4. A launch ends in exactly one of: the release (`idle`, then the first run), `failed` with a `lastError`, or a stop (`failed` with "Stopped before the thread started."). A launch row in `thread_launches` exists only while its launch is unfinished.
-5. `failed` lasts until the next run starts. Nothing but a new run (or a parked task) moves a thread out of `failed`, and RunStarted clears `lastError`, `lastErrorClass` and `usageLimitResetAt` together.
+5. `failed` lasts until the next run starts. Nothing but a new run moves a thread out of `failed`, and RunStarted clears `lastError`, `lastErrorClass` and `usageLimitResetAt` together.
 6. `lastErrorClass` is set exactly when `lastError` is set. A launch failure is always `unknown`; `usage_limit` comes only from the bridge's "Claude plan quota exceeded" text.
 7. `pendingRuntimeRequest` names the oldest `pending` record of the thread that the user can answer, escalated children's questions included, and is none when the thread has none; a question routed to the parent is not one. After a restart, an approval the projector had not seen is shown as a `tool-call`, because `inspect()` carries only its id. An approval leaves `pending` once and never returns to it: `answerApproval` and `expire` change only a `pending` record.
 8. A record is born `pending` or `accepted`; `declined`, `expired`, `cancelled` and `revised` are reached only from `pending`, and every status past `pending` has `decidedBy` set. `payload` never changes after the ask (ADR 0029).
-9. `parkedTaskIds` changes only through pi-durable: a TaskParked event adds an id, and only a reconcile from `inspect()` (at boot, or the refresh after a retry) removes one.
-10. Derived fields (activity, run times, queue, error, waiting, approval, preview, parked tasks) are written only by the shell projector and the launch (`preparing`, the release and `failed`); inbox fields (settle, snooze, pin, visit, archive) only by shell commands. A projector flush writes only the fields its events set, rebased on the row as it stands.
+9. Crashes give a thread no state of its own (ADR 0046): pi-durable never ends a task for crashes, and boot's crash accounting aborts a task crashes cut off five times in a row unless it is a wait: a tool call that holds a record (an approval wait among them), a workflow's script call, `subagent_status`, a workflow's `agent` and `verify` calls, a call one of those is nested under, or a subagent or workflow wait task. A run it ends ends as a stopped one does; a tool call it ends gets an "aborted" result and the turn goes on. A run pi-durable ends for a crash itself (`interrupted`) fails with the class `brain_restart`. A row a 1.4 brain stored as `parked` reads `idle` (migration 0015) until the boot reconcile sets it.
+10. Derived fields (activity, run times, queue, error, waiting, approval, preview) are written only by the shell projector and the launch (`preparing`, the release and `failed`); inbox fields (settle, snooze, pin, visit, archive) only by shell commands. A projector flush writes only the fields its events set, rebased on the row as it stands.
 11. A thread cannot be settled while busy, waiting on an approval or holding a queued input, and cannot be snoozed while an approval is pending or an input is queued. Settling clears pin and snooze; pinning clears settle and snooze.
 12. A snooze ends early, without a write, while an approval is pending or when a run failed after the snooze began; the client computes this (`effectiveSnoozed`, `packages/client-logic/src/ThreadSettled.ts:113-129`) and the settlement sweep uses the same rule (`isSnoozed`, `apps/server/src/shell/Settlement.ts:113-137`). The row keeps `snoozedUntil` until its time comes, the user changes it, or the user sends the thread a message.
 13. `settledOverride` returns to none only when the user sends the thread a message. Auto-settle needs it to be none, so a thread the user settled, unsettled or pinned out of Settled is not auto-settled again until then. An auto-settled thread is `settled` like a manual one.
@@ -245,7 +237,7 @@ stateDiagram-v2
 
 ## Label map
 
-What the web client shows for each status today. One function gives a thread's state, its category, its row label's words and tone, and its hold: `threadState` in `packages/client-logic/src/ThreadState.ts` (package 1E), with a descendant's request rolled up to its ancestors by `pendingSubagentRequests` (`packages/client-logic/src/SubagentRollup.ts`). The sidebar row (`apps/web/src/sidebar/Row.ts`) adds only the icon and the colour classes for each tone; the hold banner above an open thread (`apps/web/src/shell/Parked.ts`) adds its sentences. `judges/thread-state-rows.test.ts` checks every row of the status tables above against the function, and the words below against it.
+What the web client shows for each status today. One function gives a thread's state, its category, its row label's words and tone, and its hold: `threadState` in `packages/client-logic/src/ThreadState.ts` (package 1E), with a descendant's request rolled up to its ancestors by `pendingSubagentRequests` (`packages/client-logic/src/SubagentRollup.ts`). The sidebar row (`apps/web/src/sidebar/Row.ts`) adds only the icon and the colour classes for each tone; the hold banner above an open thread (`apps/web/src/next/shell/Hold.ts`) adds its sentences. `judges/thread-state-rows.test.ts` checks every row of the status tables above against the function, and the words below against it.
 
 | Schema | Value | The UI shows | Where |
 | --- | --- | --- | --- |
@@ -253,11 +245,11 @@ What the web client shows for each status today. One function gives a thread's s
 | `ThreadActivity` | `preparing` | "Working", with how long. | Sidebar row |
 | `ThreadActivity` | `running` | "Working", with how long. | Sidebar row |
 | `ThreadActivity` | `waiting` | "Approval" or "Input", from the pending request's kind. The row's "Waiting" label is never reached from `waiting`, because a pending request wins. | Sidebar row |
-| `ThreadActivity` | `parked` | "Parked"; the banner says "Work on this thread stopped after it was cut off several times in a row." with "Retry" ("Retrying" while it runs). | Sidebar row, hold banner |
 | `ThreadActivity` | `failed` | "Failed", or "Limited" for a `usage_limit` failure. The thread page shows `lastError` (`apps/web/src/View.ts:36-62`). | Sidebar row, thread page |
 | `RunFailureClass` | `usage_limit` | "Limited"; the banner says "The model plan's usage limit was reached. It resets <day and time>." (or "Send again once it resets." with no reset time). | Sidebar row, hold banner |
 | `RunFailureClass` | `provider_error` | "Failed", and `lastError`: "The model provider refused the request. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `transport_error` | "Failed", and `lastError`: "The model provider could not be reached. Send again to retry." | Sidebar row, thread page |
+| `RunFailureClass` | `brain_restart` | "Failed", and `lastError`: "The brain restarted while the model was answering. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `unknown` | "Failed", and `lastError`: "The run failed. Send again to retry.", or a launch's own message. | Sidebar row, thread page |
 | `WaitingFor` | `claude_slot` | Banner "Waiting": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
 | `WaitingFor` | `parent` | The child's managed row in the `next` sidebar says "Asked its parent"; its ancestors are not lit and show no parent banner, since the user is not asked yet (6D). The classic sidebar hides a child's row. | Sidebar row (`next`) |
@@ -337,6 +329,6 @@ No status is shown raw. Phase 2's statuses are labelled "Not shown yet" with the
 - Settlement: `apps/server/src/shell/Settlement.ts:75-158`.
 - Launch: `apps/server/src/threads/ThreadLaunch.ts`, `apps/server/src/threads/LaunchStore.ts:10-18`.
 - Approval ledger: `apps/server/src/brain/CairnDocs.ts:202-408`.
-- Parked tasks: `apps/server/src/brain/Parked.ts`, `apps/server/src/Boot.ts:125-157`.
+- Crash accounting: `apps/server/src/brain/CrashLimit.ts`, `apps/server/src/BootRepairs.ts`.
 - Client presentation: `packages/client-logic/src/PresentThreadShell.ts:77-121`, `packages/client-logic/src/Sidebar.ts:178-285`, `packages/client-logic/src/ThreadSettled.ts:54-129`.
-- Words: `apps/web/src/sidebar/Row.ts:90-136`, `apps/web/src/shell/Parked.ts:139-260`, `apps/web/src/sidebar/View.ts:298-322`, `apps/web/src/settings/View.ts:384-389`, `apps/web/src/settings/View.ts:778-783`.
+- Words: `apps/web/src/sidebar/Row.ts:90-136`, `apps/web/src/next/shell/Hold.ts`, `apps/web/src/sidebar/View.ts:298-322`, `apps/web/src/settings/View.ts:384-389`, `apps/web/src/settings/View.ts:778-783`.

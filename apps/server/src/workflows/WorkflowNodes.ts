@@ -5,9 +5,9 @@
 // invocation's own `commit`.
 
 import { EntryId as ProtocolEntryId } from "@cairn/protocol/Ids";
-import type { JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson } from "@earendil-works/chord/json";
 import type { Message, Models } from "@earendil-works/pi-ai";
 import type {
   ConversationId,

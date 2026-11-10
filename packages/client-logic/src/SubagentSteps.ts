@@ -109,11 +109,10 @@ const LIVE: ReadonlySet<ThreadStatus> = new Set<ThreadStatus>([
   "asking-parent",
   "working",
   "waiting",
-  "parked",
   "limited",
 ]);
 
-/** What holds a live child other than its work: "Approval", "Asked its parent", "Parked". */
+/** What holds a live child other than its work: "Approval", "Asked its parent", "Limited". */
 const holdWordOf = (status: ThreadStatus): Option.Option<string> =>
   status === "ready" || status === "working"
     ? Option.none()

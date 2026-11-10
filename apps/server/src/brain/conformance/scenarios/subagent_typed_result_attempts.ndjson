@@ -15,7 +15,7 @@
 {"type":"expect_request","thread":"parent","index":0,"includesTools":["subagent_spawn","subagent_send","subagent_status","subagent_stop","subagent_reply"],"excludesTools":["ask_parent","report","submit_result"]}
 {"type":"expect_view","path":["transcript",0],"equals":{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in src.\n\nFinish by calling submit_result with your result, which must match its schema, and how it differs from the brief.","images":0,"toolCalls":[],"toolName":null,"isError":null},"thread":"child1"}
 {"type":"expect_view","path":["transcript",2,"isError"],"equals":true,"thread":"child1"}
-{"type":"expect_view","path":["transcript",2,"text"],"equals":"submit_result rejected (attempt 1 of 2):\n  - result.count: must be integer\nFix these and call submit_result again.","thread":"child1"}
+{"type":"expect_view","path":["transcript",2,"text"],"equals":"submit_result rejected (attempt 1 of 2):\n  - result.count: expected integer, got string\nFix these and call submit_result again.","thread":"child1"}
 {"type":"expect_view","path":["transcript",3,"toolCalls"],"equals":["report","submit_result"],"thread":"child1"}
 {"type":"expect_view","thread":"child1","path":["transcript"],"match":"includes","equals":{"kind":"pi.tool-result","role":"toolResult","text":"Reported. Your brief also asks for a typed result: if submit_result has not accepted one, call it now with your result and its divergence from the brief. It is a direct tool call, not one of code mode's tools.","images":0,"toolCalls":[],"toolName":"report","isError":false}}
 {"type":"expect_view","path":["transcriptLength"],"equals":6,"thread":"child1"}

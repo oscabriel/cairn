@@ -8,7 +8,8 @@ import {
   BACKGROUND_CONTEXT,
   withAbortSignal,
 } from "@earendil-works/chord/context";
-import { Effect, Predicate, Schema } from "effect";
+import type { WatchCall } from "@earendil-works/pi-durable";
+import { Effect, Option, Predicate, Schema } from "effect";
 
 /** A pi-durable call rejected. `closed` is true when the Harness was closing or had closed. */
 export class DurableCallError extends Schema.TaggedError<DurableCallError>()(
@@ -27,7 +28,12 @@ export const errorText = (cause: unknown): string =>
     ? cause.message
     : String(cause);
 
-/** True when the error is pi-durable's "Harness is closed" (or its Session's equivalent). */
+/**
+ * True when the error is pi-durable's "Harness is closed" (or its Session's equivalent). pi-durable
+ * 1.5.1 still throws a plain `Error` for a close (`harness/util.js` `closedError`, `session.js`);
+ * its typed errors (`SessionFailed`, `ConversationBusy`, `ConversationIdle`, `ReadOnlySession`)
+ * name other conditions, so the text is the only mark.
+ */
 export const isClosedError = (cause: unknown): boolean => {
   const text = errorText(cause);
 
@@ -57,6 +63,21 @@ export const durable = <A>(
         cause,
       }),
   });
+
+/**
+ * A document watch's call as a value (pi-durable 1.5): the document's value, or null once it was
+ * retired and nothing replaced it. None for a call that carries no value (a source failure, which a
+ * Durable watch never sends).
+ */
+export const documentCall = <A>(
+  call: WatchCall<A>
+): Option.Option<A | null> => {
+  if (call.kind !== "value") {
+    return Option.none();
+  }
+
+  return Option.some(call.retired && call.ops.length === 0 ? null : call.value);
+};
 
 /**
  * A pi-durable listener (a watch, the commit feed) that only hands each value on. pi-durable awaits

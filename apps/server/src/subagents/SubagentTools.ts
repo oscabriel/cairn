@@ -31,9 +31,8 @@ import {
   MAX_LIVE_CHILDREN_PER_BRAIN,
   MAX_SUBAGENT_DEPTH,
 } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   AgentChange,
   ToolExecutionApi,
@@ -41,6 +40,7 @@ import type {
 } from "@earendil-works/pi-durable";
 import { defineTool } from "@earendil-works/pi-durable";
 import { Duration, Effect, Function, Option, Result } from "effect";
+import { Type } from "typebox";
 
 import {
   endUnanswered,
@@ -102,6 +102,12 @@ import type {
 import { START_TASK } from "./SubagentTasks.ts";
 import type { ModelAccess, SubagentTasks } from "./SubagentTasks.ts";
 import { awaitDoc, runWait } from "./Waits.ts";
+
+/**
+ * `subagent_status`: with `wait_seconds` it waits on its children and holds no record, so boot's
+ * crash accounting keeps it by name (`CrashLimit.ts`, `BootRepairs.ts`).
+ */
+export const SUBAGENT_STATUS_TOOL = "subagent_status";
 
 /** The longest bounded wait `subagent_status` takes. */
 const MAX_WAIT_SECONDS = 600;
@@ -522,7 +528,7 @@ export const subagentToolSet = (
   });
 
   const status = defineTool({
-    name: "subagent_status",
+    name: SUBAGENT_STATUS_TOOL,
     description:
       "List your subagents and what each is doing, or one of them. With wait_seconds, wait (up to 600) until one reports or asks. The result itself arrives as a note, never here.",
     parameters: Type.Object({

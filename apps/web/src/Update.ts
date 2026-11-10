@@ -29,7 +29,7 @@ import { composerContext } from "./composer/Context.ts";
 import {
   draftProject,
   isDraftTarget,
-  isScratchTarget,
+  SCRATCH_DRAFT_KEY,
 } from "./composer/Drafts.ts";
 import { OutMessage as ComposerOutMessage } from "./composer/Message.ts";
 import type { Message as ComposerMessage } from "./composer/Message.ts";
@@ -830,11 +830,12 @@ const adoptScratchLaunch =
 const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
-      ({ attachments, item, navigateTo }) =>
+      ({ attachments, draftKey, item, navigateTo }) =>
       (model) => {
-        // The scratch overlay's turn: a refusal puts it back in the overlay, and the thread its
-        // first message launches is the overlay's from now on (U-16).
-        const fromScratch = isScratchTarget(model.composer);
+        // The scratch overlay's turn, by the draft it was sent from, whether the overlay still
+        // shows or not: a refusal puts it back in the overlay, and the thread its first message
+        // launches is the overlay's from now on (U-16).
+        const fromScratch = draftKey === SCRATCH_DRAFT_KEY;
 
         return Update.combine(
           modifyFields(model, {

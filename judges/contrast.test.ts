@@ -19,8 +19,11 @@
 // `drop-shadow-blue-400`; the palettes are read from the installed Tailwind's theme.css), no
 // arbitrary colour (`bg-[#fff]`, `bg-[red]`), no colour literal (hex, `rgb()`, `hsl()`,
 // `oklch()`...) and no named colour in a colour property (`{ color: "white" }`, `fill: red`) in
-// `next/` outside tokens.css. The token forms `text-(--ink-2)` and `text-[color:var(--ink-2)]`
-// pass. Comments and tests are skipped.
+// `next/` outside tokens.css or in any file a `next` view imports. The token forms `text-(--ink-2)` and `text-[color:var(--ink-2)]`
+// pass. Comments and tests are skipped. The same files hold no classic colour name (styles.css's
+// `text-muted-foreground`, `bg-accent/60`, `border-border`: names outside the tokens, which the
+// pairs above do not judge) and no glass utility (`dropdown-glass`, a backdrop blur), but those an
+// exact, reasoned list keeps.
 //
 // The look candidates and their `data-look` switch are gone (L2b): a rule naming any selector but
 // the next frame's, `data-look` among them, fails the scope check.
@@ -745,8 +748,8 @@ describe("contrast of the next tokens", () => {
         text: "--ink-3",
         ground: ["--surface-raised", "--select-2"],
       },
-      // The model picker (`composer/Popovers.ts`): its panel, highlighted and selected rows, the
-      // provider rail and the thinking band.
+      // The model picker (`composer/Popovers.ts`) and the hero's project picker (`ui/Combobox.ts`):
+      // the panel, highlighted and selected rows, the provider rail and the thinking band.
       ...["--ink-1", "--ink-2", "--ink-3"].map((text) => ({
         region: "picker",
         text,
@@ -921,6 +924,61 @@ const coloursIn = (text: string): ReadonlyArray<string> => {
   );
 };
 
+const stylesText = readFileSync(
+  path.join(root, "apps/web/src/styles.css"),
+  "utf-8"
+);
+
+/**
+ * The classic colour names: every Tailwind colour styles.css declares (`--color-<name>`) that is
+ * not a `next` token (`muted-foreground`, `accent`, `popover`, `border`, `placeholder`...). Inside
+ * the frame tokens.css's bridge points them at token values, but the contrast judge reads only the
+ * tokens' pairs, so a class drawn with one (the placeholder at `text-placeholder/75`, 3.95:1)
+ * escapes it. Read from styles.css, so a classic name added there is linted too.
+ */
+const CLASSIC_NAMES: ReadonlyArray<string> = [
+  ...new Set(
+    [...stylesText.matchAll(/--color-(?<name>[a-z][\w-]*):/gu)].flatMap(
+      (match) => {
+        const name = match.groups?.name ?? "";
+
+        // A palette shade (`zinc-25`) is the palette lint's.
+        return COLOUR_TOKEN.test(`--${name}`) || /-\d+$/u.test(name)
+          ? []
+          : [name];
+      }
+    )
+  ),
+].toSorted((a, b) => b.length - a.length);
+
+/**
+ * The glass utilities: styles.css's translucent, blurred grounds (`dropdown-glass`...) and
+ * Tailwind's backdrop blur. A `next` ground is opaque: --surface-overlay under a popover.
+ */
+const GLASS_UTILITIES: ReadonlyArray<string> = [
+  ...[...stylesText.matchAll(/@utility\s+(?<name>[\w-]*glass[\w-]*)/gu)].map(
+    (match) => match.groups?.name ?? ""
+  ),
+  "backdrop-blur(?:-[\\w]+)?",
+];
+
+const CLASSIC: ReadonlyArray<RegExp> = [
+  new RegExp(
+    `(?<![\\w-])(?:${UTILITY})-(?:${CLASSIC_NAMES.join("|")})(?![\\w-])`,
+    "gu"
+  ),
+  new RegExp(`(?<![\\w-])(?:${GLASS_UTILITIES.join("|")})(?![\\w-])`, "gu"),
+];
+
+/** The classic colour names and glass utilities in a file's code. */
+const classicIn = (text: string): ReadonlyArray<string> => {
+  const code = withoutComments(text);
+
+  return CLASSIC.flatMap((pattern) =>
+    [...code.matchAll(pattern)].map((match) => match[0])
+  );
+};
+
 /**
  * The colours the lint lets stand in a file a `next` view reaches, each for its reason, exactly: a
  * new colour in one of these files fails as anywhere else, and so does one of these gone, so the
@@ -959,6 +1017,153 @@ const ALLOWED = {
     "text-amber-500",
     "border-red-500",
     "text-red-500",
+  ],
+} satisfies Readonly<Record<string, ReadonlyArray<string>>>;
+
+/**
+ * The classic colour names a file a `next` view reaches still draws with, exactly, each file for
+ * its reason. A new one fails as anywhere else, and so does one of these gone, so the list cannot
+ * outlive what it excuses. The regions U-13 redrew (the composer's placeholder and popovers, the
+ * hero's project picker) are not here and cannot be.
+ */
+const ALLOWED_CLASSIC = {
+  // Two classic regions the frame still draws that U-13 did not name, each waiting for its own
+  // redraw on the tokens (nothing is missing for it): the composer's attachment chips and the
+  // transcript's markdown. Their names resolve to token values through tokens.css's bridge, but
+  // their pairs are not judged.
+  "apps/web/src/attachments/View.ts": [
+    "ring-ring",
+    "ring-offset-background",
+    "text-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-foreground",
+    "bg-accent",
+    "bg-accent",
+    "ring-ring",
+    "text-secondary-label",
+    "bg-background",
+    "border-border",
+    "bg-background",
+    "text-foreground",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-secondary-label",
+    "text-muted-foreground",
+    "text-destructive-foreground",
+  ],
+  "apps/web/src/timeline/markdown/View.ts": [
+    "text-foreground",
+    "decoration-muted-foreground",
+    "decoration-foreground",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "bg-accent",
+    "text-foreground",
+    "border-border",
+    "bg-secondary",
+    "bg-input",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+  ],
+  // Reached but never drawn in the frame: the classic diff panel, off behind
+  // next/diff/Panel.ts's DIFF_PANEL_ENABLED (its view is only the panel's lazy import and its
+  // placeholder is drawn only while the panel is on), the classic changed-files card (a type
+  // import), and the classic button and header classes only those draw.
+  "apps/web/src/diff/Card.ts": [
+    "bg-accent",
+    "ring-ring",
+    "ring-offset-background",
+    "text-diff-addition",
+    "text-diff-deletion",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+    "text-foreground",
+    "bg-secondary",
+    "bg-input",
+    "bg-secondary",
+    "bg-background",
+    "from-input",
+    "to-input",
+    "text-foreground",
+    "text-muted-foreground",
+  ],
+  "apps/web/src/diff/View.ts": [
+    "bg-diff-addition",
+    "bg-diff-deletion",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "bg-muted",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "border-ring",
+    "border-border",
+    "bg-secondary",
+    "text-foreground",
+    "text-muted-foreground",
+    "bg-card",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-foreground",
+    "text-foreground",
+    "bg-accent",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-destructive-foreground",
+    "text-muted-foreground",
+    "bg-background",
+    "bg-accent",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+  ],
+  "apps/web/src/page/thread/DiffPanel.ts": [
+    "bg-background",
+    "text-muted-foreground",
+  ],
+  "apps/web/src/ui/Button.ts": [
+    "ring-ring",
+    "ring-offset-background",
+    "border-primary",
+    "bg-primary",
+    "text-primary-foreground",
+    "shadow-primary",
+    "bg-primary",
+    "border-input",
+    "bg-popover",
+    "text-foreground",
+    "bg-input",
+    "bg-accent",
+    "bg-input",
+    "text-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-muted-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-foreground",
+    "bg-secondary",
+    "text-secondary-foreground",
+    "bg-secondary",
+    "bg-secondary",
+  ],
+  "apps/web/src/ui/ChatHeader.ts": [
+    "bg-accent",
+    "ring-ring",
+    "ring-offset-background",
+    "text-foreground",
+    "bg-accent",
+    "text-accent-foreground",
+    "text-muted-foreground",
   ],
 } satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
@@ -1047,5 +1252,59 @@ describe("colours in next", () => {
 
     assert.isAbove(files.length, 0);
     assert.deepStrictEqual(found, ALLOWED);
+  });
+
+  it("finds classic colour names and glass, with or without an alpha, not tokens", () => {
+    assert.deepStrictEqual(
+      classicIn(
+        'h.Class("text-placeholder/75 text-muted-foreground/55 bg-muted/40 hover:bg-accent data-selected:bg-foreground/[0.08] border-border/70 focus-within:border-ring ring-offset-background shadow-primary/24 placeholder:text-muted-foreground/72 dropdown-glass")'
+      ),
+      [
+        "text-placeholder",
+        "text-muted-foreground",
+        "bg-muted",
+        "bg-accent",
+        "bg-foreground",
+        "border-border",
+        "border-ring",
+        "ring-offset-background",
+        "shadow-primary",
+        "text-muted-foreground",
+        "dropdown-glass",
+      ]
+    );
+    assert.deepStrictEqual(
+      classicIn(
+        '// was text-muted-foreground\nh.Class("text-ink-3 bg-select-2 bg-surface-overlay border-stroke-2 focus-within:border-stroke-focus bg-accent-fill text-accent-ink text-accent-text bg-accent-wash text-tone-done bg-tone-done-wash bg-scrim shadow-(--elevation-3)")'
+      ),
+      []
+    );
+  });
+
+  it("finds no classic colour name or glass in any file a next view reaches, but those listed", () => {
+    const files = nextReach().map((file) => path.relative(root, file));
+
+    // The regions U-13 redrew on the tokens are in the reach and hold none: the composer's
+    // placeholder, its popovers and the hero's project picker.
+    for (const redrawn of [
+      "apps/web/src/composer/Editor.ts",
+      "apps/web/src/composer/Popovers.ts",
+      "apps/web/src/composer/Classes.ts",
+      "apps/web/src/composer/Footer.ts",
+      "apps/web/src/ui/Combobox.ts",
+    ]) {
+      assert.include(files, redrawn);
+      assert.notProperty(ALLOWED_CLASSIC, redrawn);
+    }
+
+    const found = Object.fromEntries(
+      files.flatMap((file) => {
+        const names = classicIn(readFileSync(path.join(root, file), "utf-8"));
+
+        return names.length === 0 ? [] : [[file, names]];
+      })
+    );
+
+    assert.deepStrictEqual(found, ALLOWED_CLASSIC);
   });
 });

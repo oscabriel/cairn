@@ -27,6 +27,7 @@ import {
   projectThreadToOpen,
 } from "@cairn/client-logic/ProjectThread";
 import type { ThreadId } from "@cairn/protocol/Ids";
+import type { RuntimeMode } from "@cairn/protocol/Policy";
 import type { ProjectShell } from "@cairn/protocol/Shell";
 import { Array, Effect, Option, Predicate, Record, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
@@ -120,6 +121,26 @@ export const activeDraft = (model: Model): Draft =>
     Option.flatMap(draftKey(model), (key) => Record.get(model.drafts, key)),
     () => emptyDraft
   );
+
+/**
+ * True when the open draft's runtime mode can be picked: a draft's can, an open thread's cannot,
+ * and neither can the scratch thread's, which always launches with full access (`runtimeModeOf`).
+ */
+export const canPickRuntimeMode = (model: Model): boolean =>
+  isDraftTarget(model) && !isScratchTarget(model);
+
+/**
+ * The runtime mode the composer's target runs in: the draft's own, the open thread's, or full
+ * access. The scratch thread always runs with full access: the overlay has nothing to answer an
+ * approval with, since the request card serves the routed page's thread.
+ */
+export const runtimeModeOf = (model: Model): RuntimeMode =>
+  canPickRuntimeMode(model)
+    ? activeDraft(model).runtimeMode
+    : Option.match(model.context.thread, {
+        onNone: () => "full-access",
+        onSome: (thread) => thread.runtimeMode,
+      });
 
 const isEmpty = (draft: Draft): boolean =>
   draft.text.length === 0 &&

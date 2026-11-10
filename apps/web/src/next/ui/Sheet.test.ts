@@ -9,7 +9,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Dialog from "@foldkit/ui/dialog";
 import type { RenderInfo } from "@foldkit/ui/dialog";
-import { Option } from "effect";
+import { Option, Predicate } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 
@@ -289,6 +289,35 @@ const overlayApp = {
     ),
 };
 
+/** A modal sheet named and identified by `id`, with nothing in it. */
+const plainModal = (h: HtmlBuilder<Message>, id: string): Html =>
+  modalSheet(
+    h,
+    {
+      ...sheetDefaults<Message>(id, id),
+      kind: "dialog",
+      role: "dialog",
+      focusSelector: Option.none(),
+      onClose: sent("close"),
+      onSettled: sent("settled"),
+    },
+    [],
+    []
+  );
+
+/** The keys of the `<dialog>` elements in `node`, in document order. */
+const dialogKeys = (node: Html): ReadonlyArray<unknown> => {
+  if (node === null) {
+    return [];
+  }
+
+  const below = (node.children ?? []).flatMap((child) =>
+    Predicate.isString(child) ? [] : dialogKeys(child)
+  );
+
+  return node.sel?.startsWith("dialog") === true ? [node.key, ...below] : below;
+};
+
 describe("the next sheet as a modal over the page", () => {
   it("takes the page as it mounts, focusing the control it names, and is a modal dialog named by its title", () => {
     Scene.scene(
@@ -338,6 +367,29 @@ describe("the next sheet as a modal over the page", () => {
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
+    );
+  });
+
+  it("keys each dialog by its id, so one opened beside another is never patched into it", () => {
+    // Two overlays drawn as siblings, the second opened while the first is open: unkeyed, the
+    // renderer would patch the open dialog's element into the new one, whose Mount then never
+    // runs, so it never takes the keyboard.
+    Scene.scene(
+      appOf((h) => [
+        plainModal(h, "scratch-overlay"),
+        plainModal(h, "add-project"),
+      ]),
+      given,
+      Scene.tap(({ html }) => {
+        assert.deepStrictEqual(dialogKeys(html), [
+          "scratch-overlay",
+          "add-project",
+        ]);
+      }),
+      Scene.Mount.resolveAll(
+        [Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()],
+        [Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()]
+      )
     );
   });
 

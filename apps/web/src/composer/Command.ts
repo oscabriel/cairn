@@ -41,10 +41,6 @@ const failed =
   (draftKey: Option.Option<string>) => (failure: { readonly _tag: string }) =>
     Message.FailedRequest({ draftKey, message: failureMessageOrTag(failure) });
 
-/** A thread's request fails into that thread's composer. */
-const failedIn = (threadId: ThreadId) =>
-  failed(Option.some(`thread:${threadId}`));
-
 /**
  * Puts the keyboard in an opened picker's search field (T30), so typing filters, Enter picks and
  * Escape closes. On iOS a focus outside the tap does not raise the keyboard; the field still takes
@@ -236,30 +232,50 @@ export const EnsureScratch = Command.define("EnsureScratch", {
     ),
 });
 
+/**
+ * The draft a thread control was used from, whose composer shows why it failed: the thread's own
+ * on its page, the scratch overlay's while it serves the scratch thread.
+ */
+const ThreadControlDraft = Schema.Option(Schema.String);
+
 /** Stops the thread's run; with `clearQueue`, its queued inputs go too. */
 export const StopThread = Command.define("StopThread", {
-  args: { threadId: ThreadId, clearQueue: Schema.Boolean },
+  args: {
+    threadId: ThreadId,
+    clearQueue: Schema.Boolean,
+    draftKey: ThreadControlDraft,
+  },
   messages: [Message.CompletedRequest, Message.FailedRequest],
-  execute: (input) =>
+  execute: ({ clearQueue, draftKey, threadId }) =>
     onClient((client) =>
-      client["thread.stop"]({ ...input, subagents: Option.none() })
+      client["thread.stop"]({
+        threadId,
+        clearQueue,
+        subagents: Option.none(),
+      })
     ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failedIn(input.threadId),
+        onFailure: failed(draftKey),
       })
     ),
 });
 
 /** Takes back one queued input. */
 export const WithdrawQueued = Command.define("WithdrawQueued", {
-  args: { threadId: ThreadId, submissionId: SubmissionId },
+  args: {
+    threadId: ThreadId,
+    submissionId: SubmissionId,
+    draftKey: ThreadControlDraft,
+  },
   messages: [Message.CompletedRequest, Message.FailedRequest],
-  execute: (input) =>
-    onClient((client) => client["thread.withdraw"](input)).pipe(
+  execute: ({ draftKey, submissionId, threadId }) =>
+    onClient((client) =>
+      client["thread.withdraw"]({ threadId, submissionId })
+    ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failedIn(input.threadId),
+        onFailure: failed(draftKey),
       })
     ),
 });
@@ -270,15 +286,21 @@ export const ConfigureThread = Command.define("ConfigureThread", {
     threadId: ThreadId,
     model: Schema.Option(ModelRef),
     thinkingLevel: Schema.Option(ThinkingLevel),
+    draftKey: ThreadControlDraft,
   },
   messages: [Message.CompletedRequest, Message.FailedRequest],
-  execute: (input) =>
+  execute: ({ draftKey, model, thinkingLevel, threadId }) =>
     onClient((client) =>
-      client["thread.configure"]({ ...input, runtimeMode: Option.none() })
+      client["thread.configure"]({
+        threadId,
+        model,
+        thinkingLevel,
+        runtimeMode: Option.none(),
+      })
     ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failedIn(input.threadId),
+        onFailure: failed(draftKey),
       })
     ),
 });

@@ -329,6 +329,10 @@ export const sheetToView =
   (render: RenderInfo): Html =>
     h.dialog(
       [
+        // Keyed by its id: an overlay opened beside another open one (the scratch overlay over the
+        // add-project picker) is its own element, never the other's patched into it, so its Mount
+        // runs and it takes the keyboard.
+        h.Key(config.id),
         ...render.dialog,
         h.Role(config.role),
         h.DataAttribute("slot", "sheet"),

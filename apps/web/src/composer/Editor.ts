@@ -19,6 +19,7 @@ import { isPasteAsTextShortcut } from "@cairn/client-logic/TextPaste";
 import { Effect, Option, Queue, Schema, Stream } from "effect";
 import { Command, Mount } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
+import { afterPaint } from "foldkit/render";
 
 import { Message } from "./Message.ts";
 import type { MenuKey } from "./Message.ts";
@@ -345,6 +346,27 @@ export const SetEditorValue = Command.define("SetEditorValue", {
 export const FocusEditor = Command.define("FocusEditor", {
   messages: [Message.CompletedEditorCommand],
   execute: Effect.map(liveEditor, (editor) => {
+    Option.map(editor, (element) => {
+      element.focus();
+    });
+
+    return Message.CompletedEditorCommand();
+  }),
+});
+
+/**
+ * Puts the keyboard back in the page's editor once the scratch overlay that took it from there has
+ * gone: the editor left the page while the overlay showed, so the overlay has nothing to give focus
+ * back to. Waits for the patch that brings the editor back, and a frame more, so the overlay has
+ * given the page back (no longer inert) first.
+ */
+export const ReturnFocusToEditor = Command.define("ReturnFocusToEditor", {
+  messages: [Message.CompletedEditorCommand],
+  execute: Effect.gen(function* () {
+    yield* afterPaint;
+
+    const editor = yield* liveEditor;
+
     Option.map(editor, (element) => {
       element.focus();
     });

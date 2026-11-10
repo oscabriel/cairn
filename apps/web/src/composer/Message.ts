@@ -171,9 +171,11 @@ export type Message = typeof Message.Type;
 export const OutMessage = defineMessageUnion({
   /**
    * Queue this mutation in the outbox, then go to `navigateTo` when there is one. `attachments` are
-   * the refs the turn carries, which the root keeps until the brain has the turn.
+   * the refs the turn carries, which the root keeps until the brain has the turn; `draftKey` is the
+   * draft it was sent from (the scratch overlay's for a scratch turn, wherever the composer is now).
    */
   Submitted: {
+    draftKey: Schema.String,
     item: OutboxItem,
     navigateTo: Schema.Option(Schema.String),
     attachments: Schema.Array(AttachmentRef),

@@ -225,6 +225,11 @@ export const Model = Schema.Struct({
   isMac: Schema.Boolean,
   softKeyboardOpen: Schema.Boolean,
   focused: Schema.Boolean,
+  /**
+   * The page's editor held the keyboard when the scratch overlay took it, so the keyboard goes back
+   * to it when the overlay closes (the editor leaves the page meanwhile, so the overlay cannot).
+   */
+  refocusAfterScratch: Schema.Boolean,
   selection: Selection,
   triggerMenu: Schema.Option(TriggerMenu),
   /** A trigger the user dismissed with Escape stays closed until the caret leaves it. */
@@ -265,6 +270,7 @@ export const initial: Model = {
   isMac: false,
   softKeyboardOpen: false,
   focused: false,
+  refocusAfterScratch: false,
   selection: { start: 0, end: 0 },
   triggerMenu: Option.none(),
   dismissedTrigger: Option.none(),

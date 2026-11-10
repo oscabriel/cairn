@@ -31,6 +31,7 @@ import { view } from "../next/composer/View.ts";
 import { fetchChunk } from "../next/page/Chunks.ts";
 import { AppRoute } from "../Route.ts";
 import {
+  ConfigureThread,
   FocusPopoverSearch,
   MoveHeroToDraftUrl,
   OpenProjectThread,
@@ -58,7 +59,7 @@ import {
   saveDrafts,
   shownNotice,
 } from "./Drafts.ts";
-import { ComposerInput } from "./Editor.ts";
+import { ComposerInput, ReturnFocusToEditor } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
 import { drawerRoomOf, KeepDrawerRoom } from "./HeroDrawerRoom.ts";
 import { Message, OutMessage } from "./Message.ts";
@@ -1190,6 +1191,7 @@ describe("composer sends", () => {
       ),
       Story.expectOutMessage(
         OutMessage.Submitted({
+          draftKey: `thread:${threadId}`,
           item: OutboxItem.Send({
             input: {
               threadId,
@@ -1748,6 +1750,29 @@ describe("composer sends", () => {
   });
 });
 
+/**
+ * True when the scratch overlay, shown over a thread's page whose editor did or did not hold the
+ * keyboard, then hidden, puts the keyboard back in that editor.
+ */
+const refocusedAfterScratch = (focused: boolean): boolean => {
+  const shown = inform(
+    { ...onThread, focused },
+    contextFor(ComposerTarget.Scratch({ threadId: Option.none() }))
+  ).model;
+
+  return (
+    inform(shown, contextFor(ComposerTarget.Thread({ threadId }))).commands ??
+    []
+  ).some((command) => command.name === ReturnFocusToEditor.name);
+};
+
+/** The thread controls whose failure the composer that used them shows. */
+const THREAD_CONTROLS: ReadonlySet<string> = new Set([
+  StopThread.name,
+  WithdrawQueued.name,
+  ConfigureThread.name,
+]);
+
 describe("the scratch overlay's composer (U-16)", () => {
   const firstMessage = composerOn(
     ComposerTarget.Scratch({ threadId: Option.none() })
@@ -1807,12 +1832,11 @@ describe("the scratch overlay's composer (U-16)", () => {
     },
   });
 
-  it("launches its first message in the scratch project and stays in the overlay, with the model and mode picked on it", () => {
+  it("launches its first message in the scratch project and stays in the overlay, with the model picked on it", () => {
     const picked = { provider: "opencode-go", modelId: "glm-5" };
 
     const typed = afterAll(firstMessage, [
       Message.PickedModel({ model: picked }),
-      Message.PickedRuntimeMode({ mode: "approval-required" }),
       Message.ChangedDraft({ value: "what does fsync promise?" }),
     ]);
 
@@ -1834,7 +1858,7 @@ describe("the scratch overlay's composer (U-16)", () => {
         projectId: Option.none(),
         stay: true,
         model: picked,
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
         content: {
           text: "what does fsync promise?",
           attachments: [],
@@ -1905,7 +1929,11 @@ describe("the scratch overlay's composer (U-16)", () => {
       update(running, Message.ClickedStop({ clearQueue: false })).commands ?? []
     ).find((command) => command.name === StopThread.name);
 
-    assert.deepStrictEqual(stop?.args, { threadId, clearQueue: false });
+    assert.deepStrictEqual(stop?.args, {
+      threadId,
+      clearQueue: false,
+      draftKey: Option.some("scratch"),
+    });
   });
 
   it("carries the scratch draft's screenshot in its turn, and a refused turn comes back to the scratch draft with it", () => {
@@ -1954,6 +1982,118 @@ describe("the scratch overlay's composer (U-16)", () => {
         tray: [ref.id],
         thread: undefined,
       }
+    );
+  });
+
+  it("puts the keyboard back in the page's editor when the overlay opened from it closes, and only then", () => {
+    assert.deepStrictEqual(
+      {
+        fromEditor: refocusedAfterScratch(true),
+        fromElsewhere: refocusedAfterScratch(false),
+      },
+      { fromEditor: true, fromElsewhere: false }
+    );
+  });
+
+  it("launches the scratch thread with full access whatever mode was picked, and offers no other", () => {
+    const typed = afterAll(firstMessage, [
+      Message.PickedRuntimeMode({ mode: "approval-required" }),
+      Message.ChangedDraft({ value: "what does fsync promise?" }),
+    ]);
+
+    // The overlay cannot answer approvals: the request card serves the routed page's thread.
+    assert.strictEqual(launchOf(typed)?.args?.runtimeMode, "full-access");
+  });
+
+  it("holds a second first message while the scratch thread's launch is being prepared", () => {
+    const typed = update(
+      firstMessage,
+      Message.ChangedDraft({ value: "what does fsync promise?" })
+    ).model;
+
+    const sent = update(typed, Message.ClickedSend({ alternate: false })).model;
+
+    const again = update(
+      update(sent, Message.ChangedDraft({ value: "and fdatasync?" })).model,
+      Message.ClickedSend({ alternate: false })
+    );
+
+    assert.deepStrictEqual(
+      {
+        launches: (again.commands ?? []).filter(
+          (command) => command.name === PrepareLaunch.name
+        ).length,
+        kept: activeDraft(again.model).text,
+        said: Option.isSome(shownNotice(again.model)),
+      },
+      { launches: 0, kept: "and fdatasync?", said: true }
+    );
+  });
+
+  it.effect(
+    "shows a failed Stop, withdraw or model change in the overlay, not on the thread's own page",
+    () =>
+      Effect.gen(function* () {
+        const disconnected = yield* Ref.make(Option.none());
+
+        const failedFrom = (result: UpdateReturn) =>
+          Effect.gen(function* () {
+            const command = (result.commands ?? []).find((each) =>
+              THREAD_CONTROLS.has(each.name)
+            );
+
+            const answer = yield* (
+              command?.effect ?? Effect.die("no request")
+            ).pipe(Effect.provideService(CairnConnection._tag, disconnected));
+
+            return Option.isSome(
+              shownNotice(update(result.model, answer).model)
+            );
+          });
+
+        const stopped = yield* failedFrom(
+          update(running, Message.ClickedStop({ clearQueue: false }))
+        );
+
+        const withdrawn = yield* failedFrom(
+          update(
+            running,
+            Message.ClickedWithdraw({ submissionId: SubmissionId.make(4) })
+          )
+        );
+
+        const configured = yield* failedFrom(
+          update(
+            running,
+            Message.PickedModel({
+              model: { provider: "opencode-go", modelId: "glm-5" },
+            })
+          )
+        );
+
+        assert.deepStrictEqual(
+          { stopped, withdrawn, configured },
+          { stopped: true, withdrawn: true, configured: true }
+        );
+      })
+  );
+
+  it("closes an open menu on an Escape from anywhere in the box, so the overlay around it stays", () => {
+    // Focus stays on a menu's trigger, outside the menu: the box takes the Escape (and keeps it
+    // from the dialog) rather than the menu alone. The docked box is the same card.
+    Scene.scene(
+      { update, view },
+      Scene.given({
+        ...onThread,
+        popover: Option.some(Popover.RuntimeMode()),
+      }),
+      ...acknowledgeMounts,
+      Scene.keydown(Scene.selector('[data-slot="composer-shell"]'), "Escape"),
+      Scene.expectHandled(),
+      Scene.expect(Scene.testId("composer-popover-RuntimeMode")).not.toExist(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
     );
   });
 

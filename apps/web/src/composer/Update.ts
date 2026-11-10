@@ -56,14 +56,15 @@ import {
   modifyActiveDraft,
   SCRATCH_DRAFT_KEY,
   rebaseDrafts,
+  runtimeModeOf,
   shownNotice,
   targetProject,
 } from "./Drafts.ts";
-import { FocusEditor, SetEditorValue } from "./Editor.ts";
+import { FocusEditor, ReturnFocusToEditor, SetEditorValue } from "./Editor.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { SubmitIntent } from "./Message.ts";
-import { emptyDraft, initial, Popover } from "./Model.ts";
-import type { ComposerContext, Draft, Model, ComposerTarget } from "./Model.ts";
+import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
+import type { ComposerContext, Draft, Model } from "./Model.ts";
 import {
   clampThinking,
   findListing,
@@ -386,16 +387,41 @@ const moveHeroToDraftUrl = (model: Model) =>
       })
     : [];
 
+/** True for a target whose page draws the composer's editor. */
+const drawsEditor = (target: ComposerTarget): boolean =>
+  ComposerTarget.match(target, {
+    None: () => false,
+    Home: () => true,
+    Draft: () => true,
+    Thread: () => true,
+    Scratch: () => false,
+  });
+
 /**
  * Brings the composer in line with the app: the route's target, the connection, the shell and the
  * open thread's view. A new target closes every menu and puts the caret at the end of its draft.
+ * The scratch overlay shown takes the page's editor away; hidden again, the keyboard goes back to
+ * that editor when it held it before.
  */
 export const inform = (
   model: Model,
   context: ComposerContext
 ): Update.Return<Model, Message, Services> => {
   const retargeted = !sameTarget(model.context.target, context.target);
-  const informed = modifyFields(model, { context: () => context });
+  const wasScratch = Predicate.isTagged(model.context.target, "Scratch");
+  const isScratch = Predicate.isTagged(context.target, "Scratch");
+
+  // The overlay, as it opens, notes whether the page's editor held the keyboard, and keeps that
+  // while it shows.
+  const refocusAfterScratch =
+    isScratch && !wasScratch
+      ? model.focused
+      : isScratch && model.refocusAfterScratch;
+
+  const informed = modifyFields(model, {
+    context: () => context,
+    refocusAfterScratch: () => refocusAfterScratch,
+  });
 
   const next = retargeted
     ? resetTransient(informed, draftKey(model))
@@ -403,11 +429,19 @@ export const inform = (
 
   const end = activeDraft(next).text.length;
 
+  const refocus =
+    wasScratch &&
+    !isScratch &&
+    model.refocusAfterScratch &&
+    drawsEditor(context.target);
+
+  const moved = retargeted ? moveHeroToDraftUrl(next) : [];
+
   return {
     model: retargeted
       ? modifyFields(next, { selection: () => ({ start: end, end }) })
       : next,
-    commands: retargeted ? moveHeroToDraftUrl(next) : [],
+    commands: refocus ? Array.append(moved, ReturnFocusToEditor()) : moved,
   };
 };
 
@@ -583,6 +617,15 @@ const dispatchTurn = (
     );
   }
 
+  // One scratch thread at a time: a second first message waits until the first one's launch is in
+  // the outbox, and so the overlay's thread, after which it is a send to that thread.
+  if (isScratchTarget(model) && Record.has(model.sending, SCRATCH_DRAFT_KEY)) {
+    return notice(
+      model,
+      "The scratch thread is still starting. Send again in a moment."
+    );
+  }
+
   return Option.match(
     Option.all([resolvedModel(model), resolvedThinking(model)]),
     {
@@ -615,7 +658,8 @@ const dispatchTurn = (
               projectId: Option.map(project, ({ id }) => id),
               model: chosen,
               thinkingLevel,
-              runtimeMode: draft.runtimeMode,
+              // The draft's mode, or full access for the scratch thread (`runtimeModeOf`).
+              runtimeMode: runtimeModeOf(model),
               envMode: draft.envMode,
               baseBranch: draft.baseBranch,
               currentBranch: Option.flatMap(
@@ -952,6 +996,7 @@ const chooseModel = (
           threadId: thread.id,
           model: Option.some(chosen),
           thinkingLevel: Option.none(),
+          draftKey: draftKey(model),
         }),
       ],
     }),
@@ -1264,7 +1309,13 @@ const step = (model: Model, message: Message): UpdateReturn =>
         onNone: () => keep(model),
         onSome: (thread) => ({
           model,
-          commands: [StopThread({ threadId: thread.id, clearQueue })],
+          commands: [
+            StopThread({
+              threadId: thread.id,
+              clearQueue,
+              draftKey: draftKey(model),
+            }),
+          ],
         }),
       }),
     ClickedWithdraw: ({ submissionId }) =>
@@ -1272,7 +1323,13 @@ const step = (model: Model, message: Message): UpdateReturn =>
         onNone: () => keep(model),
         onSome: (thread) => ({
           model,
-          commands: [WithdrawQueued({ threadId: thread.id, submissionId })],
+          commands: [
+            WithdrawQueued({
+              threadId: thread.id,
+              submissionId,
+              draftKey: draftKey(model),
+            }),
+          ],
         }),
       }),
 
@@ -1367,6 +1424,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
                   threadId: thread.id,
                   model: Option.none(),
                   thinkingLevel: Option.some(level),
+                  draftKey: draftKey(model),
                 }),
               ],
             }),
@@ -1571,7 +1629,12 @@ const step = (model: Model, message: Message): UpdateReturn =>
       return {
         model: sent,
         commands: [saveDraftsCommand(sent)],
-        outMessage: OutMessage.Submitted({ item, navigateTo, attachments }),
+        outMessage: OutMessage.Submitted({
+          draftKey: key,
+          item,
+          navigateTo,
+          attachments,
+        }),
       };
     },
     FailedPrepareTurn: ({

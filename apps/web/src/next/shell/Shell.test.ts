@@ -140,7 +140,7 @@ describe("the rail and the project's list", () => {
       onProjectThread,
       threadOf(PROJECT_THREAD)
     ).map((thread) => {
-      const row = rowStatusOf(thread, requests, onProjectThread.context.nowMs);
+      const row = rowStatusOf(thread, requests, onProjectThread.nowMs);
 
       return `${row.status.tone}/${row.status.mark}/${row.status.word}`;
     });

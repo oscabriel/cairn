@@ -1,5 +1,6 @@
 // The `next` shell's state (ADR 0040, plan look track L6): what the root told it last (the shell,
-// the route, the connection, the clock), which project the rail has selected, the phone's sidebar
+// the route, the connection), the clock, the platform, the visits it sent and the favicon's number
+// (the classic sidebar's state until ADR 0050 moved them here), which project the rail has selected, the phone's sidebar
 // sheet, which project favicons loaded, the refresh confirm, the scratch thread's overlay, and the
 // work panel's open state. The rail, the project's sidebar list, the chat header, the scratch
 // overlay and the work panel all draw from it, and so does the goal panel (plan 6H): the open
@@ -21,6 +22,7 @@ import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { AppRoute } from "../../Route.ts";
+import { VisitState } from "../../shell/Visited.ts";
 
 /** What the root tells the shell after every change. */
 export const ShellContext = Schema.Struct({
@@ -28,12 +30,10 @@ export const ShellContext = Schema.Struct({
   route: AppRoute,
   /** The connection's client exists, so a call can be made. */
   hasClient: Schema.Boolean,
+  /** The shell is current on this connection: a visit is sent only then. */
+  isLive: Schema.Boolean,
   /** The server's model defaults, once `session.hello` answered: a scratch launch uses them. */
   defaults: Schema.Option(ModelDefaults),
-  /** The time ages are computed at, in epoch milliseconds (the sidebar's clock). */
-  nowMs: Schema.Finite,
-  /** An Apple platform, where the scratch thread's key hint reads Cmd. */
-  isMac: Schema.Boolean,
   /**
    * On the hero and a draft's page, the project the draft launches in (`draftProject`), so the rail
    * and the list show the project the hero names; none on every other page.
@@ -286,11 +286,37 @@ export const AddProjectState = Schema.Struct({
 
 export type AddProjectState = typeof AddProjectState.Type;
 
+/**
+ * A visit sent and not yet shown on its thread's row: while one waits for the open thread no other
+ * is planned, so a tick past the throttle never queues another behind it. It is dropped once the
+ * row shows it, or after `PENDING_VISIT_TTL_MS`.
+ */
+export const PendingVisit = Schema.Struct({
+  threadId: ThreadId,
+  at: Schema.DateTimeUtc,
+  /** When it was sent, in epoch milliseconds. */
+  sentAtMs: Schema.Finite,
+});
+
+export type PendingVisit = typeof PendingVisit.Type;
+
+/** How long a visit may wait for the brain to show it before it is forgotten. */
+export const PENDING_VISIT_TTL_MS = 15_000;
+
 /** The `next` shell's Model. */
 export const Model = Schema.Struct({
   context: ShellContext,
   /** The shell's update has run once, asking for the scratch thread this device saved. */
   started: Schema.Boolean,
+  /** The time ages are computed at, in epoch milliseconds, from the clock Subscription. */
+  nowMs: Schema.Finite,
+  /** An Apple platform, where `mod` is Command and key hints say so. */
+  isMac: Schema.Boolean,
+  /** The last visit this page sent, for its throttle (`shell/Visited.ts`). */
+  visits: VisitState,
+  pendingVisits: Schema.Array(PendingVisit),
+  /** The favicon's number: the roots that need the user (`needsYouCount`). */
+  badgeCount: Schema.Int,
   /** The project the user picked on the rail; none follows the open thread. */
   selectedProjectId: Schema.Option(ProjectId),
   /** The phone's sidebar sheet is open. */
@@ -321,9 +347,8 @@ export const emptyContext: ShellContext = {
   shell: Option.none(),
   route: AppRoute.Hero(),
   hasClient: false,
+  isLive: false,
   defaults: Option.none(),
-  nowMs: 0,
-  isMac: false,
   draftProjectId: Option.none(),
 };
 
@@ -331,6 +356,11 @@ export const emptyContext: ShellContext = {
 export const initial: Model = {
   context: emptyContext,
   started: false,
+  nowMs: 0,
+  isMac: false,
+  visits: Option.none(),
+  pendingVisits: [],
+  badgeCount: 0,
   selectedProjectId: Option.none(),
   isSheetOpen: false,
   favicons: {},

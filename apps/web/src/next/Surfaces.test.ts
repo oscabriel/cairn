@@ -242,12 +242,13 @@ describe("the next settings page", () => {
         update: settingsUpdate,
         view: Scene.withViewInputs(settingsView, {
           notifications: () => null,
+          isMac: false,
         })(),
       },
       Scene.given(loaded),
       Scene.expect(Scene.selector("#settings-ui")).toBeAbsent(),
       Scene.expect(
-        Scene.role("switch", { name: "Confirm thread deletion" })
+        Scene.role("switch", { name: "Collapse the composer on scroll" })
       ).toExist(),
       Scene.expect(Scene.selector("#settings-theme")).toHaveHandler("change"),
       Scene.tap(({ commands }) => {

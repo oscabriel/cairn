@@ -1,9 +1,9 @@
-import { ApprovalId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
-import { presentThreadShell } from "./PresentThreadShell.ts";
+import { hasUnseenCompletion } from "./PresentThreadShell.ts";
 
 const time = (iso: string) => DateTime.makeUnsafe(iso);
 
@@ -46,88 +46,25 @@ const base = ThreadShell.make({
   ...BARE_ROW_FIELDS,
 });
 
-const request = (kind: "executor-call" | "user-input") => ({
-  ...base,
-  pendingRuntimeRequest: Option.some({
-    id: ApprovalId.make("apr_1"),
-    kind,
-    createdAt: base.createdAt,
-    origin: Option.none(),
-  }),
-});
-
-describe(presentThreadShell, () => {
-  it("reports a new thread as quiet", () => {
-    const presented = presentThreadShell(base);
-
-    assert.isFalse(presented.isWorking);
-    assert.isFalse(presented.hasUnseenCompletion);
-    assert.isTrue(Option.isNone(presented.latestRun));
-    assert.strictEqual(presented.source, base);
-  });
-
-  it("counts working time from the run's start, falling back to when it was requested", () => {
-    const requested = {
-      ...base,
-      activity: "running" as const,
-      latestRunRequestedAt: Option.some(time("2026-10-22T09:00:00Z")),
-    };
-
-    assert.deepStrictEqual(
-      presentThreadShell(requested).workingStartedAt,
-      requested.latestRunRequestedAt
-    );
-
-    const started = {
-      ...requested,
-      latestRunStartedAt: Option.some(time("2026-10-22T09:00:02Z")),
-    };
-
-    assert.isTrue(presentThreadShell(started).isWorking);
-    assert.deepStrictEqual(
-      presentThreadShell(started).workingStartedAt,
-      started.latestRunStartedAt
-    );
-    assert.isTrue(
-      Option.isNone(
-        presentThreadShell({ ...started, activity: "idle" }).workingStartedAt
-      )
-    );
-  });
-
+describe(hasUnseenCompletion, () => {
   it("marks a completion unseen until the user visits after it", () => {
     const completed = {
       ...base,
       latestRunCompletedAt: Option.some(time("2026-10-22T10:00:00Z")),
     };
 
-    assert.isTrue(presentThreadShell(completed).hasUnseenCompletion);
+    assert.isTrue(hasUnseenCompletion(completed));
     assert.isTrue(
-      presentThreadShell({
+      hasUnseenCompletion({
         ...completed,
         lastVisitedAt: Option.some(time("2026-10-22T09:59:59Z")),
-      }).hasUnseenCompletion
+      })
     );
     assert.isFalse(
-      presentThreadShell({
+      hasUnseenCompletion({
         ...completed,
         lastVisitedAt: Option.some(time("2026-10-22T10:00:00Z")),
-      }).hasUnseenCompletion
-    );
-  });
-
-  it("tells an approval from a question", () => {
-    assert.isTrue(
-      presentThreadShell(request("executor-call")).hasPendingApproval
-    );
-    assert.isFalse(
-      presentThreadShell(request("executor-call")).hasPendingUserInput
-    );
-    assert.isTrue(
-      presentThreadShell(request("user-input")).hasPendingUserInput
-    );
-    assert.isFalse(
-      presentThreadShell(request("user-input")).hasPendingApproval
+      })
     );
   });
 });

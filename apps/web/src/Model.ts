@@ -18,7 +18,6 @@ import { Model as PushModel } from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
 import { Model as SettingsModel } from "./settings/Model.ts";
 import { BootData } from "./shell/ShellStore.ts";
-import { Model as SidebarModel } from "./sidebar/Model.ts";
 import { QueuedSend } from "./timeline/Model.ts";
 
 /**
@@ -97,7 +96,6 @@ export const Model = Schema.Struct({
   /** A message for the user about something that did not work. */
   notice: Schema.Option(Schema.String),
   thread: Thread.Model.Model,
-  sidebar: SidebarModel,
   composer: Composer.Model,
   push: PushModel,
   settings: SettingsModel,

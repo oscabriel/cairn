@@ -1,8 +1,8 @@
-// Ported from github.com/pingdotgg/t3code, apps/web/src/keybindings.test.ts ("shortcutLabelForCommand",
-// "cross-command precedence", "formatShortcutLabel", the when-expression cases) at
-// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: label formats, last-rule-wins precedence, `when`
-// expressions and literals. Removed: event matching (Foldkit matches events), terminal, preview,
-// script, jump and model picker cases. Added: the Foldkit key strings and typing rules.
+// Ported from github.com/pingdotgg/t3code, apps/web/src/keybindings.test.ts ("formatShortcutLabel"
+// and the shortcut parsing cases) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: label formats.
+// Removed: event matching (Foldkit matches events), `when` expressions and precedence (not ported,
+// ADR 0050), terminal, preview, script, jump and model picker cases. Added: the Foldkit key strings
+// and the table's commands.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -25,32 +25,16 @@ import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 
 import {
-  compileResolvedKeybindingsConfig,
-  DEFAULT_RESOLVED_KEYBINDINGS,
-  effectiveKeybindings,
-  evaluateWhen,
-  firesWhileTyping,
   formatShortcutLabel,
+  KEYBINDINGS,
   parseKeybindingShortcut,
-  parseKeybindingWhenExpression,
-  shortcutLabelForCommand,
+  shortcutsFor,
   toFoldkitKeys,
 } from "./Keybindings.ts";
-import type { KeybindingCommand, KeybindingShortcut } from "./Keybindings.ts";
+import type { KeybindingShortcut } from "./Keybindings.ts";
 
 const shortcut = (value: string): KeybindingShortcut =>
   Option.getOrThrow(parseKeybindingShortcut(value));
-
-const rule = (key: string, command: KeybindingCommand, when?: string) => ({
-  key,
-  command,
-  when: Option.fromUndefinedOr(when),
-});
-
-const label = (command: KeybindingCommand, isMac: boolean) =>
-  Option.getOrNull(
-    shortcutLabelForCommand(DEFAULT_RESOLVED_KEYBINDINGS, command, {}, isMac)
-  );
 
 describe(parseKeybindingShortcut, () => {
   it("reads modifiers in any order and one key", () => {
@@ -74,134 +58,32 @@ describe(parseKeybindingShortcut, () => {
   });
 });
 
-const holds = (
-  expression: string,
-  context: Readonly<Record<string, boolean>>
-) =>
-  evaluateWhen(
-    Option.getOrThrow(parseKeybindingWhenExpression(expression)),
-    context
-  );
-
-describe(parseKeybindingWhenExpression, () => {
-  it("supports not, and, or, parentheses and boolean literals", () => {
-    assert.isTrue(
-      holds("terminalOpen && !terminalFocus", { terminalOpen: true })
-    );
-    assert.isFalse(
-      holds("terminalOpen && !terminalFocus", { terminalOpen: false })
-    );
-    assert.isTrue(holds("a || b && c", { a: true }));
-    assert.isFalse(holds("(a || b) && c", { a: true }));
-    assert.isTrue(holds("!!a", { a: true }));
-    assert.isTrue(holds("true", {}));
-    assert.isFalse(holds("false", { false: true }));
-  });
-
-  it("refuses malformed expressions", () => {
-    for (const expression of ["", "a &&", "(a", "a)", "a $ b", "!"]) {
-      assert.isTrue(
-        Option.isNone(parseKeybindingWhenExpression(expression)),
-        expression
-      );
-    }
-  });
-
-  it("refuses nesting deeper than 64", () => {
-    assert.isTrue(
-      Option.isNone(
-        parseKeybindingWhenExpression(`${"(".repeat(70)}a${")".repeat(70)}`)
-      )
-    );
-    assert.isTrue(
-      Option.isSome(
-        parseKeybindingWhenExpression(`${"(".repeat(10)}a${")".repeat(10)}`)
-      )
-    );
-  });
-});
-
-describe(shortcutLabelForCommand, () => {
-  it("returns the default labels", () => {
-    assert.strictEqual(label("sidebar.toggle", true), "⌘B");
-    assert.strictEqual(label("chat.new", true), "⇧⌘O");
-    assert.strictEqual(label("diff.toggle", false), "Ctrl+D");
-    assert.strictEqual(label("commandPalette.toggle", true), "⌘K");
-    assert.strictEqual(label("modelPicker.toggle", false), "Ctrl+Shift+M");
-    assert.strictEqual(label("thread.previous", false), "Ctrl+Shift+[");
-    assert.strictEqual(label("thread.settle", true), "⇧⌘S");
-  });
-
-  it("returns none for a command shadowed by a later rule on the same chord", () => {
-    const bindings = compileResolvedKeybindingsConfig([
-      rule("mod+shift+1", "thread.pin"),
-      rule("mod+shift+1", "thread.settle"),
-    ]);
-
-    assert.isTrue(
-      Option.isNone(shortcutLabelForCommand(bindings, "thread.pin", {}, true))
-    );
+describe("the key binding table", () => {
+  it("binds only the commands the shell answers, each key once", () => {
     assert.deepStrictEqual(
-      shortcutLabelForCommand(bindings, "thread.settle", {}, true),
-      Option.some("⇧⌘1")
+      KEYBINDINGS.map((binding) => [
+        binding.command,
+        toFoldkitKeys(binding.shortcut),
+      ]),
+      [
+        ["chat.new", "Mod+n"],
+        ["chat.new", "Mod+Shift+o"],
+        ["thread.previous", "Mod+Shift+{"],
+        ["thread.next", "Mod+Shift+}"],
+      ]
     );
   });
 
-  it("respects the when context while resolving labels", () => {
-    const bindings = compileResolvedKeybindingsConfig([
-      rule("mod+d", "diff.toggle"),
-      rule("mod+d", "thread.pin", "terminalFocus"),
-    ]);
-
+  it("labels a command's keys for the platform", () => {
     assert.deepStrictEqual(
-      shortcutLabelForCommand(
-        bindings,
-        "diff.toggle",
-        { terminalFocus: false },
-        false
+      shortcutsFor("thread.next").map((each) =>
+        formatShortcutLabel(each, false)
       ),
-      Option.some("Ctrl+D")
+      ["Ctrl+Shift+]"]
     );
-    assert.isTrue(
-      Option.isNone(
-        shortcutLabelForCommand(
-          bindings,
-          "diff.toggle",
-          { terminalFocus: true },
-          false
-        )
-      )
-    );
-  });
-});
-
-describe("cross-command precedence", () => {
-  it("lets a later focused rule override a global one only while it holds", () => {
-    const bindings = compileResolvedKeybindingsConfig([
-      rule("mod+n", "chat.new"),
-      rule("mod+n", "chat.newLocal", "terminalFocus"),
-    ]);
-
-    const winner = (terminalFocus: boolean) =>
-      effectiveKeybindings(bindings, { terminalFocus }, true).map(
-        (binding) => binding.command
-      );
-
-    assert.deepStrictEqual(winner(true), ["chat.newLocal"]);
-    assert.deepStrictEqual(winner(false), ["chat.new"]);
-  });
-
-  it("still lets a later global rule win when both rules match", () => {
-    const bindings = compileResolvedKeybindingsConfig([
-      rule("mod+n", "chat.newLocal", "terminalFocus"),
-      rule("mod+n", "chat.new"),
-    ]);
-
     assert.deepStrictEqual(
-      effectiveKeybindings(bindings, { terminalFocus: true }, false).map(
-        (binding) => binding.command
-      ),
-      ["chat.new"]
+      shortcutsFor("chat.new").map((each) => formatShortcutLabel(each, true)),
+      ["⌘N", "⇧⌘O"]
     );
   });
 });
@@ -225,11 +107,6 @@ describe(formatShortcutLabel, () => {
   });
 });
 
-const fires = (command: KeybindingCommand) =>
-  DEFAULT_RESOLVED_KEYBINDINGS.filter(
-    (binding) => binding.command === command
-  ).every((binding) => firesWhileTyping(binding, {}));
-
 describe(toFoldkitKeys, () => {
   it("names shifted punctuation by the key the browser reports", () => {
     assert.strictEqual(toFoldkitKeys(shortcut("mod+shift+[")), "Mod+Shift+{");
@@ -238,11 +115,5 @@ describe(toFoldkitKeys, () => {
     assert.strictEqual(toFoldkitKeys(shortcut("mod+alt+n")), "Mod+Alt+n");
     assert.strictEqual(toFoldkitKeys(shortcut("mod++")), "Mod+Plus");
     assert.strictEqual(toFoldkitKeys(shortcut("ctrl+space")), "Control+Space");
-  });
-
-  it("keeps mod+z out of text fields and lets the rest fire while typing", () => {
-    assert.isFalse(fires("thread.undo"));
-    assert.isTrue(fires("chat.new"));
-    assert.isTrue(fires("thread.settle"));
   });
 });

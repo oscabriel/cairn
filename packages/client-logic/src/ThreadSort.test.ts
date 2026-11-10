@@ -1,8 +1,9 @@
 // Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/threadSort.test.ts at
-// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the settled, pinned and active order cases and the
-// pin-order key and planner cases. Removed: malformed timestamp cases (Cairn's times are decoded
-// `DateTime`s), environment tie-breaks (one environment), and `sortThreads` and
-// `getLatestThreadForProject`, which Cairn's sidebar does not use.
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the settled, pinned and active order cases.
+// Removed: the pin-order key and planner cases, which went with the classic sidebar (ADR 0050);
+// malformed timestamp cases (Cairn's times are decoded `DateTime`s), environment tie-breaks (one
+// environment), and `sortThreads` and `getLatestThreadForProject`, which Cairn's sidebar does not
+// use.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -26,10 +27,6 @@ import { DateTime, Option } from "effect";
 
 import {
   activeThreadAnchorTimestampMs,
-  generateSpreadPinOrderKeys,
-  pinOrderKeyBetween,
-  planPinnedMove,
-  planPinnedReorder,
   resolveSettledThreadTimestamp,
   sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
@@ -40,14 +37,6 @@ import type { SettledSortInput } from "./ThreadSort.ts";
 const time = (iso: string) => DateTime.makeUnsafe(iso);
 
 const some = (iso: string) => Option.some(time(iso));
-
-const keys = (
-  entries: ReadonlyArray<readonly [string, string | null]>
-): ReadonlyMap<string, Option.Option<string>> =>
-  new Map(entries.map(([id, key]) => [id, Option.fromNullOr(key)]));
-
-const between = (before: string | null, after: string | null) =>
-  pinOrderKeyBetween(Option.fromNullOr(before), Option.fromNullOr(after));
 
 const settled = (
   input: Partial<SettledSortInput> & { readonly id: string }
@@ -183,116 +172,6 @@ describe(sortSettledThreads, () => {
   });
 });
 
-describe("planPinnedReorder with hidden rows", () => {
-  it("keeps hidden slots available when inserting between visible neighbours", () => {
-    const midpoint = Option.getOrThrow(between("f", "t"));
-
-    const assignments = planPinnedReorder({
-      orderedIds: ["a", "moved", "b"],
-      keysById: keys([
-        ["a", "f"],
-        ["b", "t"],
-        ["moved", "z"],
-        ["snoozed", midpoint],
-      ]),
-      movedId: "moved",
-    });
-
-    assert.strictEqual(assignments.length, 1);
-
-    const [only] = assignments;
-
-    assert.strictEqual(only?.id, "moved");
-    assert.isTrue((only?.orderKey ?? "") > "f" && (only?.orderKey ?? "") < "t");
-    assert.notStrictEqual(only?.orderKey, midpoint);
-  });
-
-  it("materializes keyless rows without overwriting hidden slots", () => {
-    const reserved = generateSpreadPinOrderKeys(6);
-
-    const assignments = planPinnedReorder({
-      orderedIds: ["c", "a", "b"],
-      keysById: keys([
-        ["a", null],
-        ["b", null],
-        ["c", null],
-        ...reserved.map((key, index) => [`hidden-${index}`, key] as const),
-      ]),
-      movedId: "c",
-    });
-
-    const written = assignments.map(({ orderKey }) => orderKey);
-
-    assert.deepStrictEqual(
-      assignments.map(({ id }) => id),
-      ["c", "a", "b"]
-    );
-    assert.deepStrictEqual(written, [...written].toSorted());
-    assert.strictEqual(new Set(written).size, 3);
-    assert.isTrue(written.every((key) => !reserved.includes(key)));
-  });
-});
-
-describe(planPinnedMove, () => {
-  it("moves a thread up with a single key write", () => {
-    const assignments = Option.getOrThrow(
-      planPinnedMove({
-        orderedIds: ["a", "b", "c"],
-        keysById: keys([
-          ["a", "f"],
-          ["b", "m"],
-          ["c", "t"],
-        ]),
-        movedId: "c",
-        direction: "up",
-      })
-    );
-
-    assert.strictEqual(assignments.length, 1);
-    assert.strictEqual(assignments[0]?.id, "c");
-
-    const key = assignments[0]?.orderKey ?? "";
-
-    assert.isTrue(key > "f" && key < "m");
-  });
-
-  it("returns none when the move falls off the end of the list", () => {
-    const input = {
-      orderedIds: ["a", "b"],
-      keysById: keys([
-        ["a", "f"],
-        ["b", "m"],
-      ]),
-    };
-
-    assert.isTrue(
-      Option.isNone(planPinnedMove({ ...input, movedId: "a", direction: "up" }))
-    );
-    assert.isTrue(
-      Option.isNone(
-        planPinnedMove({ ...input, movedId: "b", direction: "down" })
-      )
-    );
-  });
-
-  it("materializes keys for the whole section when a neighbour is keyless", () => {
-    const written = Option.getOrThrow(
-      planPinnedMove({
-        orderedIds: ["a", "b", "c"],
-        keysById: keys([
-          ["a", null],
-          ["b", "m"],
-          ["c", null],
-        ]),
-        movedId: "b",
-        direction: "up",
-      })
-    ).map((entry) => entry.orderKey);
-
-    assert.deepStrictEqual([...written].toSorted(), written);
-  });
-});
-
 describe(sortPinnedThreadsByOrderKey, () => {
   it("puts keyed rows by key first, then keyless rows newest first", () => {
     const sorted = sortPinnedThreadsByOrderKey([
@@ -323,33 +202,6 @@ describe(sortPinnedThreadsByOrderKey, () => {
       ["keyed-f", "keyed-t", "new-keyless", "old-keyless"]
     );
   });
-});
-
-describe(generateSpreadPinOrderKeys, () => {
-  it.each([0, 1, 650, 675, 676, 1001, 2000])(
-    "leaves unique, insertable keys for %i threads",
-    (count) => {
-      const spread = generateSpreadPinOrderKeys(count);
-
-      assert.strictEqual(spread.length, count);
-      assert.strictEqual(new Set(spread).size, count);
-      assert.deepStrictEqual([...spread].toSorted(), spread);
-
-      for (const [index, after] of spread.entries()) {
-        const before = index === 0 ? null : (spread[index - 1] ?? null);
-
-        assert.match(after, /^[a-z]*[b-z]$/u);
-
-        const inserted = Option.getOrThrow(between(before, after));
-
-        assert.isTrue(inserted < after);
-
-        if (before !== null) {
-          assert.isTrue(inserted > before);
-        }
-      }
-    }
-  );
 });
 
 const row = (
@@ -401,71 +253,5 @@ describe(sortActiveThreadsByOrderKey, () => {
         ["thread-a", "thread-b"]
       );
     }
-  });
-
-  it("applies every move across a mixed keyless and keyed section", () => {
-    const threads = [0, 1, 2, 3, 4, 5].map((index) =>
-      row(
-        String(index),
-        `2026-03-09T0${6 - index}:00:00.000Z`,
-        index < 3 ? null : (["f", "m", "t"][index - 3] ?? null)
-      )
-    );
-
-    const ids = threads.map((thread) => thread.id);
-
-    const keysById = new Map(
-      threads.map((thread) => [thread.id, thread.activeOrderKey])
-    );
-
-    for (const movedId of ids) {
-      for (let target = 0; target < ids.length; target += 1) {
-        const desired = ids.filter((id) => id !== movedId);
-
-        desired.splice(target, 0, movedId);
-
-        const written = new Map(
-          planPinnedReorder({ orderedIds: desired, keysById, movedId }).map(
-            (assignment) => [assignment.id, assignment.orderKey]
-          )
-        );
-
-        const updated = threads.map((thread) => ({
-          ...thread,
-          activeOrderKey: Option.orElse(
-            Option.fromUndefinedOr(written.get(thread.id)),
-            () => thread.activeOrderKey
-          ),
-        }));
-
-        assert.deepStrictEqual(
-          sortActiveThreadsByOrderKey(updated).map((thread) => thread.id),
-          desired
-        );
-      }
-    }
-  });
-
-  it("moves a keyless thread into the arranged run with one write", () => {
-    const assignments = Option.getOrThrow(
-      planPinnedMove({
-        orderedIds: ["new", "reopened", "first", "last"],
-        keysById: keys([
-          ["new", null],
-          ["reopened", null],
-          ["first", "f"],
-          ["last", "t"],
-        ]),
-        movedId: "reopened",
-        direction: "down",
-      })
-    );
-
-    assert.strictEqual(assignments.length, 1);
-    assert.strictEqual(assignments[0]?.id, "reopened");
-
-    const key = assignments[0]?.orderKey ?? "";
-
-    assert.isTrue(key > "f" && key < "t");
   });
 });

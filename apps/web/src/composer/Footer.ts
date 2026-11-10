@@ -8,7 +8,9 @@
 // measurement reads natural and icon-only widths so a folded block can come back. Changed: the
 // measuring runs in a Foldkit Mount that reports `MeasuredFooter` and client-logic decides the
 // layout; t3code's traits become one thinking select (pi exposes thinking levels), and the mode
-// select lists the four modes with every one but full access marked as applying later.
+// select lists the four modes with every one but full access marked as applying later. The classic
+// footer view went with the classic views (W-6): what is left is the measuring Mount and the menus'
+// rows, which the `next` footer (`next/composer/Footer.ts`) draws.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -27,70 +29,25 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import { shouldUseCompactComposerFooter } from "@cairn/client-logic/FooterLayout";
 import type { ControlsMeasurement } from "@cairn/client-logic/FooterLayout";
-import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import {
   LATER_PHASE_NOTE,
   runtimeModeOptions,
   runtimeModePresentation,
 } from "@cairn/client-logic/RuntimeMode";
-import type { RuntimeModeIcon } from "@cairn/client-logic/RuntimeMode";
 import type { ThinkingLevel } from "@cairn/protocol/Models";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Effect, Option, Queue, Stream } from "effect";
 import { Mount } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
-import {
-  Bot,
-  Brain,
-  Check,
-  ChevronDown,
-  CornerUpRight,
-  Ellipsis,
-  ListPlus,
-  Lock,
-  LockOpen,
-  PenLine,
-  Sparkles,
-} from "lucide";
+import { Check } from "lucide";
 
-import { hasAttachments } from "../attachments/Update.ts";
-import { attachButton } from "./AttachmentTray.ts";
-import {
-  ACTIONS_CLASS,
-  BLOCK_CLASS,
-  CONTROL_BASE_CLASS,
-  CONTROLS_CLASS,
-  FOOTER_CLASS,
-  FOOTER_CONTROL_CLASS,
-  MENU_ITEM_CLASS,
-  SEND_CLASS,
-  SEPARATOR_CLASS,
-  STOP_CLASS,
-} from "./Classes.ts";
-import { activeDraft, draftKey, isDraftTarget } from "./Drafts.ts";
+import { MENU_ITEM_CLASS } from "./Classes.ts";
+import { activeDraft, isDraftTarget } from "./Drafts.ts";
 import { icon } from "./Icon.ts";
-import type { IconNode } from "./Icon.ts";
 import { Message } from "./Message.ts";
-import { Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import {
-  modelLabel,
-  resolvedModel,
-  resolvedThinking,
-  thinkingLabel,
-  thinkingLevels,
-} from "./Models.ts";
-import { isThreadRunning } from "./Update.ts";
-import { usageMeterView } from "./UsageMeter.ts";
-
-const RUNTIME_ICONS: Readonly<Record<RuntimeModeIcon, IconNode>> = {
-  lock: Lock,
-  "pen-line": PenLine,
-  sparkles: Sparkles,
-  "lock-open": LockOpen,
-};
+import { resolvedThinking, thinkingLabel, thinkingLevels } from "./Models.ts";
 
 const parseWidth = (value: string): number => {
   const parsed = Number(value.replace(/px$/u, ""));
@@ -266,78 +223,8 @@ export const MeasureFooter = Mount.defineStream("MeasureFooter", {
     ),
 });
 
-const chevron = (h: HtmlBuilder<Message>): Html =>
-  h.span(
-    [h.Attribute("aria-hidden", "true"), h.Class("flex items-center")],
-    [
-      icon(
-        h,
-        ChevronDown,
-        "chevron-down",
-        "shrink-0 size-3.5 text-icon-muted",
-        2.25,
-        "composer-control-chevron"
-      ),
-    ]
-  );
-
-const controlIcon = (
-  h: HtmlBuilder<Message>,
-  node: IconNode,
-  name: string
-): Html => icon(h, node, name, "shrink-0 size-4", 2, "composer-control-icon");
-
-const controlLabel = (
-  h: HtmlBuilder<Message>,
-  text: string,
-  iconOnly: boolean
-): Html =>
-  h.span(
-    [
-      h.DataAttribute("composer-control-label", "true"),
-      h.Class(iconOnly ? "sr-only" : "flex-1 truncate"),
-    ],
-    [text]
-  );
-
-/** One foldable block: hidden blocks stay rendered (invisible) so they can be measured. */
-const block = (
-  h: HtmlBuilder<Message>,
-  name: string,
-  hidden: boolean,
-  iconOnly: boolean,
-  content: ReadonlyArray<Html>
-): Html =>
-  h.div(
-    [
-      h.Key(name),
-      h.DataAttribute("resting-block", name),
-      h.DataAttribute("composer-block-icon-only", String(iconOnly)),
-      h.DataAttribute("composer-block-hidden", String(hidden)),
-      ...onlyIf(hidden, h.AriaHidden(true), h.Inert(true)),
-      h.Class(
-        hidden
-          ? `${BLOCK_CLASS} pointer-events-none invisible absolute`
-          : BLOCK_CLASS
-      ),
-    ],
-    [
-      h.div([
-        h.DataAttribute("orientation", "vertical"),
-        h.Role("separator"),
-        h.Attribute("aria-orientation", "vertical"),
-        h.DataAttribute("slot", "separator"),
-        h.Class(SEPARATOR_CLASS),
-      ]),
-      ...content,
-    ]
-  );
-
-const isOpen = (model: Model, tag: Popover["_tag"]): boolean =>
-  Option.exists(model.popover, (popover) => popover._tag === tag);
-
 /** The footer's foldable blocks, in order: thinking (when the model has levels), then mode. */
-export const footerBlocks = (model: Model): ReadonlyArray<"traits" | "mode"> =>
+const footerBlocks = (model: Model): ReadonlyArray<"traits" | "mode"> =>
   thinkingLevels(model).length > 0 ? ["traits", "mode"] : ["mode"];
 
 const runtimeModeOf = (model: Model): RuntimeMode =>
@@ -347,339 +234,6 @@ const runtimeModeOf = (model: Model): RuntimeMode =>
         onNone: () => "full-access",
         onSome: (thread) => thread.runtimeMode,
       });
-
-/**
- * The provider mark's box, t3code's class string. Every provider gets the same neutral glyph until
- * the branding pass; t3code draws each provider's logo here.
- */
-const PROVIDER_MARK_CLASS =
-  "relative isolate z-30 inline-flex shrink-0 items-center justify-center overflow-visible size-4";
-
-const pickerButton = (model: Model, h: HtmlBuilder<Message>): Html =>
-  h.button(
-    [
-      h.Type("button"),
-      h.DataAttribute("chat-provider-model-picker", "true"),
-      h.DataAttribute("slot", "popover-trigger"),
-      h.AriaHasPopup("dialog"),
-      h.AriaExpanded(isOpen(model, "ModelPicker")),
-      h.Class(
-        `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} shrink justify-between whitespace-nowrap -ms-2.5 min-w-13`
-      ),
-      h.OnClick(
-        Message.OpenedPopover({
-          popover: Popover.ModelPicker({
-            query: "",
-            highlighted: Option.none(),
-            provider: Option.none(),
-          }),
-        })
-      ),
-    ],
-    [
-      h.span(
-        [h.Class("flex min-w-0 flex-1 items-center gap-1.5")],
-        [
-          h.span(
-            [h.Class(PROVIDER_MARK_CLASS)],
-            [icon(h, Bot, "bot", "shrink-0 size-4")]
-          ),
-          h.span(
-            [
-              h.DataAttribute("chat-provider-model-picker-label", "true"),
-              h.DataAttribute("slot", "tooltip-trigger"),
-              h.Class("min-w-0 flex-1 overflow-hidden truncate"),
-            ],
-            [modelLabel(model)]
-          ),
-        ]
-      ),
-      chevron(h),
-    ]
-  );
-
-const traitsBlock = (
-  model: Model,
-  hidden: boolean,
-  iconOnly: boolean,
-  h: HtmlBuilder<Message>
-): Html => {
-  const label = Option.match(resolvedThinking(model), {
-    onNone: () => "Thinking",
-    onSome: thinkingLabel,
-  });
-
-  return block(h, "traits", hidden, iconOnly, [
-    h.button(
-      [
-        h.Type("button"),
-        h.AriaLabel(label),
-        h.AriaHasPopup("menu"),
-        h.AriaExpanded(isOpen(model, "Thinking")),
-        h.DataAttribute("composer-shortcut", "composer.effort"),
-        h.DataAttribute("slot", "tooltip-trigger"),
-        h.Class(
-          `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} justify-center shrink-0 whitespace-nowrap`
-        ),
-        h.OnClick(Message.OpenedPopover({ popover: Popover.Thinking() })),
-      ],
-      [
-        controlIcon(h, Brain, "brain"),
-        controlLabel(h, label, iconOnly),
-        chevron(h),
-      ]
-    ),
-  ]);
-};
-
-const modeBlock = (
-  model: Model,
-  hidden: boolean,
-  iconOnly: boolean,
-  h: HtmlBuilder<Message>
-): Html => {
-  const mode = runtimeModeOf(model);
-  const presentation = runtimeModePresentation[mode];
-
-  return block(h, "mode", hidden, iconOnly, [
-    h.button(
-      [
-        h.Type("button"),
-        h.Role("combobox"),
-        h.AriaHasPopup("listbox"),
-        h.AriaExpanded(isOpen(model, "RuntimeMode")),
-        h.AriaLabel("Runtime mode"),
-        h.DataAttribute("composer-shortcut", "composer.mode"),
-        h.DataAttribute("slot", "tooltip-trigger"),
-        h.Class(
-          `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} shrink-0 justify-center whitespace-nowrap`
-        ),
-        h.OnClick(Message.OpenedPopover({ popover: Popover.RuntimeMode() })),
-      ],
-      [
-        controlIcon(h, RUNTIME_ICONS[presentation.icon], presentation.icon),
-        controlLabel(h, presentation.label, iconOnly),
-        chevron(h),
-      ]
-    ),
-  ]);
-};
-
-const overflowHolder = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const needed = model.footer.layout.hiddenCount > 0;
-  const blocks = footerBlocks(model);
-
-  // t3code's compact trigger carries the shortcut of every block folded into it
-  // (CompactComposerControlsMenu.tsx): the mode always, the effort too once the traits fold in.
-  const shortcut = blocks
-    .slice(blocks.length - model.footer.layout.hiddenCount)
-    .includes("traits")
-    ? "composer.mode composer.effort"
-    : "composer.mode";
-
-  return h.div(
-    [
-      h.DataAttribute("resting-controls-overflow", "true"),
-      ...onlyIf(!needed, h.AriaHidden(true), h.Inert(true)),
-      h.Class(
-        needed
-          ? "min-w-0 shrink-0"
-          : "min-w-0 shrink-0 pointer-events-none invisible absolute"
-      ),
-    ],
-    [
-      h.button(
-        [
-          h.Type("button"),
-          h.AriaLabel("More composer controls"),
-          h.AriaHasPopup("menu"),
-          h.AriaExpanded(isOpen(model, "Overflow")),
-          h.DataAttribute("composer-shortcut", shortcut),
-          h.DataAttribute("slot", "menu-trigger"),
-          h.Class(
-            `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} justify-center whitespace-nowrap shrink-0`
-          ),
-          h.OnClick(Message.OpenedPopover({ popover: Popover.Overflow() })),
-        ],
-        [controlIcon(h, Ellipsis, "ellipsis")]
-      ),
-    ]
-  );
-};
-
-const STOP_ICON_PATH =
-  "M3.5 2h5A1.5 1.5 0 0 1 10 3.5v5A1.5 1.5 0 0 1 8.5 10h-5A1.5 1.5 0 0 1 2 8.5v-5A1.5 1.5 0 0 1 3.5 2Z";
-
-const SEND_ICON_PATH = "M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5";
-
-const stopButton = (h: HtmlBuilder<Message>): Html =>
-  h.button(
-    [
-      h.Type("button"),
-      h.AriaLabel("Stop generation"),
-      h.DataAttribute("testid", "composer-stop"),
-      h.Class(STOP_CLASS),
-      h.OnClick(Message.ClickedStop({ clearQueue: false })),
-    ],
-    [
-      h.svg(
-        [
-          h.Attribute("width", "12"),
-          h.Attribute("height", "12"),
-          h.Attribute("viewBox", "0 0 12 12"),
-          h.Attribute("fill", "currentColor"),
-          h.Attribute("aria-hidden", "true"),
-        ],
-        [h.path([h.Attribute("d", STOP_ICON_PATH)])]
-      ),
-    ]
-  );
-
-/** What the send button says, and the icon it draws while a run is busy. */
-interface SendLook {
-  readonly label: string;
-  readonly busyIcon: Option.Option<"queue" | "steer">;
-}
-
-/** What the send button says and draws while a run is busy or idle. */
-const sendLook = (model: Model): SendLook => {
-  if (!isThreadRunning(model)) {
-    return { label: "Submit message", busyIcon: Option.none() };
-  }
-
-  return model.settings.followUpBehavior === "queue"
-    ? { label: "Queue message", busyIcon: Option.some("queue") }
-    : { label: "Steer message", busyIcon: Option.some("steer") };
-};
-
-const sendButton = (
-  model: Model,
-  hasContent: boolean,
-  h: HtmlBuilder<Message>
-): Html => {
-  const look = sendLook(model);
-
-  return h.button(
-    [
-      h.Type("button"),
-      h.AriaLabel(look.label),
-      h.DataAttribute("testid", "composer-send"),
-      h.Disabled(!hasContent),
-      h.Class(SEND_CLASS),
-      h.OnClick(Message.ClickedSend({ alternate: false })),
-    ],
-    [
-      Option.match(look.busyIcon, {
-        onNone: () =>
-          h.svg(
-            [
-              h.Attribute("width", "14"),
-              h.Attribute("height", "14"),
-              h.Attribute("viewBox", "0 0 14 14"),
-              h.Attribute("fill", "none"),
-              h.Attribute("aria-hidden", "true"),
-            ],
-            [
-              h.path([
-                h.Attribute("d", SEND_ICON_PATH),
-                h.Attribute("stroke", "currentColor"),
-                h.Attribute("stroke-width", "1.8"),
-                h.Attribute("stroke-linecap", "round"),
-                h.Attribute("stroke-linejoin", "round"),
-              ]),
-            ]
-          ),
-        onSome: (kind) =>
-          kind === "queue"
-            ? icon(h, ListPlus, "list-plus", "size-4")
-            : icon(h, CornerUpRight, "corner-up-right", "size-4"),
-      }),
-    ]
-  );
-};
-
-/** The footer: the left cluster's controls folded by the measured layout, and the actions. */
-export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const { layout, width } = model.footer;
-  const blocks = footerBlocks(model);
-  const draft = activeDraft(model);
-
-  // The tray is what the user sees; a draft's saved ids alone are not content.
-  const hasContent =
-    draft.text.trim().length > 0 ||
-    Option.exists(draftKey(model), (key) =>
-      hasAttachments(model.attachments, key)
-    );
-
-  const running = isThreadRunning(model);
-  const compact = shouldUseCompactComposerFooter(width, running);
-  const hiddenFrom = blocks.length - layout.hiddenCount;
-  const iconFrom = blocks.length - layout.iconOnlyCount;
-
-  return h.div(
-    [
-      h.DataAttribute("chat-composer-footer", "true"),
-      h.DataAttribute("chat-composer-footer-compact", String(compact)),
-      h.Class(FOOTER_CLASS),
-      h.OnMount(MeasureFooter()),
-    ],
-    [
-      h.div(
-        [
-          h.DataAttribute("chat-composer-controls", "left"),
-          h.DataAttribute("chat-composer-footer-controls", "true"),
-          h.DataAttribute("resting-controls-visible", String(layout.visible)),
-          h.Class(
-            layout.visible ? CONTROLS_CLASS : `${CONTROLS_CLASS} invisible`
-          ),
-        ],
-        [
-          pickerButton(model, h),
-          ...blocks.map((name, index) => {
-            const hidden = index >= hiddenFrom;
-            const iconOnly = index >= iconFrom;
-
-            return name === "traits"
-              ? traitsBlock(model, hidden, iconOnly, h)
-              : modeBlock(model, hidden, iconOnly, h);
-          }),
-          overflowHolder(model, h),
-        ]
-      ),
-      h.div(
-        [
-          h.DataAttribute("chat-composer-actions", "right"),
-          h.DataAttribute("chat-composer-primary-actions-compact", "false"),
-          h.Class(ACTIONS_CLASS),
-        ],
-        [
-          usageMeterView(h, {
-            usage: model.context.usage,
-            provider: Option.match(resolvedModel(model), {
-              onNone: () => "",
-              onSome: (ref) => ref.provider,
-            }),
-          }),
-          attachButton(
-            (message) => Message.GotAttachmentsMessage({ message }),
-            h
-          ),
-          h.span(
-            [
-              h.DataAttribute("slot", "tooltip-trigger"),
-              h.Class("inline-flex"),
-            ],
-            [
-              running && !hasContent
-                ? stopButton(h)
-                : sendButton(model, hasContent, h),
-            ]
-          ),
-        ]
-      ),
-    ]
-  );
-};
 
 const checkSlot = (h: HtmlBuilder<Message>, checked: boolean): Html =>
   checked

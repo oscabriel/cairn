@@ -1,4 +1,5 @@
-// The `next` shell's Commands: minting a project's first draft, a refresh's launch, a scratch
+// The `next` shell's Commands: reading the clock and the platform, the favicon badge, minting a
+// visit's command id, a new draft (with or without its project), a refresh's launch, a scratch
 // thread's turns and its clear, focusing the field an overlay opens with, and saving which scratch
 // thread this device holds, stopping a child, a workflow or one of its nodes from the work panel,
 // and the user's mark on a goal's criterion from the goal panel. Each answers with one Message. A
@@ -23,9 +24,10 @@ import {
   ProjectUpdate,
   ThreadClear,
   ThreadRename,
+  ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
@@ -42,6 +44,7 @@ import {
   failureMessageOrTag,
 } from "../../connection/Failure.ts";
 import { OutboxItem } from "../../connection/Outbox.ts";
+import { applyFaviconBadge } from "../../shell/Notifications.ts";
 import { Message } from "./Message.ts";
 import { ManageAction, PREVIOUS_PAGE } from "./Model.ts";
 
@@ -72,6 +75,59 @@ export const PrepareProjectDraft = Command.define("PrepareProjectDraft", {
   execute: ({ projectId }) =>
     Effect.map(mintThreadId, (draftId) =>
       Message.PreparedProjectDraft({ projectId, draftId })
+    ),
+});
+
+/** Mints a new draft with no project picked, for New thread where no project thread opens. */
+export const PrepareDraft = Command.define("PrepareDraft", {
+  messages: [Message.PreparedDraft],
+  execute: Effect.map(mintThreadId, (draftId) =>
+    Message.PreparedDraft({ draftId })
+  ),
+});
+
+/**
+ * Reads the clock once at start (T29): the clock Subscription drops its first tick, so without this
+ * the shell reads 0 for up to 15 s and ages say "now".
+ */
+export const ReadClock = Command.define("ReadClock", {
+  messages: [Message.Ticked],
+  execute: Effect.map(Clock.currentTimeMillis, (nowMs) =>
+    Message.Ticked({ nowMs })
+  ),
+});
+
+/** Reads whether this is an Apple platform, where `mod` is Command. */
+export const DetectPlatform = Command.define("DetectPlatform", {
+  messages: [Message.DetectedPlatform],
+  execute: Effect.sync(() =>
+    Message.DetectedPlatform({
+      isMac: /mac|iphone|ipad|ipod/iu.test(globalThis.navigator.platform),
+    })
+  ),
+});
+
+/** Shows `count` on the favicon. */
+export const SetBadge = Command.define("SetBadge", {
+  args: { count: Schema.Int },
+  messages: [Message.CompletedSetBadge],
+  execute: ({ count }) =>
+    Effect.sync(() => {
+      applyFaviconBadge(count);
+
+      return Message.CompletedSetBadge();
+    }),
+});
+
+/** Mints the command id of the open thread's visit (`thread.visit`), for the outbox. */
+export const MintVisit = Command.define("MintVisit", {
+  args: { threadId: ThreadId, at: Schema.DateTimeUtc },
+  messages: [Message.MintedVisit],
+  execute: ({ threadId, at }) =>
+    Effect.map(mintCommandId, (commandId) =>
+      Message.MintedVisit({
+        command: ThreadVisit.make({ commandId, threadId, at }),
+      })
     ),
 });
 

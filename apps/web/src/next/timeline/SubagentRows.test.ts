@@ -21,12 +21,12 @@ import { freshUi } from "../../timeline/Model.ts";
 import type { ThreadUi } from "../../timeline/Model.ts";
 import { transcriptOf } from "../../timeline/Rows.ts";
 import type { ListItem } from "../../timeline/Rows.ts";
-import { rowView } from "../../timeline/RowView.ts";
 import type { SubagentShells } from "../../timeline/Subagents.ts";
 import {
   subagentShellsOf,
   withSubagentItems,
 } from "../../timeline/Subagents.ts";
+import { rowView } from "./RowView.ts";
 // Registers the views the row frame draws, as the `next` chunk does when it loads.
 import "./SubagentRows.ts";
 

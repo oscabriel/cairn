@@ -16,6 +16,7 @@ export const settingsPageView = (model: Model, h: HtmlBuilder<Message>): Html =>
     model: model.settings,
     view: settingsView,
     viewInputs: {
+      isMac: model.nextShell.isMac,
       notifications: () =>
         h.submodel({
           slotId: "push-toggle",

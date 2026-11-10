@@ -6,7 +6,6 @@ import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { userPromptsAfter } from "@cairn/client-logic/TimelineEntries";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
-import type { ShellCommand } from "@cairn/protocol/ShellCommands";
 import type { TurnInput } from "@cairn/protocol/Thread";
 import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
@@ -103,15 +102,6 @@ import {
   update as updateSettings,
 } from "./settings/Update.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
-import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
-import type { Message as SidebarMessage } from "./sidebar/Message.ts";
-import { initial as initialSidebar } from "./sidebar/Model.ts";
-import type { Model as SidebarModel, SidebarContext } from "./sidebar/Model.ts";
-import {
-  inform as informSidebarModel,
-  init as initSidebar,
-  update as updateSidebar,
-} from "./sidebar/Update.ts";
 import { threadRowOf } from "./ThreadRow.ts";
 import type { QueuedSend } from "./timeline/Model.ts";
 import { promptKey, sameSends } from "./timeline/Model.ts";
@@ -517,76 +507,6 @@ const writeComposer = (model: Model, composer: Model["composer"]): Model =>
     ? model
     : modifyFields(model, { composer: () => composer });
 
-/** Queues each shell command in order. */
-const enqueueAll = (
-  model: Model,
-  commands: ReadonlyArray<ShellCommand>
-): Model["outbox"] => {
-  let next = model.outbox;
-
-  for (const command of commands) {
-    next = enqueueDispatch(next, command, model.outboxInFlight);
-  }
-
-  return next;
-};
-
-const toGotSidebarMessage = (message: SidebarMessage): Message =>
-  Message.GotSidebarMessage({ message });
-
-const readSidebar = (model: Model): Option.Option<SidebarModel> =>
-  Option.some(model.sidebar);
-
-const writeSidebar = (model: Model, sidebar: SidebarModel): Model =>
-  modifyFields(model, { sidebar: () => sidebar });
-
-/** The draft the route names, when it names one. */
-const routedDraftId = (route: AppRoute): Option.Option<string> =>
-  AppRoute.match(route, {
-    Hero: () => Option.none(),
-    Thread: () => Option.none(),
-    Draft: ({ draftId }) => Option.some(draftId),
-    Settings: () => Option.none(),
-    Usage: () => Option.none(),
-    NotFound: () => Option.none(),
-  });
-
-/** What the sidebar hands up: shell commands for the outbox. */
-const foldSidebarOutMessage = (outMessage: SidebarOutMessage): Step =>
-  SidebarOutMessage.match<Step>(outMessage, {
-    RequestedDispatch:
-      ({ commands }) =>
-      (model) =>
-        Update.combine(
-          modifyFields(model, { outbox: () => enqueueAll(model, commands) }),
-          [persist, sendNext]
-        ),
-  });
-
-const foldSidebarMessage = Update.foldChild({
-  update: updateSidebar,
-  read: readSidebar,
-  write: writeSidebar,
-  toParentMessage: toGotSidebarMessage,
-  foldOutMessage: foldSidebarOutMessage,
-});
-
-const informSidebar = Update.foldChild({
-  update: informSidebarModel,
-  read: readSidebar,
-  write: writeSidebar,
-  toParentMessage: toGotSidebarMessage,
-  foldOutMessage: foldSidebarOutMessage,
-});
-
-const startSidebar = Update.foldChildStep({
-  update: () => initSidebar(),
-  read: readSidebar,
-  write: writeSidebar,
-  toParentMessage: toGotSidebarMessage,
-  foldOutMessage: foldSidebarOutMessage,
-});
-
 const toGotPushMessage = (message: PushMessage): Message =>
   Message.GotPushMessage({ message });
 
@@ -749,28 +669,6 @@ const syncMeters: Step = (model) => {
   return Meters.sameContext(model.meters, context)
     ? { model }
     : informMeters(model, context);
-};
-
-/** Tells the sidebar the shell, the open page and the connection, when they changed. */
-const syncSidebar: Step = (model) => {
-  const current = model.sidebar.context;
-
-  const context: SidebarContext = {
-    shell: model.shell,
-    openThreadId: routedThreadId(model.route),
-    openDraftId: routedDraftId(model.route),
-    scratchThreadId: model.nextShell.scratch.threadId,
-    connection: model.connection.state._tag,
-  };
-
-  const unchanged =
-    current.shell === context.shell &&
-    Equal.equals(current.openThreadId, context.openThreadId) &&
-    Equal.equals(current.openDraftId, context.openDraftId) &&
-    Equal.equals(current.scratchThreadId, context.scratchThreadId) &&
-    current.connection === context.connection;
-
-  return unchanged ? { model } : informSidebar(model, context);
 };
 
 const toGotNextShellMessage = (message: NextShellMessage): Message =>
@@ -1179,6 +1077,16 @@ const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
     RequestedNavigate:
       ({ url }) =>
       (model) => ({ model, commands: [NavigateInternal({ url })] }),
+    RequestedDispatch:
+      ({ command }) =>
+      (model) =>
+        Update.combine(
+          modifyFields(model, {
+            outbox: (outbox) =>
+              enqueueDispatch(outbox, command, model.outboxInFlight),
+          }),
+          [persist, sendNext]
+        ),
     // The draft holds its project before its page opens, so the hero launches where the rail says.
     RequestedProjectDraft:
       ({ projectId, draftId }) =>
@@ -1214,9 +1122,8 @@ const syncNextShell: Step = (model) => {
     shell: model.shell,
     route: model.route,
     hasClient: hasClient(model.connection),
+    isLive: isLive(model.connection),
     defaults: Option.map(model.hello, (hello) => hello.defaults),
-    nowMs: model.sidebar.nowMs,
-    isMac: model.sidebar.isMac,
     // The rail and the list show the project the hero names (U-21).
     draftProjectId: isDraftTarget(model.composer)
       ? Option.map(draftProject(model.composer), (project) => project.id)
@@ -1229,9 +1136,8 @@ const syncNextShell: Step = (model) => {
     current.shell === context.shell &&
     Equal.equals(current.route, context.route) &&
     current.hasClient === context.hasClient &&
+    current.isLive === context.isLive &&
     Equal.equals(current.defaults, context.defaults) &&
-    current.nowMs === context.nowMs &&
-    current.isMac === context.isMac &&
     Equal.equals(current.draftProjectId, context.draftProjectId);
 
   return unchanged ? { model } : informNextShell(model, context);
@@ -1546,10 +1452,6 @@ const step = (received: Message): Step =>
       ({ message: composerMessage }) =>
       (model) =>
         foldComposerMessage(model, composerMessage),
-    GotSidebarMessage:
-      ({ message: sidebarMessage }) =>
-      (model) =>
-        foldSidebarMessage(model, sidebarMessage),
     GotPushMessage:
       ({ message: pushMessage }) =>
       (model) =>
@@ -1584,7 +1486,6 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     step(message),
     syncThread,
     syncComposer,
-    syncSidebar,
     syncPush,
     syncSettings,
     syncComposerSettings,
@@ -1624,7 +1525,6 @@ export const init: Runtime.RoutingApplicationInit<
         ? Option.some(UNREAD_STORED_NOTICE)
         : Option.none(),
       thread: Thread.Model.initial,
-      sidebar: initialSidebar,
       composer,
       push: initialPush,
       settings: initialSettings,
@@ -1640,8 +1540,6 @@ export const init: Runtime.RoutingApplicationInit<
   const synced = Update.combine(started.model, [
     syncThread,
     syncComposer,
-    startSidebar,
-    syncSidebar,
     startPush,
     syncPush,
     startSettings,

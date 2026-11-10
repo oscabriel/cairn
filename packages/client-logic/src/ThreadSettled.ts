@@ -1,13 +1,13 @@
-// Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/threadSettled.ts and
-// apps/web/src/components/Sidebar.snooze.ts at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: when a
-// snooze ends early (a request for the user or a fresh failure, never a completed run), the
-// queued-turn grace window, the snooze presets with their local calendar rules, and the wake labels.
-// Changed: rows are Cairn's shell rows, so "blocked on you" is `pendingRuntimeRequest` or a subagent
-// below asking (the row's tally, as t3code counts `pendingSubagentRequest`), a failure is
-// `activity: "failed"` with its run's completion time, and a queued start is `activity: "preparing"`
-// or a user message no run has picked up yet; "now" is a `DateTime` the caller reads from `Clock`;
-// the custom snooze dialog is not ported. The server's settlement sweep reads `effectiveSnoozed`
-// too, so the two sides cannot disagree, and the brain records an early wake on the row when it
+// Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/threadSettled.ts at
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: when a snooze ends early (a request for the user or
+// a fresh failure, never a completed run) and the queued-turn grace window. The snooze presets and
+// wake labels (apps/web/src/components/Sidebar.snooze.ts) went with the classic sidebar's menu: no
+// view snoozes since the 7A cutover (ADR 0050). Changed: rows are Cairn's shell rows, so "blocked
+// on you" is `pendingRuntimeRequest` or a subagent below asking (the row's tally, as t3code counts
+// `pendingSubagentRequest`), a failure is `activity: "failed"` with its run's completion time, and a
+// queued start is `activity: "preparing"` or a user message no run has picked up yet; "now" is a
+// `DateTime` the caller reads from `Clock`; the custom snooze dialog is not ported. The server's
+// settlement rules read `effectiveSnoozed` too, so the two sides cannot disagree, and the brain records an early wake on the row when it
 // happens (`ThreadActivityUpdate`), so answering the request that woke a thread does not put it
 // back to sleep: the rules here only cover the moment before that commit.
 //
@@ -31,15 +31,7 @@
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Array, DateTime, Option } from "effect";
 
-import {
-  calendarDaysBetween,
-  DAY_MS,
-  formatShortDate,
-  formatShortWeekday,
-  formatTimeOfDay,
-  HOUR_MS,
-  MINUTE_MS,
-} from "./Time.ts";
+import { MINUTE_MS } from "./Time.ts";
 
 /** The fields the snooze rules read. */
 export type SnoozeInput = Pick<
@@ -128,15 +120,6 @@ export const threadRaisedHandWhileSnoozed = (thread: SnoozeInput): boolean =>
   subagentAsks(thread) ||
   failedSinceSnooze(thread);
 
-/**
- * True when a snooze or settle is allowed now: nothing waits on the user (the thread or a subagent
- * below it) or on a queued start.
- */
-export const canSnooze = (thread: SnoozeInput, now: DateTime.Utc): boolean =>
-  Option.isNone(thread.pendingRuntimeRequest) &&
-  !subagentAsks(thread) &&
-  !hasQueuedTurnStart(thread, now);
-
 /** True while the thread belongs on the snoozed shelf. The brain's settlement sweep reads it too. */
 export const effectiveSnoozed = (
   thread: SnoozeInput,
@@ -172,136 +155,3 @@ export const threadWokeAt = (
       ? Option.some(wakeAt)
       : Option.none();
   });
-
-/** The snooze choices the menu offers. */
-export type SnoozePresetId =
-  | "hour"
-  | "three-hours"
-  | "evening"
-  | "tomorrow"
-  | "next-week";
-
-/** One snooze choice: "In 3 hours (1:00 PM)". */
-export interface SnoozePreset {
-  readonly id: SnoozePresetId;
-  readonly label: string;
-  /** The wake time as the menu prints it beside the label. */
-  readonly whenLabel: string;
-  readonly snoozedUntil: DateTime.Utc;
-}
-
-const EVENING_HOUR = 18;
-
-const MORNING_HOUR = 9;
-
-const atHour = (day: DateTime.Zoned, hour: number): DateTime.Zoned =>
-  DateTime.setParts(day, { hour, minute: 0, second: 0, millisecond: 0 });
-
-/**
- * The snooze choices at `now`, in its zone. Days advance on the calendar, not by 24 hours, so a
- * daylight-saving change never skips a day. "This evening" is offered only while 6 PM is more than
- * an hour away, and "Next week" (Monday 9 AM) only when it differs from "Tomorrow".
- */
-export const resolveSnoozePresets = (
-  now: DateTime.Zoned,
-  locale?: string
-): ReadonlyArray<SnoozePreset> => {
-  const preset = (
-    id: SnoozePresetId,
-    label: string,
-    wake: DateTime.Zoned,
-    whenLabel = formatTimeOfDay(wake, locale)
-  ): SnoozePreset => ({
-    id,
-    label,
-    whenLabel,
-    snoozedUntil: DateTime.toUtc(wake),
-  });
-
-  const evening = atHour(now, EVENING_HOUR);
-  const tomorrow = atHour(DateTime.add(now, { days: 1 }), MORNING_HOUR);
-  const weekDay = DateTime.getPart(now, "weekDay");
-  const daysUntilMonday = (1 - weekDay + 7) % 7 || 7;
-
-  const nextWeek = atHour(
-    DateTime.add(now, { days: daysUntilMonday }),
-    MORNING_HOUR
-  );
-
-  const eveningPreset = Option.map(
-    Option.liftPredicate(
-      evening,
-      (wake) => millis(wake) - millis(now) > HOUR_MS
-    ),
-    (wake) => preset("evening", "This evening", wake)
-  );
-
-  const nextWeekPreset = Option.map(
-    Option.liftPredicate(nextWeek, (wake) => millis(wake) !== millis(tomorrow)),
-    (wake) =>
-      preset(
-        "next-week",
-        "Next week",
-        wake,
-        `${formatShortWeekday(wake, locale)} ${formatTimeOfDay(wake, locale)}`
-      )
-  );
-
-  return [
-    preset("hour", "In 1 hour", DateTime.add(now, { hours: 1 })),
-    preset("three-hours", "In 3 hours", DateTime.add(now, { hours: 3 })),
-    ...Option.toArray(eveningPreset),
-    preset("tomorrow", "Tomorrow", tomorrow),
-    ...Option.toArray(nextWeekPreset),
-  ];
-};
-
-/** How long until a snoozed thread wakes, coarsely and rounded up: "30m", "2h", "2d", or "now". */
-export const snoozeWakeLabel = (
-  snoozedUntil: DateTime.Utc,
-  now: DateTime.Utc
-): string => {
-  const remainingMs = millis(snoozedUntil) - millis(now);
-
-  if (remainingMs <= 0) {
-    return "now";
-  }
-
-  if (remainingMs < HOUR_MS) {
-    return `${Math.max(1, Math.ceil(remainingMs / MINUTE_MS))}m`;
-  }
-
-  if (remainingMs < DAY_MS) {
-    return `${Math.ceil(remainingMs / HOUR_MS)}h`;
-  }
-
-  return `${Math.ceil(remainingMs / DAY_MS)}d`;
-};
-
-/**
- * When a snoozed thread wakes, in words: the bare time today, "tomorrow 9:00 AM", the weekday
- * within the week, else the date. `now` carries the zone the words are in.
- */
-export const snoozeWakeDescription = (
-  snoozedUntil: DateTime.Utc,
-  now: DateTime.Zoned,
-  locale?: string
-): string => {
-  const wake = DateTime.setZone(snoozedUntil, now.zone);
-  const time = formatTimeOfDay(wake, locale);
-  const days = calendarDaysBetween(now, wake);
-
-  if (days <= 0) {
-    return time;
-  }
-
-  if (days === 1) {
-    return `tomorrow ${time}`;
-  }
-
-  if (days < 7) {
-    return `${formatShortWeekday(wake, locale)} ${time}`;
-  }
-
-  return `${formatShortDate(wake, locale)}, ${time}`;
-};

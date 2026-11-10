@@ -1,20 +1,44 @@
 // The `next` shell's Messages, and the OutMessages it hands the root: an item for the outbox (a
-// refresh's launch, a scratch turn or clear), a path to open, and a new draft in a chosen project.
+// refresh's launch, a scratch turn or clear), a visit for the outbox, a path to open, and a new
+// draft in a chosen project. The clock, the platform, the visits, the favicon badge and the key
+// bindings are the shell's (ADR 0050).
 // The work panel's Messages are the shell's too: it is drawn beside the chat column, as the goal
 // panel's are. The add-project picker's are the shell's too, and so are the "Previous" fold's,
 // the project and thread menus' and their rename and remove dialogs'.
 
+import type { KeybindingCommand } from "@cairn/client-logic/Keybindings";
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { BrowseResult } from "@cairn/protocol/Projects";
 import { PreviousThreadsPage, ThreadShell } from "@cairn/protocol/Shell";
+import { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
 import { OutboxItem } from "../../connection/Outbox.ts";
 import { ChildGroup, ManageAction, ManagedGroup, MenuTarget } from "./Model.ts";
 
+/** The commands of the key binding table, every one of which the shell answers. */
+export const ShortcutCommand = Schema.Literals([
+  "chat.new",
+  "thread.previous",
+  "thread.next",
+] satisfies ReadonlyArray<KeybindingCommand>);
+
+export type ShortcutCommand = typeof ShortcutCommand.Type;
+
 /** Everything the shell reacts to. */
 export const Message = defineMessageUnion({
+  /** The clock Subscription's tick, or the clock read once at start. */
+  Ticked: { nowMs: Schema.Finite },
+  DetectedPlatform: { isMac: Schema.Boolean },
+  CompletedSetBadge: {},
+  /** The open thread's visit has its command id; it goes to the outbox. */
+  MintedVisit: { command: ShellCommand },
+  /** A key binding fired (`Keys.ts`). */
+  PressedShortcut: { command: ShortcutCommand },
+  /** New thread with no project thread to open: a new draft is minted, and the root opens it. */
+  PreparedDraft: { draftId: ThreadId },
+
   /** A project's bubble on the rail. */
   ClickedProject: { projectId: ProjectId },
   /** The project thread's row or a managed thread's row. */
@@ -179,6 +203,8 @@ export const OutMessage = defineMessageUnion({
   },
   /** Open this path inside the app. */
   RequestedNavigate: { url: Schema.String },
+  /** Queue this shell command (a visit) in the outbox. */
+  RequestedDispatch: { command: ShellCommand },
   /**
    * Open the new draft `draftId` with `projectId` as its project, so the first message launches in
    * the project the rail picked (and becomes its project thread), never in another one.

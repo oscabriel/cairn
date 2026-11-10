@@ -24,7 +24,12 @@ import { ObserveList } from "../timeline/list/Place.ts";
 import { update } from "../Update.ts";
 import { view } from "./Frame.ts";
 import { hooksOf } from "./Hooks.ts";
-import { LoadScratch, LookUpEarlierThread } from "./shell/Command.ts";
+import {
+  DetectPlatform,
+  LoadScratch,
+  LookUpEarlierThread,
+  ReadClock,
+} from "./shell/Command.ts";
 import { Message as ShellMessage } from "./shell/Message.ts";
 import { initial as initialShell } from "./shell/Model.ts";
 
@@ -96,10 +101,19 @@ describe("the next frame", () => {
       ),
       // The transcript's measured list watches its scroller once drawn.
       Scene.Mount.resolve(ObserveList, ListMessage.SettledScroll()),
-      // That first update is the shell's first too: it reads this device's scratch thread.
+      // That first update is the shell's first too: it reads this device's scratch thread, the
+      // clock and the platform.
       Scene.Command.resolve(
         LoadScratch,
         ShellMessage.LoadedScratch({ threadId: Option.none() })
+      ),
+      Scene.Command.resolve(
+        ReadClock,
+        ShellMessage.Ticked({ nowMs: 1_760_000_000_000 })
+      ),
+      Scene.Command.resolve(
+        DetectPlatform,
+        ShellMessage.DetectedPlatform({ isMac: false })
       ),
       // The live shell does not hold the thread, so the shell asks whether it is an earlier
       // project thread (ADR 0048); it is not.

@@ -335,11 +335,10 @@ const categoryOf = (
 };
 
 /**
- * True when a snooze ended (early or on time) after the user last looked, and the thread was not
- * settled since: the row says "Woke".
+ * True when a snooze ended (early or on time) after the user last looked: the row says "Woke". A
+ * settle does not hide it: nothing draws the settled shelf since the 7A cutover (ADR 0050).
  */
 export const isThreadWoke = (thread: ThreadShell, now: DateTime.Utc): boolean =>
-  !Option.contains(thread.settledOverride, "settled") &&
   Option.exists(threadWokeAt(thread, now), (wokeAt) =>
     Option.match(thread.lastVisitedAt, {
       onNone: () => true,

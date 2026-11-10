@@ -1,11 +1,11 @@
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/Sidebar.logic.test.ts at
-// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the section, recede, accessibility, search,
-// adjacent-thread and preferred-order cases; the status and top status cases moved to
-// ThreadState.test.ts and the lineage cases to SubagentRollup.test.ts (package 1E). Changed: rows
-// are Cairn's shell rows.
-// Removed: drag, sweep, multi-select, pull request, fork, prewarm, jump hint, stage badge, project
-// sort and Working shelf cases (not ported). Added: the partition into shelves, settled paging,
-// the project monogram and leaving an open thread.
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the section and adjacent-thread cases; the status
+// and top status cases moved to ThreadState.test.ts and the lineage cases to SubagentRollup.test.ts
+// (package 1E). Changed: rows are Cairn's shell rows. Removed: drag, sweep, multi-select, pull
+// request, fork, prewarm, jump hint, stage badge, project sort and Working shelf cases (not
+// ported), and the recede, accessibility, search, preferred-order, paging, monogram and
+// leaving-a-thread cases, which went with the classic sidebar (ADR 0050). Added: the partition
+// into shelves and the managed list's groups.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -24,28 +24,16 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import { EntryId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
 import {
-  deriveProjectIdentity,
   managedGroupsOf,
-  isThreadWoke,
-  nextThreadAfterLeaving,
-  orderItemsByPreferredIds,
   partitionSidebarThreads,
-  previewMatchIds,
   resolveAdjacentThreadId,
-  resolveSidebarRowAccessibility,
   resolveSidebarThreadSection,
-  searchExcerpt,
-  searchSidebarThreads,
-  shouldRecedeSidebarThread,
-  splitHighlights,
-  visibleSettledCount,
-  visibleThreadOrder,
 } from "./Sidebar.ts";
 import type { ThreadCategory } from "./ThreadState.ts";
 
@@ -202,162 +190,6 @@ describe(partitionSidebarThreads, () => {
     assert.deepStrictEqual(partitionSidebarThreads([woken], NOW).active, [
       woken,
     ]);
-    assert.isTrue(isThreadWoke(woken, NOW));
-    assert.isFalse(
-      isThreadWoke(
-        { ...woken, lastVisitedAt: some("2026-04-10T11:00:00Z") },
-        NOW
-      )
-    );
-  });
-});
-
-describe(visibleSettledCount, () => {
-  it("shows 10 settled rows, then 25 more per page, never more than there are", () => {
-    assert.strictEqual(visibleSettledCount(146, 0), 10);
-    assert.strictEqual(visibleSettledCount(146, 1), 35);
-    assert.strictEqual(visibleSettledCount(146, 2), 60);
-    assert.strictEqual(visibleSettledCount(12, 3), 12);
-  });
-
-  it("lists only the rows of open shelves, in sidebar order", () => {
-    const partition = {
-      pinned: [{ id: "p" }],
-      active: [{ id: "a" }],
-      snoozed: [{ id: "z" }],
-      settled: Array.from({ length: 12 }, (_, index) => ({ id: `s${index}` })),
-    };
-
-    assert.deepStrictEqual(
-      visibleThreadOrder(partition, {
-        snoozedExpanded: false,
-        settledExpanded: false,
-        settledPages: 0,
-      }),
-      ["p", "a"]
-    );
-    assert.strictEqual(
-      visibleThreadOrder(partition, {
-        snoozedExpanded: true,
-        settledExpanded: true,
-        settledPages: 0,
-      }).length,
-      13
-    );
-  });
-});
-
-describe(shouldRecedeSidebarThread, () => {
-  it.each(["working", "waiting"] as const)(
-    "recedes an inactive %s thread even when it is unread and woke",
-    (status) => {
-      assert.isTrue(
-        shouldRecedeSidebarThread({
-          status,
-          isUnread: true,
-          isWoke: true,
-          isActive: false,
-          isSelected: false,
-        })
-      );
-    }
-  );
-
-  it.each(["ready", "approval", "input"] as const)(
-    "keeps an unread %s thread prominent",
-    (status) => {
-      assert.isFalse(
-        shouldRecedeSidebarThread({
-          status,
-          isUnread: true,
-          isWoke: false,
-          isActive: false,
-          isSelected: false,
-        })
-      );
-    }
-  );
-
-  it("keeps active and selected working threads prominent", () => {
-    const input = {
-      status: "working" as const,
-      isUnread: true,
-      isWoke: true,
-      isActive: false,
-      isSelected: false,
-    };
-
-    assert.isFalse(shouldRecedeSidebarThread({ ...input, isActive: true }));
-    assert.isFalse(shouldRecedeSidebarThread({ ...input, isSelected: true }));
-  });
-});
-
-describe(resolveSidebarRowAccessibility, () => {
-  it("leads with the title without folding row actions into its name", () => {
-    assert.deepStrictEqual(
-      resolveSidebarRowAccessibility({
-        title: "Can you audit the UI?",
-        statusLabel: Option.some("Working"),
-        projectDisplayName: Option.some("cairn"),
-        isActive: true,
-      }),
-      { label: "Can you audit the UI?, Working, cairn", isCurrentPage: true }
-    );
-    assert.deepStrictEqual(
-      resolveSidebarRowAccessibility({
-        title: "Untitled task",
-        statusLabel: Option.none(),
-        projectDisplayName: Option.none(),
-        isActive: false,
-      }),
-      { label: "Untitled task", isCurrentPage: false }
-    );
-  });
-});
-
-describe(searchSidebarThreads, () => {
-  const threads = [
-    { id: "thread-1", title: "Fix workspace search" },
-    { id: "thread-2", title: "Review providers" },
-    { id: "thread-3", title: "WORKTREE cleanup" },
-  ];
-
-  it("matches titles case-insensitively and preserves their order", () => {
-    assert.deepStrictEqual(searchSidebarThreads(threads, "work"), [
-      threads[0],
-      threads[2],
-    ]);
-  });
-
-  it("returns no results for an empty query", () => {
-    assert.deepStrictEqual(searchSidebarThreads(threads, "   "), []);
-  });
-
-  it("appends content-only matches after every title match, once each", () => {
-    assert.deepStrictEqual(
-      searchSidebarThreads(threads, "work", new Set(["thread-2"])),
-      [threads[0], threads[2], threads[1]]
-    );
-    assert.deepStrictEqual(
-      searchSidebarThreads(threads, "work", new Set(["thread-1"])),
-      [threads[0], threads[2]]
-    );
-  });
-
-  it("finds content in the latest visible message", () => {
-    const withMessage = thread(2, {
-      latestVisibleMessage: Option.some({
-        entryId: EntryId.make(4),
-        role: "assistant",
-        text: "The Worktree is ready",
-        at: time("2026-04-10T09:00:00Z"),
-      }),
-    });
-
-    assert.deepStrictEqual(
-      [...previewMatchIds([thread(1), withMessage], "worktree")],
-      [withMessage.id]
-    );
   });
 });
 
@@ -380,117 +212,6 @@ describe(resolveAdjacentThreadId, () => {
     assert.strictEqual(adjacent(null, "previous"), "thread-3");
     assert.strictEqual(adjacent("thread-1", "previous"), null);
     assert.strictEqual(adjacent("missing", "next"), null);
-  });
-
-  it("advances to the following row after leaving, else the one before", () => {
-    assert.deepStrictEqual(
-      nextThreadAfterLeaving(traversalIds, "thread-2"),
-      Option.some("thread-3")
-    );
-    assert.deepStrictEqual(
-      nextThreadAfterLeaving(traversalIds, "thread-3"),
-      Option.some("thread-2")
-    );
-    assert.isTrue(Option.isNone(nextThreadAfterLeaving(["only"], "only")));
-  });
-});
-
-describe(orderItemsByPreferredIds, () => {
-  it("keeps preferred ids first, skips stale ids, and keeps the rest in order", () => {
-    const ordered = orderItemsByPreferredIds({
-      items: [{ id: "project-1" }, { id: "project-2" }, { id: "project-3" }],
-      preferredIds: ["project-3", "project-missing", "project-1"],
-      getId: (project) => project.id,
-    });
-
-    assert.deepStrictEqual(
-      ordered.map((project) => project.id),
-      ["project-3", "project-1", "project-2"]
-    );
-  });
-
-  it("does not duplicate items when preferred ids repeat", () => {
-    const ordered = orderItemsByPreferredIds({
-      items: [{ id: "project-1" }, { id: "project-2" }],
-      preferredIds: ["project-2", "project-1", "project-2"],
-      getId: (project) => project.id,
-    });
-
-    assert.deepStrictEqual(
-      ordered.map((project) => project.id),
-      ["project-2", "project-1"]
-    );
-  });
-});
-
-describe(deriveProjectIdentity, () => {
-  it("matches t3code's marks for the user's projects", () => {
-    assert.deepStrictEqual(deriveProjectIdentity("cairn"), {
-      monogram: "CN",
-      colorClassName: "text-amber-600 dark:text-amber-400",
-    });
-    assert.deepStrictEqual(deriveProjectIdentity("supervillain"), {
-      monogram: "SN",
-      colorClassName: "text-orange-600 dark:text-orange-400",
-    });
-  });
-
-  it("takes a digit or the last word's first letter as the second glyph", () => {
-    assert.strictEqual(deriveProjectIdentity("web3 app").monogram, "W3");
-    assert.strictEqual(deriveProjectIdentity("agent artifacts").monogram, "AA");
-    assert.strictEqual(deriveProjectIdentity("  ").monogram, "PR");
-  });
-});
-
-describe(splitHighlights, () => {
-  it("marks every occurrence, case-insensitively, keeping the original text", () => {
-    assert.deepStrictEqual(
-      splitHighlights("Bridged to Solid with createSolidBridge", "bridge"),
-      [
-        { text: "Bridge", highlighted: true },
-        { text: "d to Solid with createSolid", highlighted: false },
-        { text: "Bridge", highlighted: true },
-      ]
-    );
-    assert.deepStrictEqual(splitHighlights("plain", " "), [
-      { text: "plain", highlighted: false },
-    ]);
-  });
-
-  it("keeps the highlight on the match after a letter whose lower case is longer", () => {
-    // "İ" lowers to two code units; the match after it must not drift.
-    assert.deepStrictEqual(splitHighlights("İzmir then Istanbul", "istanbul"), [
-      { text: "İzmir then ", highlighted: false },
-      { text: "Istanbul", highlighted: true },
-    ]);
-  });
-});
-
-describe("a search excerpt cut near an emoji", () => {
-  it("never starts inside a surrogate pair", () => {
-    const text = `${"a".repeat(159)}😀${"b".repeat(39)}needle`;
-    const excerpt = Option.getOrThrow(searchExcerpt(text, "needle"));
-
-    assert.isFalse(/^…[\uDC00-\uDFFF]/u.test(excerpt));
-  });
-});
-
-describe(searchExcerpt, () => {
-  it("shows a message from its start when the match is near it", () => {
-    assert.deepStrictEqual(
-      searchExcerpt("pihole rule deleted, MCP bridges for Executor", "bridge"),
-      Option.some("pihole rule deleted, MCP bridges for Executor")
-    );
-  });
-
-  it("starts a long message near its first match", () => {
-    const text = `${"x".repeat(200)} the bridge`;
-
-    assert.deepStrictEqual(
-      searchExcerpt(text, "bridge"),
-      Option.some(`…${text.slice(text.indexOf("bridge") - 40)}`)
-    );
-    assert.isTrue(Option.isNone(searchExcerpt(text, "absent")));
   });
 });
 

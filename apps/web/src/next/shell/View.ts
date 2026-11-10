@@ -126,7 +126,7 @@ const previousContentOf = (
       thread,
       age: formatSidebarAge(
         Option.getOrElse(thread.archivedAt, () => thread.updatedAt),
-        model.context.nowMs
+        model.nowMs
       ),
       isOpen: Option.contains(routed, thread.id),
     })),
@@ -185,7 +185,7 @@ const managedContentOf = (
 /** What the sidebar list shows for the selected project. */
 export const sidebarContentOf = (model: Model): SidebarContent => {
   const requests = requestsOf(model);
-  const { nowMs } = model.context;
+  const { nowMs } = model;
   const project = selectedProjectOf(model);
   const openId = Option.map(openThreadOf(model), (thread) => thread.id);
 
@@ -244,7 +244,7 @@ const PAGE_TITLES = {
 
 /** What the chat header says on the open page. */
 export const headerContentOf = (model: Model): HeaderContent => {
-  const scratchHint = model.context.isMac ? "⌘J" : "Ctrl+J";
+  const scratchHint = model.isMac ? "⌘J" : "Ctrl+J";
   const { route } = model.context;
 
   const plain = (title: string): HeaderContent => ({
@@ -281,7 +281,7 @@ export const headerContentOf = (model: Model): HeaderContent => {
     onSome: (thread) => {
       const role = threadRoleOf(model, thread);
       const project = projectOfThread(model, thread);
-      const row = rowStatusOf(thread, requestsOf(model), model.context.nowMs);
+      const row = rowStatusOf(thread, requestsOf(model), model.nowMs);
       const projectTitle = Option.map(project, (each) => each.title);
 
       return {
@@ -319,7 +319,7 @@ export const headerContentOf = (model: Model): HeaderContent => {
 
 /** The scratch shortcut's keys as its hint shows them. */
 export const scratchKeysOf = (model: Model): ReadonlyArray<string> =>
-  model.context.isMac ? ["⌘", "J"] : ["Ctrl", "J"];
+  model.isMac ? ["⌘", "J"] : ["Ctrl", "J"];
 
 /** The rail and the list together, in a column (desktop) or the sheet (phone). */
 export const navigation = (

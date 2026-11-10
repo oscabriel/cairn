@@ -39,6 +39,10 @@ import { parseArgs } from "node:util";
 import { NodeRuntime } from "@effect/platform-node";
 import { Console, Effect, Option, Schema } from "effect";
 
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
+
 const root = path.join(import.meta.dirname, "..");
 
 const brainScript = path.join(

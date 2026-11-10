@@ -35,12 +35,15 @@ import { NodeRuntime } from "@effect/platform-node";
 import { Console, Effect, Result } from "effect";
 
 import { ownerMatcherLine, ownerOnly } from "../ops/wizards/reach-edits.ts";
+import { recordOnExit } from "./lib/Record.ts";
 import {
   DEFAULT_CADDY_IMAGE,
   freePort,
   startCaddy,
   ThrowawayCaddyError,
 } from "./lib/ThrowawayCaddy.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: { image: { type: "string", default: DEFAULT_CADDY_IMAGE } },

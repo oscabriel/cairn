@@ -120,6 +120,9 @@ import type { FooterBlockState } from "./fixtures/parity/Landmarks.ts";
 import { LandmarkFile, readLandmarks } from "./fixtures/parity/Landmarks.ts";
 import { chromium, IPHONE_15 } from "./lib/Browser.ts";
 import type { Browser, BrowserContextOptions, Page } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
 

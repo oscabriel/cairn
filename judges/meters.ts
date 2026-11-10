@@ -46,6 +46,9 @@ import {
 } from "./fixtures/meters/MetersApp.ts";
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["zero"] as const;
 

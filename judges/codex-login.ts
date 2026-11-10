@@ -30,6 +30,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { startFakeCodexAuth } from "../apps/server/src/models/FakeCodexAuth.ts";
 import type { FakeCodexAuth } from "../apps/server/src/models/FakeCodexAuth.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BRAIN = path.join(import.meta.dirname, "fixtures", "codex-brain.ts");
 

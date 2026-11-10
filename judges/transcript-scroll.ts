@@ -96,6 +96,9 @@ import { createServer as createViteServer } from "vite";
 import { BrokenControl } from "../apps/web/src/timeline/list/Model.ts";
 import { chromium } from "./lib/Browser.ts";
 import type { Page } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

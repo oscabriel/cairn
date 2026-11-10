@@ -1,0 +1,14 @@
+# The nightly's failure path (ADR 0054): cairn-nightly.service names this unit in `OnFailure=`, so a
+# failed night asks the running brain, on loopback, to push "the nightly judges failed" to every
+# subscribed device, naming where the log is. The route (`POST /_cairn/notify/nightly-failed`,
+# apps/server/src/push/NightlyFailedRoute.ts) takes no body and answers only a process on this host.
+# It answers 502 when no device took the push, and this unit then fails, so `systemctl --user
+# --failed` still shows the night. A brain that is down cannot push; the nightly's own unit status
+# and ~/cairn-judges/ still hold the verdict. The port is cairn.service's (3774).
+# Linked into ~/.config/systemd/user by ops/cairn/install.sh.
+[Unit]
+Description=Cairn nightly failed: push it to the user's devices
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl --silent --show-error --fail-with-body --max-time 60 --request POST http://127.0.0.1:3774/_cairn/notify/nightly-failed

@@ -45,6 +45,9 @@ import { Socket } from "effect/socket";
 import { createServer as createViteServer } from "vite";
 
 import { chromium } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

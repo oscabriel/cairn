@@ -63,6 +63,9 @@ import {
   touchRule,
 } from "./lib/LookRules.ts";
 import type { Violation } from "./lib/LookRules.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 /* oxlint-disable no-await-in-loop -- a judge drives one browser page after another, on purpose */
 

@@ -66,6 +66,9 @@ import {
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Locator, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["banner", "lit"] as const;
 

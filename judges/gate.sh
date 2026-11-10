@@ -20,6 +20,9 @@
 # client did not send.
 set -uo pipefail
 
+# Records this run when it ends (judges/lib/record.sh, ADR 0054).
+source "$(dirname "$0")/lib/record.sh" && record_run gate.sh "$@"
+
 port=3774
 control_port=""
 control_owner=""

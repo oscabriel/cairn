@@ -107,6 +107,9 @@ import {
   toneRule,
   touchRule,
 } from "./lib/LookRules.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
 

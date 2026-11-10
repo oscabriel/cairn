@@ -26,6 +26,9 @@ import {
 } from "effect";
 
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

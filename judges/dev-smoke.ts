@@ -18,6 +18,9 @@ import { parseArgs } from "node:util";
 
 import { DEV_DEMO_THREAD_ID } from "../apps/server/src/DevDemo.ts";
 import { chromium } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

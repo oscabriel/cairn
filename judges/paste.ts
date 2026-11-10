@@ -49,9 +49,12 @@ import { chromium } from "./lib/Browser.ts";
 import type { Browser, CDPSession, Page } from "./lib/Browser.ts";
 import * as Events from "./lib/Events.ts";
 import type { BrainEvent } from "./lib/Events.ts";
+import { recordOnExit } from "./lib/Record.ts";
 import type { LocalApp } from "./load.ts";
 import { launchThreads, localClient, startLocalApp } from "./load.ts";
 import { pasteVerdict, readLog } from "./phone-report.ts";
+
+recordOnExit(import.meta);
 
 const PASTE_TO_CHIP_P95_MS = 1500;
 

@@ -424,6 +424,14 @@ _Avoid_: e2e, test suite (for the recipe)
 
 _Avoid_: reviewer (alone), checker
 
+**Judge registry**: `judges/index.ts`, one entry per judge: what it proves, how it runs, its cost, what it needs and its broken control or `none` (ADR 0054). `judges/index.test.ts` fails on a judge file without one.
+
+**Judge record**: One JSON line a judge run appends to `~/cairn-judges/records.jsonl` when it ends: the judge, the commit, a clean or dirty tree, pass or fail, its counts, time and cost (`judges/lib/Record.ts`). `node judges/status.ts` joins the records with the registry. An unrecorded run is not evidence.
+
+**Judge set**: The free judges that need no model, no deployed brain, no Docker and no porch, which `node judges/run-set.ts` runs in order under the judge lock before a deploy. `ops/cairn/deploy.sh` refuses a commit without a passing set on a clean tree, unless `--override`. _Avoid_: the gate (that is `pnpm check`).
+
+**Judge lock**: `flock /tmp/cairn-judge.lock`, held by whoever runs a judge outside `pnpm check` on this machine, so two judges never share the Beelink's ports, units and CPU.
+
 **Attachment**: A file the user adds to a message: an image, a document or text. The brain prepares it when it is uploaded, and the model gets it as content.
 
 **Upload URL**: The one-shot, signed address a client posts one attachment's bytes to. It expires after ten minutes.

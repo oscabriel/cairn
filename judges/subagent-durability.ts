@@ -105,6 +105,9 @@ import { projectIdFor } from "../apps/server/src/shell/ShellCommands.ts";
 import { SCRIPT_PREFIX } from "./fixtures/JudgeModel.ts";
 import * as Events from "./lib/Events.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const REPO = path.resolve(import.meta.dirname, "..");
 

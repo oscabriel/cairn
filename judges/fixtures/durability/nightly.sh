@@ -6,9 +6,11 @@
 #   judges/fixtures/durability/nightly.sh [--no-slow] [--no-bridge]
 #
 # Writes every JSON line to `$CAIRN_DURABILITY_LOG` (default `~/cairn-judges/durability-<date>.jsonl`)
-# as well as stdout, and exits 0 only when every step passed. The bridge steps use Claude Code's
-# login in `~/.claude` and cost a few cents of plan usage on Haiku; the whole run takes about an
-# hour. Run it on a quiet machine: a browser judge beside a bridge window has made the bridge's
+# as well as stdout, appends the night's judge record (`judges/lib/Record.ts`, ADR 0054) with its
+# step counts, and exits 0 only when every step passed; a failed run starts
+# cairn-nightly-failed.service, which asks the brain to push the failure to the user's devices. The
+# bridge steps use Claude Code's login in `~/.claude` and cost a few cents of plan usage on Haiku;
+# the whole run takes about an hour. Run it on a quiet machine: a browser judge beside a bridge window has made the bridge's
 # streaming window miss its aim before. Uses only `systemctl --user`, node and the user's own
 # logins; no sudo, no secrets printed.
 set -euo pipefail
@@ -32,9 +34,14 @@ done
 mkdir -p "$HOME/cairn-judges"
 log="${CAIRN_DURABILITY_LOG:-$HOME/cairn-judges/durability-$(date +%Y-%m-%d).jsonl}"
 failures=0
+steps=0
+started=$(date +%s)
+commit=$(git rev-parse HEAD)
+tree=clean
+[[ -z $(git status --porcelain) ]] || tree=dirty
 
 # The commit under test, so a log line is never read against a later deploy's code.
-echo "{\"nightly\":\"start\",\"commit\":\"$(git rev-parse HEAD)\"}" | tee -a "$log"
+echo "{\"nightly\":\"start\",\"commit\":\"$commit\"}" | tee -a "$log"
 
 step() {
 	echo "{\"step\":\"$*\"}" | tee -a "$log"
@@ -45,6 +52,7 @@ step() {
 	local status=${PIPESTATUS[0]}
 	set -e
 
+	steps=$((steps + 1))
 	if ((status != 0)); then
 		failures=$((failures + 1))
 	fi
@@ -64,5 +72,10 @@ if ((slow)); then
 fi
 
 echo "{\"nightly\":true,\"failedSteps\":$failures,\"log\":\"$log\"}"
+
+node judges/lib/append-record.ts --file fixtures/durability/nightly.sh \
+	--exit "$((failures == 0 ? 0 : 1))" --started "$started" --commit "$commit" --tree "$tree" \
+	--counts "{\"failedSteps\":$failures,\"steps\":$steps}" -- "$@" ||
+	echo "the nightly's judge record was not written" >&2
 
 ((failures == 0))

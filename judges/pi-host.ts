@@ -51,6 +51,10 @@ import { NodeRuntime } from "@effect/platform-node";
 import type { Duration } from "effect";
 import { Console, Effect, Option, Result, Schema } from "effect";
 
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
+
 const root = path.join(import.meta.dirname, "..");
 
 const brainScript = path.join(

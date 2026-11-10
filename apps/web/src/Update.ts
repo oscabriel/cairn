@@ -210,7 +210,7 @@ const queuedSendOf = (
 /**
  * Where a queued turn's own row will come after: a launch's anywhere in its new thread, a send's
  * past the newest entry its thread showed when this tab first saw it queued (`outboxSince`); none
- * for a send this page did not queue, or has not seen with its thread's view.
+ * for a send this page did not queue, or queued while no page showed its thread's view.
  */
 const sinceOf = (model: Model, item: OutboxItem): Option.Option<number> =>
   Predicate.isTagged(item, "Launch")
@@ -309,23 +309,27 @@ const queuedSendsFor = (
     },
   });
 
+/** The newest entry of `threadId`'s view as a page of `model` shows it, when one does. */
+const newestShown = (model: Model, threadId: string): Option.Option<number> =>
+  Array.findFirst([model.thread, model.scratchThread], (page) =>
+    Option.flatMap(shownView(page, threadId), (state) =>
+      Option.fromUndefinedOr(state.view.entries.at(-1)?.id)
+    )
+  );
+
 /**
- * Keeps the pending rows' bookkeeping for the thread `page` shows: notes where each newly seen send
- * this page queued to it starts (`outboxSince`), forgets the records of items gone from the outbox, and drops the
- * acknowledged sends whose row came or whose launch failed. `left` is the thread the page is leaving,
- * whose acknowledged sends are dropped: their rows show as the brain's once the page is back.
+ * Keeps the pending rows' bookkeeping for the thread `page` shows: notes where each send this page
+ * queued starts (`outboxSince`) in the update that first sees it, as none for good when no page
+ * showed its thread's view then (a view that comes later may already hold its row), forgets the
+ * records of items gone from the outbox, and drops the acknowledged sends whose row came or whose
+ * launch failed. `left` is the thread the page is leaving, whose acknowledged sends are dropped:
+ * their rows show as the brain's once the page is back.
  */
 const trackSends = (
   model: Model,
   page: Thread.Model.Model,
   left: Option.Option<string>
 ): Model => {
-  const newest = Option.flatMap(page.threadId, (id) =>
-    Option.flatMap(shownView(page, id), (state) =>
-      Option.fromUndefinedOr(state.view.entries.at(-1)?.id)
-    )
-  );
-
   const noted: { [key: string]: Option.Option<number> } = Record.filter(
     model.outboxSince,
     (_, key) => model.outbox.some((item) => outboxKey(item) === key)
@@ -333,12 +337,10 @@ const trackSends = (
 
   for (const item of model.outbox) {
     if (
-      Option.isSome(newest) &&
       Predicate.isTagged(item, "Send") &&
-      Option.contains(page.threadId, item.input.threadId) &&
       !Record.has(noted, outboxKey(item))
     ) {
-      noted[outboxKey(item)] = newest;
+      noted[outboxKey(item)] = newestShown(model, item.input.threadId);
     }
   }
 

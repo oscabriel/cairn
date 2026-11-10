@@ -749,7 +749,12 @@ const layerNoDeps = Layer.effectContext(
       );
     });
 
-    /** The stop's aborts, then the cancellation of what the run held. */
+    /**
+     * The stop's aborts, then the cancellation of what the run held. Returns the run task a wake
+     * hold names (`holdWakes`): the last generation the stop aborted or followed; none when it found
+     * no run live, or when it cleared the queue, as nothing queued can then start a run after the
+     * stop and the newest run is the stopped one's last generation.
+     */
     const abortAndCancel = Effect.fn("PiDurableHarness.abortAndCancel")(
       function* (
         session: BrainSession,
@@ -764,12 +769,14 @@ const layerNoDeps = Layer.effectContext(
             await conversation.abort(context);
           });
 
-          return yield* cancelHeld(
+          yield* cancelHeld(
             session,
             threadId,
             conversation.id,
             Option.toArray(Option.map(run, (stopped) => stopped.taskId))
           );
+
+          return Option.none<PiTaskId>();
         }
 
         const stopped: Array<PiTaskId> = [];
@@ -802,7 +809,12 @@ const layerNoDeps = Layer.effectContext(
           );
         }
 
-        return yield* cancelHeld(session, threadId, conversation.id, stopped);
+        yield* cancelHeld(session, threadId, conversation.id, stopped);
+
+        return Option.orElse(
+          Option.map(run, (outran) => outran.taskId),
+          () => Option.fromUndefinedOr(stopped.at(-1))
+        );
       }
     );
 
@@ -891,14 +903,15 @@ const layerNoDeps = Layer.effectContext(
         const session = yield* open(Option.some(threadId));
         const conversation = yield* conversationOf(session, threadId);
 
-        // Read before the abort: a run its end starts for a queued input comes after the stop, and
+        // The run the stop ended: a run its end starts for a queued input comes after the stop, and
         // the wake hold must not name it (`holdWakes`).
-        const stopping =
-          options.subagents === "stop"
-            ? yield* liveRun(session, threadId, conversation.id)
-            : Option.none();
+        const ended = yield* abortAndCancel(
+          session,
+          threadId,
+          conversation,
+          options
+        );
 
-        yield* abortAndCancel(session, threadId, conversation, options);
         // The notes the stopped run left queued enter the transcript now (ADR 0028).
         yield* placeAfterRun(threadId);
 
@@ -910,11 +923,7 @@ const layerNoDeps = Layer.effectContext(
         // last run had completed (ADR 0028).
         yield* call(Option.some(threadId), "wake-hold", async (context) => {
           await session.harness.commit(async (tx) => {
-            await holdWakes(
-              tx,
-              conversation.id,
-              Option.map(stopping, (stopped) => stopped.taskId)
-            );
+            await holdWakes(tx, conversation.id, ended);
           }, context);
         });
 

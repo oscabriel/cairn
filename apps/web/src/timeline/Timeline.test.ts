@@ -589,6 +589,25 @@ describe("a send waiting in the outbox", () => {
     assert.strictEqual(rowsOfSend(acknowledged), 2, "entries 55 and 60 only");
   });
 
+  it("shows once when this page queued it before its thread's view came, and the view holding its row comes before the acknowledgement", () => {
+    // Queued with no view (the socket down after a thread switch, or the page just loaded).
+    const waiting = onThread(Option.none());
+
+    // The send and the watch go out together; the brain writes the row as entry 60, and the
+    // snapshot holding it reaches the page before the acknowledgement.
+    const viewed = showing(waiting, viewWith(sentBefore, echo));
+    const acknowledged = acknowledge(viewed, "req-pending-1");
+
+    const later = showing(
+      acknowledged,
+      viewWith(sentBefore, echo, userEntry(61, "and the tests"))
+    );
+
+    assert.deepStrictEqual(sendsOf(later), []);
+    assert.deepStrictEqual(later.outboxEchoes, []);
+    assert.strictEqual(rowsOfSend(later), 2, "entries 55 and 60 only");
+  });
+
   it("shows once when another tab queued it, its row came, and this tab's resend is acknowledged", () => {
     const viewed = showing(onThread(Option.none()), viewWith(sentBefore, echo));
 

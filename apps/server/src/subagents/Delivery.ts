@@ -72,8 +72,8 @@ export const parentHalt = async (
 };
 
 /**
- * Holds a thread's wakes until a run starts after `stopped`, the run the stop found live before its
- * abort, or after its newest run when none was (a table read, then a document write): Stop all's
+ * Holds a thread's wakes until a run starts after `stopped`, the last generation of the run the stop
+ * ended, or after its newest run when it named none (a table read, then a document write): Stop all's
  * mark, written before it stops the children, so their stopped results wake no one even when the
  * thread's last run had completed, and a removed thread is never woken (ADR 0028). The user's next
  * input starts a run and so ends the hold, and so does a run the abort started for a queued input.

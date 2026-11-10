@@ -180,7 +180,7 @@ export interface WakeHoldState {
   [key: string]: JsonValue;
   held: boolean;
   /**
-   * The run task the stop found live before its abort, else the thread's newest one when the stop
+   * The last generation of the run the stop ended, else the thread's newest run task when the stop
    * held it; null when it had none.
    */
   afterRun: number | null;

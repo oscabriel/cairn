@@ -57,7 +57,7 @@ export const workflowHandlers = Effect.gen(function* () {
 });
 
 /**
- * The workflow handlers, to merge over the stubs in `rpc/Handlers.ts`. Needs `Recipes`, `Projects`
+ * The workflow handlers, served through `rpc/Handlers.ts`. Needs `Recipes`, `Projects`
  * and `WorkflowStops`.
  */
 export const WorkflowHandlers = {

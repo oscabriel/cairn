@@ -256,7 +256,7 @@ export const threadCommandHandlers = Effect.gen(function* () {
   };
 });
 
-/** The thread command handlers, to merge over the stubs in `rpc/Handlers.ts`. */
+/** The thread command handlers, served through `rpc/Handlers.ts`. */
 export const ThreadCommandHandlers = {
   layer: Layer.mergeAll(
     CairnRpcs.toLayerHandler(

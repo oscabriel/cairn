@@ -14,12 +14,10 @@ import { CodexLogin, CodexLoginBusy } from "../models/CodexLogin.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { ViewerTest } from "../shell/ShellTestKit.ts";
 import { LoginHandlers } from "./LoginHandlers.ts";
-import { stubHandlers } from "./StubHandlers.ts";
-
-const Stubs = CairnRpcs.toLayer(Effect.succeed(CairnRpcs.of(stubHandlers)));
+import { StubHandlers } from "./StubHandlersTestKit.ts";
 
 const handlersWith = (login: Layer.Layer<CodexLogin, never, ModelHealth>) =>
-  Layer.mergeAll(Stubs, LoginHandlers.pipe(Layer.provide(login))).pipe(
+  Layer.mergeAll(StubHandlers, LoginHandlers.pipe(Layer.provide(login))).pipe(
     Layer.provideMerge(ModelHealth.layerTest),
     Layer.provideMerge(ViewerTest)
   );

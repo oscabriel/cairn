@@ -22,12 +22,10 @@ import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
 import { ViewerTest } from "../shell/ShellTestKit.ts";
 import { GoalBook } from "../verdicts/GoalBook.ts";
 import { GoalHandlers } from "./GoalHandlers.ts";
-import { stubHandlers } from "./StubHandlers.ts";
-
-const Stubs = CairnRpcs.toLayer(Effect.succeed(CairnRpcs.of(stubHandlers)));
+import { StubHandlers } from "./StubHandlersTestKit.ts";
 
 const Services = Layer.mergeAll(
-  Stubs,
+  StubHandlers,
   GoalHandlers.pipe(Layer.provide(GoalBook.layerScripted))
 ).pipe(
   Layer.provideMerge(ViewerTest),

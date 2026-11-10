@@ -20,7 +20,7 @@ import {
   SettingsUpdateHandler,
 } from "./ModelHandlers.ts";
 import { FALLBACK_DEFAULTS, SessionHello } from "./SessionHandlers.ts";
-import { stubHandlers } from "./StubHandlers.ts";
+import { StubHandlers } from "./StubHandlersTestKit.ts";
 
 const BaseHello = Layer.succeed(
   SessionHello,
@@ -59,10 +59,8 @@ describe("the hello's new-thread defaults", () => {
   );
 });
 
-const Stubs = CairnRpcs.toLayer(Effect.succeed(CairnRpcs.of(stubHandlers)));
-
 const SettingsHandlers = Layer.mergeAll(
-  Stubs,
+  StubHandlers,
   Layer.mergeAll(SettingsGetHandler, SettingsUpdateHandler).pipe(
     Layer.provide(
       SettingsStore.layerNoDeps.pipe(

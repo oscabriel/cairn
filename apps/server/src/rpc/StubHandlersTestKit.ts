@@ -1,8 +1,10 @@
-// A handler for every RPC that fails with a typed `Unavailable`, so the group is complete from the
-// first wave and a client sees a clear, retryable answer instead of a dropped socket. Each domain's
-// handlers replace their entries in `Handlers.ts` as they land.
+// A handler for every RPC that fails with a typed `Unavailable`, for tests that serve one domain's
+// handlers over a complete group: `Layer.mergeAll` keeps the last handler for a tag, so the domain's
+// layer, listed after `StubHandlers`, replaces its entries. Production never serves a stub: the
+// group in `Handlers.ts` is built from the real handlers only, so a missing one is a compile error.
 
 import { Unavailable } from "@cairn/protocol/Errors";
+import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Stream } from "effect";
 
 const unavailable = (tag: string) =>
@@ -68,3 +70,8 @@ export const stubHandlers = {
   "portal.close": unary("portal.close"),
   "portal.start": unary("portal.start"),
 } as const;
+
+/** The stub table as a handler layer, to merge a domain's handlers over. */
+export const StubHandlers = CairnRpcs.toLayer(
+  Effect.succeed(CairnRpcs.of(stubHandlers))
+);

@@ -18,9 +18,7 @@ import { PorchError } from "../reach/PorchClient.ts";
 import { ReachLister } from "../reach/ReachLister.ts";
 import { ViewerTest } from "../shell/ShellTestKit.ts";
 import { ReachHandlers } from "./ReachHandlers.ts";
-import { stubHandlers } from "./StubHandlers.ts";
-
-const Stubs = CairnRpcs.toLayer(Effect.succeed(CairnRpcs.of(stubHandlers)));
+import { StubHandlers } from "./StubHandlersTestKit.ts";
 
 const makeClient = RpcTest.makeClient(CairnRpcs);
 
@@ -63,9 +61,10 @@ const run = <A, E>(
   }).pipe(
     Effect.scoped,
     Effect.provide(
-      Layer.mergeAll(Stubs, ReachHandlers.pipe(Layer.provide(layers))).pipe(
-        Layer.provideMerge(ViewerTest)
-      )
+      Layer.mergeAll(
+        StubHandlers,
+        ReachHandlers.pipe(Layer.provide(layers))
+      ).pipe(Layer.provideMerge(ViewerTest))
     )
   );
 

@@ -79,7 +79,7 @@ export const skillHandlers = Effect.gen(function* () {
   };
 });
 
-/** The skill handlers, to merge over the stubs in `rpc/Handlers.ts`. */
+/** The skill handlers, served through `rpc/Handlers.ts`. */
 export const SkillHandlers = {
   layer: Layer.mergeAll(
     CairnRpcs.toLayerHandler(

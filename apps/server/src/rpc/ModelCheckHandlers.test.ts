@@ -19,9 +19,7 @@ import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { ViewerTest } from "../shell/ShellTestKit.ts";
 import { ModelCheckHandlers } from "./ModelCheckHandlers.ts";
-import { stubHandlers } from "./StubHandlers.ts";
-
-const Stubs = CairnRpcs.toLayer(Effect.succeed(CairnRpcs.of(stubHandlers)));
+import { StubHandlers } from "./StubHandlersTestKit.ts";
 
 const Specs = ModelSpecs.layerNoDeps.pipe(
   Layer.provide(SettingsStore.layerNoDeps),
@@ -51,9 +49,10 @@ const Broken = Layer.mock(ModelSpecs)({
 const makeClient = RpcTest.makeClient(CairnRpcs);
 
 const handlersWith = (specs: Layer.Layer<ModelSpecs>) =>
-  Layer.mergeAll(Stubs, ModelCheckHandlers.pipe(Layer.provide(specs))).pipe(
-    Layer.provideMerge(ViewerTest)
-  );
+  Layer.mergeAll(
+    StubHandlers,
+    ModelCheckHandlers.pipe(Layer.provide(specs))
+  ).pipe(Layer.provideMerge(ViewerTest));
 
 const run = <A, E>(
   specs: Layer.Layer<ModelSpecs>,

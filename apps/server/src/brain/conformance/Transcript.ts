@@ -42,7 +42,8 @@
 // - `expect_entry_image {at, index, mimeType, base64}`: `entryImage` reads that image's bytes.
 // - `expect_inspect {threads}`: `inspect` lists exactly `threads`, in alias order, each as
 //   `{thread, running, queueLength, pending}`, its pending records oldest first as
-//   `{kind, route, origin}` (`origin` an alias or null).
+//   `{kind, route, origin}` (`origin` an alias or null), with `failure` (the failure's class) only
+//   while the newest run failed with no run since.
 //
 // Threads (subagents, ADR 0028): `model`, `input`, `expect_view` and `expect_request` lines take an
 // optional `thread` alias (`parent`, the default, or `child1`, `child2`, ... in the order the

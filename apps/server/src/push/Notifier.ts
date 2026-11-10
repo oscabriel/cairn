@@ -8,7 +8,10 @@
 // after a durable cursor (`push_cursor`), and for each one looks at the thread's row as it stands: a
 // run that ended (failed, or ran longer than 20 seconds) while no visible page reported showing the
 // thread in the last 30 seconds is pushed once, claimed in `notified_runs` under the thread and the
-// run's end time. Executor's needs-sign-in push is sent once until the link is signed in again.
+// run's end time. A run end the boot reconcile dated itself (`ReconciledEnds`, server-edges.V5)
+// has no known duration, its start to that end counts the downtime in: a failure pushes "Failed."
+// with no time, and any other such end is claimed without a push. Executor's needs-sign-in push is
+// sent once until the link is signed in again.
 // The nightly's failure push (`NightlyFailedRoute.ts`) is sent each time the failed nightly asks.
 // A subagent's run end is never pushed (its result reaches its parent as a note, ADR 0028), and a
 // push is suppressed while a visible page shows its thread or any ancestor of it (`isWatchedTree`).
@@ -48,6 +51,7 @@ import { SqlClient } from "effect/sql";
 import { Projects } from "../projects/Projects.ts";
 import { EventStore } from "../shell/EventStore.ts";
 import type { StoredShellEvent } from "../shell/EventStore.ts";
+import { ReconciledEnds } from "../shell/ReconciledEnds.ts";
 import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
 import { Presence } from "./Presence.ts";
 import { endpointHost, PushSubscriptions } from "./PushSubscriptions.ts";
@@ -161,19 +165,25 @@ export interface RunEnd {
   readonly key: string;
   readonly threadId: ThreadId;
   readonly failed: boolean;
-  readonly durationMillis: number;
+  /**
+   * How long the run ran; none when the boot reconcile dated its end itself (`ReconciledEnds`), so
+   * the time from its start counts the downtime in.
+   */
+  readonly durationMillis: Option.Option<number>;
   readonly endedAt: DateTime.Utc;
 }
 
 /**
- * The run end a thread row shows, when it deserves a push at `now`: no run is active, the latest
+ * The run end a thread row shows, when it may deserve a push at `now`: no run is active, the latest
  * run ended after it started, and it failed or ran longer than `minRunDuration`, and it ended no
- * longer than `staleAfter` ago.
+ * longer than `staleAfter` ago. `datedByReconcile` says the boot reconcile dated the end itself:
+ * its duration is then unknown, and the caller claims an end that did not fail without a push.
  */
 export const runEndToPush = (
   thread: ThreadShell,
   now: DateTime.Utc,
-  settings: Pick<NotifierSettings, "minRunDuration" | "staleAfter">
+  settings: Pick<NotifierSettings, "minRunDuration" | "staleAfter">,
+  datedByReconcile: boolean
 ): Option.Option<RunEnd> => {
   // A subagent's run end reaches its parent as a note, not the user's phone.
   if (Option.isSome(thread.activeRunId) || Option.isSome(thread.lineage)) {
@@ -204,9 +214,17 @@ export const runEndToPush = (
   const failed =
     thread.activity === "failed" || Option.isSome(thread.lastErrorClass);
 
-  const durationMillis = ended - started;
+  const durationMillis = datedByReconcile
+    ? Option.none<number>()
+    : Option.some(ended - started);
 
-  if (!failed && durationMillis <= Duration.toMillis(settings.minRunDuration)) {
+  if (
+    !failed &&
+    Option.exists(
+      durationMillis,
+      (millis) => millis <= Duration.toMillis(settings.minRunDuration)
+    )
+  ) {
     return Option.none();
   }
 
@@ -225,7 +243,10 @@ export const runMessage = (
   end: RunEnd,
   badge: number
 ): PushMessage => {
-  const took = formatRunDuration(end.durationMillis);
+  const after = Option.match(end.durationMillis, {
+    onNone: () => "",
+    onSome: (millis) => ` after ${formatRunDuration(millis)}`,
+  });
 
   const preview = Option.match(thread.latestVisibleMessage, {
     onNone: () => "",
@@ -233,8 +254,8 @@ export const runMessage = (
   });
 
   const body = end.failed
-    ? `Failed after ${took}. ${Option.getOrElse(thread.lastError, () => "The run did not finish.")}`
-    : `Finished after ${took}.${preview === "" ? "" : ` ${preview}`}`;
+    ? `Failed${after}. ${Option.getOrElse(thread.lastError, () => "The run did not finish.")}`
+    : `Finished${after}.${preview === "" ? "" : ` ${preview}`}`;
 
   return {
     title: cutText(thread.title, TITLE_LIMIT),
@@ -417,8 +438,8 @@ export class Notifier extends Context.Service<
 >()("cairn/server/push/Notifier") {
   /**
    * The notifier and its event loop, which starts with the layer and stops with its scope. Needs
-   * the shell store (`EventStore`, `ThreadRows`, `Projects`), `SqlClient`, `PushSubscriptions`, `WebPush`,
-   * `Presence` and `RequestRecords`.
+   * the shell store (`EventStore`, `ThreadRows`, `Projects`, `ReconciledEnds`), `SqlClient`,
+   * `PushSubscriptions`, `WebPush`, `Presence` and `RequestRecords`.
    */
   static readonly layerNoDeps = Layer.effect(
     Notifier,
@@ -431,6 +452,7 @@ export class Notifier extends Context.Service<
       const webPush = yield* WebPush;
       const presence = yield* Presence;
       const records = yield* RequestRecords;
+      const reconciled = yield* ReconciledEnds;
       const settings = yield* NotifierSettings;
       const sends = yield* FiberSet.make<ReadonlyArray<DeliveryOutcome>>();
 
@@ -607,13 +629,32 @@ export class Notifier extends Context.Service<
           }
 
           const now = yield* DateTime.now;
-          const end = runEndToPush(row.value.shell, now, settings);
+
+          const datedByReconcile = yield* Option.match(
+            row.value.shell.latestRunCompletedAt,
+            {
+              onNone: () => Effect.succeed(false),
+              onSome: (endedAt) => reconciled.has(threadId, endedAt),
+            }
+          );
+
+          const end = runEndToPush(
+            row.value.shell,
+            now,
+            settings,
+            datedByReconcile
+          );
 
           if (Option.isNone(end)) {
             return;
           }
 
-          if (yield* isWatchedTree(threadId)) {
+          // An end the boot reconcile dated that did not fail: how long it ran is unknown, so no
+          // push says it finished; the claim keeps a later commit on the row from pushing it.
+          if (
+            (!end.value.failed && Option.isNone(end.value.durationMillis)) ||
+            (yield* isWatchedTree(threadId))
+          ) {
             yield* claim(end.value.key, Option.some(threadId), "suppressed");
 
             return;

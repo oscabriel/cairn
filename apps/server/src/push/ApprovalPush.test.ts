@@ -26,6 +26,7 @@ import { TestClock } from "effect/testing";
 import { Database } from "../db/Database.ts";
 import { Push0005 } from "../db/migrations/0005Push.ts";
 import { EventSink } from "../shell/EventSink.ts";
+import { ReconciledEnds } from "../shell/ReconciledEnds.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
@@ -99,6 +100,7 @@ const StoreLayer = Layer.mergeAll(
   Presence.layer
 ).pipe(
   Layer.provideMerge(ShellStoreLayer),
+  Layer.provideMerge(ReconciledEnds.layer),
   Layer.provideMerge(Database.layerTest(pushMigrations))
 );
 

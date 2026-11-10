@@ -10,7 +10,8 @@
 //   steers (placed after the next tool round) or follow-ups (placed when the answer is final), or
 //   are refused with `thread_busy`.
 // - A stop ends the run as interrupted and keeps the queue; stop with `clearQueue` withdraws it too.
-// - A failed answer ends the run as failed and leaves the queue for the next input.
+// - A failed answer ends the run as failed and leaves the queue for the next input; `inspect`
+//   reports the failure until the next run starts, as pi-durable keeps `pi.live.runFailure`.
 // - A request id is admitted once per thread. Tools run in call order; a tool may ask for approval.
 // - A note (a write the model reads) is placed at once on an idle thread and at the next boundary
 //   of a running one, ahead of queued inputs; a run that ends by a stop or a failure places it too.
@@ -193,6 +194,7 @@ import type {
   RunFailureInfo,
   HarnessTurnInput,
   InputEntry,
+  LastRunFailure,
   LiveThreadState,
   PassiveEntry,
   PassiveNote,
@@ -202,7 +204,7 @@ import type {
 } from "./HarnessSeam.ts";
 import type { ThreadPermissions } from "./Permissions.ts";
 import { piConversationId, piEntryId, piTaskId } from "./PiIds.ts";
-import { classifyRunFailure } from "./RunFailure.ts";
+import { classifyRunFailure, UNKNOWN_RUN_FAILURE } from "./RunFailure.ts";
 import { plainCopy } from "./SubagentDocs.ts";
 import { SubagentFaults } from "./SubagentFaults.ts";
 import {
@@ -509,6 +511,11 @@ interface ScriptedThread {
   usage: { input: number; output: number };
   /** The user stopped the last run, or it failed, and no user input came since. */
   halted: boolean;
+  /**
+   * How the newest run failed, kept until the next run starts, as pi-durable keeps
+   * `pi.live.runFailure` (`inspect` reports it).
+   */
+  lastRunFailure: Option.Option<LastRunFailure>;
   readonly link: Option.Option<ChildLink>;
   /** Briefs this thread proposed, by approval id, as their records froze them. */
   readonly briefs: Map<string, Brief>;
@@ -1703,6 +1710,7 @@ const layerNoDeps = Layer.effectContext(
       const runId = nextId();
 
       thread.run = Option.some({ runId, inputs: [], segment: runId });
+      thread.lastRunFailure = Option.none();
       changes.events.push(
         RunStarted.make({
           threadId: thread.threadId,
@@ -1864,6 +1872,13 @@ const layerNoDeps = Layer.effectContext(
 
       thread.run = Option.none();
       thread.halted = status !== "completed";
+      thread.lastRunFailure =
+        status === "failed"
+          ? Option.some({
+              failure: Option.getOrElse(failureInfo, () => UNKNOWN_RUN_FAILURE),
+              at: Option.some(DateTime.makeUnsafe(at)),
+            })
+          : Option.none();
       changes.touched.add(thread);
       changes.events.push(
         RunTerminal.make({
@@ -2012,6 +2027,7 @@ const layerNoDeps = Layer.effectContext(
       usage: { input: 0, output: 0 },
       permissions: { mode, allow: [] },
       halted: false,
+      lastRunFailure: Option.none(),
       link: Option.none(),
       briefs: new Map(),
       subagents: new Map(),
@@ -4877,7 +4893,8 @@ const layerNoDeps = Layer.effectContext(
         if (
           Option.isSome(thread.run) ||
           thread.queue.length > 0 ||
-          pending.length > 0
+          pending.length > 0 ||
+          Option.isSome(thread.lastRunFailure)
         ) {
           states.push({
             threadId: thread.threadId,
@@ -4885,6 +4902,7 @@ const layerNoDeps = Layer.effectContext(
             runId: Option.map(thread.run, (run) => RunId.make(run.runId)),
             queueLength: thread.queue.length,
             pendingApprovals: pending,
+            lastRunFailure: thread.lastRunFailure,
           });
         }
       }

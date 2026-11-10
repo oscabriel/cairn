@@ -9,14 +9,19 @@ import { Effect, Layer, Option } from "effect";
 import { Database } from "../db/Database.ts";
 import type { MigrationRecord } from "../db/Database.ts";
 import { Shell0001 } from "../db/migrations/0001Shell.ts";
+import { ReconciledEnds } from "./ReconciledEnds.ts";
 import { projectIdFor, ThreadCreate } from "./ShellCommands.ts";
 import { ShellStoreLayer } from "./ShellLayer.ts";
 
 /** The migrations the shell store needs. */
 export const shellMigrations: MigrationRecord = { "0001_Shell": Shell0001 };
 
-/** The shell store over a fresh, migrated in-memory database. */
+/**
+ * The shell store over a fresh, migrated in-memory database, with the run ends the boot reconcile
+ * dates itself, as `ShellLayer` serves them.
+ */
 export const ShellTestLayer = ShellStoreLayer.pipe(
+  Layer.provideMerge(ReconciledEnds.layer),
   Layer.provideMerge(Database.layerTest(shellMigrations))
 );
 

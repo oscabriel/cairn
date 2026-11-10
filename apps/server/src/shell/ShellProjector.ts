@@ -75,6 +75,7 @@ import type {
 import { EventSink } from "./EventSink.ts";
 import { ProjectorSignals } from "./ProjectorSignals.ts";
 import type { ProjectorSignal } from "./ProjectorSignals.ts";
+import { ReconciledEnds } from "./ReconciledEnds.ts";
 import { emptyActivityPatch, ThreadActivityUpdate } from "./ShellCommands.ts";
 import type { ThreadActivityPatch } from "./ShellCommands.ts";
 import type { ShellStoreError } from "./ShellStoreError.ts";
@@ -405,12 +406,50 @@ export const applySignal = (
     ),
   });
 
+/** Whether `inspect()` names the thread for a run, a queue or an approval, not only a failure. */
+const hasLiveWork = (state: LiveThreadState): boolean =>
+  Option.isSome(state.runId) ||
+  state.queueLength > 0 ||
+  state.pendingApprovals.length > 0;
+
+/**
+ * Whether the boot reconcile ends the row's run: the row was busy and no run is live, so the run
+ * ended while nothing watched it.
+ */
+export const endedUnseen = (
+  projection: ThreadProjection,
+  live: Option.Option<LiveThreadState>
+): boolean =>
+  Option.isNone(Option.flatMap(live, (state) => state.runId)) &&
+  (BUSY.has(projection.fields.activity) ||
+    Option.isSome(projection.fields.activeRunId));
+
+/**
+ * When the boot reconcile ends a run nobody saw end: when it failed, if the harness kept that
+ * time; otherwise now, the reconcile's own time (`ReconciledEnds`). Only an ended-unseen row has one.
+ */
+export const reconciledEndOf = (
+  live: Option.Option<LiveThreadState>,
+  now: DateTime.Utc
+): { readonly at: DateTime.Utc; readonly dated: "run" | "reconcile" } =>
+  Option.match(
+    Option.flatMap(
+      Option.flatMap(live, (state) => state.lastRunFailure),
+      (failure) => failure.at
+    ),
+    {
+      onNone: () => ({ at: now, dated: "reconcile" as const }),
+      onSome: (at) => ({ at, dated: "run" as const }),
+    }
+  );
+
 /**
  * A thread's projection set from what pi-durable holds now. `live` is the thread's entry in
- * `inspect()`; none means no run, no queue and no approval. A row that was busy
- * with no live run left ends now: the run ended while nothing watched it. An approval the row does
- * not name yet (its event was lost to a crash) is named from `inspect()`'s record: its kind and
- * when it was asked.
+ * `inspect()`; none means no run, no queue, no approval and no failure kept. A row that was busy
+ * with no live run left ends: the run ended while nothing watched it. It ends `failed`, with the
+ * failure's class and words, when the harness kept the newest run's failure (server-edges.V5), and
+ * `idle` otherwise; it is dated by `reconciledEndOf`. An approval the row does not name yet (its
+ * event was lost to a crash) is named from `inspect()`'s record: its kind and when it was asked.
  */
 export const reconcileProjection = (
   projection: ThreadProjection,
@@ -444,24 +483,39 @@ export const reconcileProjection = (
 
   const asking = pending.some((found) => found.route === "parent");
 
-  const endedUnseen =
-    Option.isNone(runId) &&
-    (BUSY.has(fields.activity) || Option.isSome(fields.activeRunId));
+  const ended = endedUnseen(projection, live);
+
+  const failure = ended
+    ? Option.flatMap(live, (state) => state.lastRunFailure)
+    : Option.none();
+
+  const kept: Partial<DerivedFields> = {
+    activeRunId: runId,
+    queueLength: Option.match(live, {
+      onNone: () => 0,
+      onSome: (state) => state.queueLength,
+    }),
+    waitingFor: asking ? "parent" : "none",
+    latestRunCompletedAt: ended
+      ? Option.some(reconciledEndOf(live, now).at)
+      : fields.latestRunCompletedAt,
+  };
+
+  const changes = Option.match(failure, {
+    onNone: () => kept,
+    onSome: (found) => ({
+      ...kept,
+      ...failureFields(projection, Option.some(found.failure)),
+    }),
+  });
 
   return withApprovals(
     withFields(
-      { ...projection, outcome: Option.none() },
       {
-        activeRunId: runId,
-        queueLength: Option.match(live, {
-          onNone: () => 0,
-          onSome: (state) => state.queueLength,
-        }),
-        waitingFor: asking ? "parent" : "none",
-        latestRunCompletedAt: endedUnseen
-          ? Option.some(now)
-          : fields.latestRunCompletedAt,
-      }
+        ...projection,
+        outcome: Option.isSome(failure) ? Option.some("failed") : Option.none(),
+      },
+      changes
     ),
     approvals
   );
@@ -672,7 +726,7 @@ export const latestMessageOf = (
 export interface ReconcileReport {
   /** Thread rows read. */
   readonly threads: number;
-  /** Threads `inspect()` named as busy, queued or waiting. */
+  /** Threads `inspect()` named as busy, queued or waiting, or with a failed newest run. */
   readonly live: number;
   /** Rows the reconcile changed. */
   readonly patched: number;
@@ -746,6 +800,7 @@ export class ShellProjector extends Context.Service<
       const sink = yield* EventSink;
       const rows = yield* ThreadRows;
       const signals = yield* ProjectorSignals;
+      const reconciled = yield* ReconciledEnds;
       const scope = yield* Effect.scope;
 
       const lock = yield* Semaphore.make(1);
@@ -1096,8 +1151,17 @@ export class ShellProjector extends Context.Service<
 
           let projection = reconcileProjection(before, state, now);
 
+          // Recorded before the end is committed, so the notifier never reads it unrecorded.
+          if (
+            endedUnseen(before, state) &&
+            reconciledEndOf(state, now).dated === "reconcile"
+          ) {
+            yield* reconciled.record(threadId, now);
+          }
+
+          // A failure the row saw already, with nothing live since, changed nothing to read.
           const mayHaveMissed =
-            BUSY.has(row.shell.activity) || Option.isSome(state);
+            BUSY.has(row.shell.activity) || Option.exists(state, hasLiveWork);
 
           const readMessage = withMessages && mayHaveMissed;
 

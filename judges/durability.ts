@@ -14,6 +14,8 @@
 // effect, before its result commits), approval-parked (while `gate` waits for an approval; the
 // judge accepts it through `thread.respond` after the restart), mid-commit (after pi-durable
 // committed a run's end and before the shell row did, held by `CAIRN_JUDGE_HOLD_PROJECTOR_MS`),
+// mid-commit-failed (the same, for a run whose model request failed: the boot reconcile ends the
+// row failed with the failure's class, server-edges.V5),
 // send-in-flight (the kill lands before `thread.send` answers; the client resends the same request
 // id), mid-upload (the kill lands while a 20 MB upload streams to its `.part` file; the client
 // retries with a new signed URL and sends the turn), during-launch (the kill lands inside
@@ -149,6 +151,7 @@ const WINDOWS = [
   "gated-bash-after-mark",
   "gated-bash-after-effect",
   "mid-commit",
+  "mid-commit-failed",
   "send-in-flight",
   "mid-upload",
   "during-launch",
@@ -1687,6 +1690,56 @@ const acceptThenKillWhen =
 const GATE_TASK =
   'Call the gate tool once with summary "durability". After it returns, call the mark tool once with label "gated". Never call either tool a second time, even after an error or an interruption. Then answer with the single word done.';
 
+/** The error the mid-commit-failed window's model request fails with: a 400 is never retried. */
+const REFUSED = "400 the judge script refused this request";
+
+/**
+ * Waits until the projector holds a run's end (`CAIRN_JUDGE_HOLD_PROJECTOR_MS`), kills the brain
+ * there and measures the restart; answers what was committed before the kill.
+ */
+const killWhileHeld = (context: RunContext) =>
+  Effect.gen(function* () {
+    yield* Events.waitFor(
+      context.brain.events,
+      "projector_holding",
+      Events.named("projector_holding"),
+      { timeout: "60 seconds" }
+    );
+
+    const committed = entriesOf(yield* viewOf(context.follower));
+    const restart = yield* crash(context.brain);
+
+    yield* measureRestart(context, restart);
+
+    return committed;
+  });
+
+/** A second turn, so the view moves on after the restart too. */
+const sendAfterRestart = (context: RunContext) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const client = yield* connect(context.brain);
+
+      yield* client["thread.send"]({
+        threadId: context.threadId,
+        input: {
+          requestId: yield* newRequestId,
+          text: `${SCRIPT_PREFIX} text 5`,
+          attachments: [],
+          skillRefs: [],
+        },
+        whenBusy: "followUp",
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new WindowFailed({
+              message: `thread.send after the restart failed: ${String(error)}`,
+            })
+        )
+      );
+    })
+  );
+
 const plans: Readonly<Record<WindowName, Plan>> = {
   streaming: {
     message: script("text 600"),
@@ -1795,17 +1848,7 @@ const plans: Readonly<Record<WindowName, Plan>> = {
     expect: { marks: [], userEntries: 2 },
     run: (context) =>
       Effect.gen(function* () {
-        yield* Events.waitFor(
-          context.brain.events,
-          "projector_holding",
-          Events.named("projector_holding"),
-          { timeout: "60 seconds" }
-        );
-
-        const committed = entriesOf(yield* viewOf(context.follower));
-        const restart = yield* crash(context.brain);
-
-        yield* measureRestart(context, restart);
+        const committed = yield* killWhileHeld(context);
 
         // The shell never committed the run's end; the boot reconcile must have.
         yield* until(
@@ -1814,30 +1857,38 @@ const plans: Readonly<Record<WindowName, Plan>> = {
           `${CONVERGE_MS} millis`
         );
 
-        // A second turn, so the view moves on after the restart too.
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(context.brain);
+        yield* sendAfterRestart(context);
 
-            yield* client["thread.send"]({
-              threadId: context.threadId,
-              input: {
-                requestId: yield* newRequestId,
-                text: `${SCRIPT_PREFIX} text 5`,
-                attachments: [],
-                skillRefs: [],
-              },
-              whenBusy: "followUp",
-            }).pipe(
-              Effect.mapError(
-                (error) =>
-                  new WindowFailed({
-                    message: `thread.send after the restart failed: ${String(error)}`,
-                  })
-              )
-            );
-          })
+        return { committed };
+      }),
+  },
+  "mid-commit-failed": {
+    message: script(`fail ${JSON.stringify(REFUSED)}`),
+    env: { CAIRN_JUDGE_HOLD_PROJECTOR_MS: "5000" },
+    expect: { marks: [], userEntries: 2 },
+    run: (context) =>
+      Effect.gen(function* () {
+        const committed = yield* killWhileHeld(context);
+
+        // The run failed, and the shell never committed its end: the boot reconcile ends the row
+        // failed, with the failure's class, from what pi-durable kept (server-edges.V5).
+        yield* until(
+          "the boot reconcile to end the failed run as failed in the shell",
+          Effect.map(rowOf(context.follower, context.threadId), (row) =>
+            Option.exists(
+              row,
+              (thread) =>
+                thread.activity === "failed" &&
+                Option.isNone(thread.activeRunId) &&
+                Option.contains(thread.lastErrorClass, "provider_error")
+            )
+          ),
+          `${CONVERGE_MS} millis`
         );
+
+        context.measures.checks.reconciledAsFailed = true;
+
+        yield* sendAfterRestart(context);
 
         return { committed };
       }),

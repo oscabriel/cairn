@@ -17,8 +17,19 @@
 // pi-durable 1.5 charges a request a crash cut off as a failed attempt and, with no retry left,
 // ends the run `interrupted` ("The host stopped while the model was answering, on attempt N"); a
 // generation crashes cut off `restartLimit` times ends `restart_limit`.
+//
+// After a run ends without an answer, pi-durable keeps why in `pi.live.runFailure` until the next
+// run starts (spec section 8.2): its reason, the error text in `detail`, and the task that ended it.
+// `recordedRunFailureOf` and `classifyRecordedRunFailure` read that record as RunTerminal reads the
+// ending task (`CommitFeed.ts` `runEnd`), so the boot reconcile can end a row whose RunTerminal a
+// crash lost (server-edges.V5). A run started in the same commit keeps the record (`keepFailure`),
+// but only after a reset or a `continue` policy: Cairn keeps queued inputs after a failure
+// (`afterFailedRun: "keep"`), so a failure the record holds while no run is live is the newest
+// run's.
 
-import { DateTime, Duration, Option } from "effect";
+import type { JsonValue } from "@earendil-works/chord/json";
+import type { JsonObject } from "@earendil-works/pi-durable";
+import { DateTime, Duration, Option, Predicate } from "effect";
 
 import type { RunFailureInfo, UsageLimitPlan } from "./HarnessSeam.ts";
 
@@ -173,4 +184,86 @@ export const classifyRunFailure = (input: RunFailureInput): RunFailureInfo => {
     resetAt: Option.none(),
     plan: Option.none(),
   };
+};
+
+/** A failure nothing recorded the cause of. */
+export const UNKNOWN_RUN_FAILURE: RunFailureInfo = {
+  class: "unknown",
+  retryable: false,
+  resetAt: Option.none(),
+  plan: Option.none(),
+};
+
+/** Run ends pi-durable records in `runFailure` that RunTerminal does not report as `failed`. */
+const NOT_FAILED_REASONS: ReadonlySet<string> = new Set([
+  "reset",
+  "turn_limit",
+]);
+
+/** What `pi.live.runFailure` names: why the newest run ended without an answer. */
+export interface RecordedRunFailure {
+  /** pi-durable's `RunFailureReason`; none when the record names none it can read. */
+  readonly reason: Option.Option<string>;
+  /** The error text, or what was cut off; none when pi-durable wrote none. */
+  readonly detail: Option.Option<string>;
+}
+
+const isObject = (value: JsonValue | undefined): value is JsonObject =>
+  Predicate.isObject(value) && !Array.isArray(value);
+
+/**
+ * The run failure a `pi.live` value records while no run is live, or none. The value is the
+ * document as a commit published it or a snapshot read it; none for a missing document.
+ */
+export const recordedRunFailureOf = (
+  live: JsonObject | null | undefined
+): Option.Option<RecordedRunFailure> => {
+  const failure = live?.runFailure;
+
+  if (live?.run !== undefined || !isObject(failure)) {
+    return Option.none();
+  }
+
+  return Option.some({
+    reason: Option.liftPredicate(failure.reason, Predicate.isString),
+    detail: Option.liftPredicate(failure.detail, Predicate.isString),
+  });
+};
+
+/** Whether RunTerminal reports the recorded run end as `failed` (`classifyRecordedRunFailure`). */
+export const reportsFailed = (recorded: RecordedRunFailure): boolean =>
+  !(
+    Option.exists(recorded.reason, (found) => NOT_FAILED_REASONS.has(found)) ||
+    (Option.contains(recorded.reason, "aborted") &&
+      Option.isNone(recorded.detail))
+  );
+
+/**
+ * How RunTerminal reports a recorded run end: none when it reports the end as not failed, the
+ * classified failure otherwise. A reset or a turn limit ends the run's task `completed`, and a stop
+ * (`aborted` with no detail) ends it `interrupted`; an abort handler cut off too often (`aborted`
+ * with a detail) ends its task faulted, which is `failed`. The text classified is the detail, or the
+ * reason when pi-durable wrote none (`nothing_to_answer`); a record with neither is `unknown`.
+ * `at` is when the run failed.
+ */
+export const classifyRecordedRunFailure = (
+  recorded: RecordedRunFailure,
+  at: DateTime.Utc
+): Option.Option<RunFailureInfo> => {
+  const { reason, detail } = recorded;
+
+  if (!reportsFailed(recorded)) {
+    return Option.none();
+  }
+
+  return Option.some(
+    classifyRunFailure({
+      message: Option.getOrElse(
+        Option.orElse(detail, () => reason),
+        () => ""
+      ),
+      reason,
+      at,
+    })
+  );
 };

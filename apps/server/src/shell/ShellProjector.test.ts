@@ -45,11 +45,16 @@ import {
   ThreadEnsured,
   UsageUpdated,
 } from "../brain/HarnessSeam.ts";
-import type { HarnessEvent, LiveThreadState } from "../brain/HarnessSeam.ts";
+import type {
+  HarnessEvent,
+  LastRunFailure,
+  LiveThreadState,
+} from "../brain/HarnessSeam.ts";
 import { EventSink } from "./EventSink.ts";
 import { EventStore } from "./EventStore.ts";
 import { ProjectorSignals } from "./ProjectorSignals.ts";
 import type { ProjectorSignal } from "./ProjectorSignals.ts";
+import { ReconciledEnds } from "./ReconciledEnds.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
@@ -1125,6 +1130,7 @@ describe("the shell projector", () => {
               conversationId: ConversationId.make(2),
               runId: Option.some(RunId.make(9)),
               queueLength: 2,
+              lastRunFailure: Option.none(),
               // A subagent's question still with its parent: it waits for the parent, not the user.
               pendingApprovals: [
                 {
@@ -1141,6 +1147,7 @@ describe("the shell projector", () => {
               conversationId: ConversationId.make(3),
               runId: Option.some(RunId.make(10)),
               queueLength: 0,
+              lastRunFailure: Option.none(),
               // A question whose event a crash lost: the row names it from its record.
               pendingApprovals: [
                 {
@@ -1201,6 +1208,155 @@ describe("the shell projector", () => {
 
           // A second reconcile finds nothing to change.
           assert.strictEqual((yield* projector.reconcile).patched, 0);
+        })
+      )
+  );
+
+  it.effect(
+    "the boot reconcile ends a run that failed while nobody watched as failed, dated when it failed",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThreads(2);
+
+          const fake = yield* FakeHarness;
+          const sink = yield* EventSink;
+          const projector = yield* ShellProjector;
+          const reconciled = yield* ReconciledEnds;
+
+          // Both rows say running: each run failed, and pi-durable committed its end, but a kill
+          // landed before the projector flushed it.
+          for (const threadId of [THREAD, testThreadId(2)]) {
+            yield* sink.commitCommand(
+              ThreadActivityUpdate.make({
+                commandId: testCommandId(threadId === THREAD ? 900 : 901),
+                threadId,
+                patch: {
+                  ...emptyActivityPatch,
+                  activity: Option.some("running"),
+                  activeRunId: Option.some(Option.some(run7)),
+                  latestRunStartedAt: Option.some(Option.some(at(0))),
+                },
+              })
+            );
+          }
+
+          yield* Ref.set(fake.live, [
+            {
+              threadId: THREAD,
+              conversationId: ConversationId.make(1),
+              runId: Option.none(),
+              queueLength: 0,
+              pendingApprovals: [],
+              lastRunFailure: Option.some<LastRunFailure>({
+                failure: {
+                  class: "provider_error",
+                  retryable: true,
+                  resetAt: Option.none(),
+                  plan: Option.none(),
+                },
+                at: Option.some(at(30)),
+              }),
+            },
+            // pi-durable kept no time for thread 2's failure, and no words for it.
+            {
+              threadId: testThreadId(2),
+              conversationId: ConversationId.make(2),
+              runId: Option.none(),
+              queueLength: 0,
+              pendingApprovals: [],
+              lastRunFailure: Option.some<LastRunFailure>({
+                failure: {
+                  class: "unknown",
+                  retryable: false,
+                  resetAt: Option.none(),
+                  plan: Option.none(),
+                },
+                at: Option.none(),
+              }),
+            },
+          ]);
+
+          // The brain was down an hour.
+          yield* TestClock.setTime(DateTime.toEpochMillis(at(3600)));
+          yield* projector.reconcile;
+
+          const failed = yield* shellOf(THREAD);
+
+          assert.strictEqual(failed.activity, "failed");
+          assert.deepStrictEqual(failed.activeRunId, Option.none());
+          assert.deepStrictEqual(
+            failed.lastErrorClass,
+            Option.some("provider_error")
+          );
+          assert.deepStrictEqual(
+            failed.lastError,
+            Option.some(FAILURE_TEXT.provider_error)
+          );
+          // Dated when it failed, so its duration leaves the downtime out.
+          assert.deepStrictEqual(
+            failed.latestRunCompletedAt,
+            Option.some(at(30))
+          );
+          assert.isFalse(yield* reconciled.has(THREAD, at(30)));
+
+          const unknown = yield* shellOf(testThreadId(2));
+
+          assert.strictEqual(unknown.activity, "failed");
+          assert.deepStrictEqual(
+            unknown.lastErrorClass,
+            Option.some("unknown")
+          );
+          // No time kept: the reconcile dates the end itself, and says so.
+          assert.deepStrictEqual(
+            unknown.latestRunCompletedAt,
+            Option.some(at(3600))
+          );
+          assert.isTrue(yield* reconciled.has(testThreadId(2), at(3600)));
+
+          // A second reconcile finds nothing to change: a failure seen already stays as it is.
+          yield* TestClock.adjust("1 minute");
+          assert.strictEqual((yield* projector.reconcile).patched, 0);
+        })
+      )
+  );
+
+  it.effect(
+    "the boot reconcile dates an unseen end that did not fail itself, and says so",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThreads();
+
+          const sink = yield* EventSink;
+          const projector = yield* ShellProjector;
+          const reconciled = yield* ReconciledEnds;
+
+          yield* sink.commitCommand(
+            ThreadActivityUpdate.make({
+              commandId: testCommandId(900),
+              threadId: THREAD,
+              patch: {
+                ...emptyActivityPatch,
+                activity: Option.some("running"),
+                activeRunId: Option.some(Option.some(run7)),
+                latestRunStartedAt: Option.some(Option.some(at(0))),
+              },
+            })
+          );
+
+          yield* TestClock.setTime(DateTime.toEpochMillis(at(3600)));
+          yield* projector.reconcile;
+
+          const ended = yield* shellOf(THREAD);
+
+          assert.strictEqual(ended.activity, "idle");
+          assert.deepStrictEqual(ended.lastErrorClass, Option.none());
+          assert.deepStrictEqual(
+            ended.latestRunCompletedAt,
+            Option.some(at(3600))
+          );
+          assert.isTrue(yield* reconciled.has(THREAD, at(3600)));
         })
       )
   );

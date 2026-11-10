@@ -1,0 +1,19 @@
+{"type":"transcript_start","scenario":"failed_run_across_restart","version":1}
+{"type":"model","label":"m1","stopReason":"error","errorMessage":"500 upstream exploded","text":""}
+{"type":"model","label":"m2","text":"fine again"}
+{"type":"model","label":"m3","hold":true,"text":"never seen"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"one"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"failed","failure":{"class":"provider_error"}}}
+{"type":"expect_inspect","threads":[{"thread":"parent","running":false,"queueLength":0,"pending":[],"failure":"provider_error"}]}
+{"type":"crash"}
+{"type":"expect_inspect","threads":[{"thread":"parent","running":false,"queueLength":0,"pending":[],"failure":"provider_error"}]}
+{"type":"input","step":"message","requestId":"r2","text":"two"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_inspect","threads":[]}
+{"type":"input","step":"message","requestId":"r3","text":"three"}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"input","step":"stop"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"interrupted"}}
+{"type":"expect_view","path":["running"],"equals":false}
+{"type":"expect_inspect","threads":[]}

@@ -60,6 +60,7 @@ import {
 import {
   Cause,
   Context,
+  DateTime,
   Duration,
   Effect,
   Fiber,
@@ -103,6 +104,7 @@ import type {
   EnsureThread,
   HarnessTurnInput,
   HistoryQuery,
+  LastRunFailure,
   LiveThreadState,
   PassiveEntry,
   PassiveNote,
@@ -114,6 +116,11 @@ import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
 import { PendingApprovals } from "./PendingApprovals.ts";
 import { parentCeiling } from "./Permissions.ts";
 import { piConversationId, piEntryId, piSubmissionId } from "./PiIds.ts";
+import {
+  classifyRecordedRunFailure,
+  recordedRunFailureOf,
+  reportsFailed,
+} from "./RunFailure.ts";
 import { EscalationsDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
 import {
@@ -132,9 +139,12 @@ import type { ThreadWireError } from "./ThreadWire.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
-/** What `PendingApprovals` keeps between calls. */
+/**
+ * A set of conversations kept between calls from one scan and the commits since: those holding a
+ * pending approval record (`PendingApprovals`), or those whose newest run failed with no run since.
+ */
 interface PendingIndex {
-  /** The conversations holding a pending record, once the scan ran. */
+  /** The conversations in the set, once the scan ran. */
   known: Option.Option<Set<PiConversationId>>;
   /** The Session the scan read. */
   session: Option.Option<BrainSession>;
@@ -1468,9 +1478,10 @@ const layerNoDeps = Layer.effectContext(
       };
     });
 
-    // Which conversations hold a pending approval record: one scan of every conversation,
-    // the first time it is asked, then kept by every commit's `cairn.approvals` changes. A change
-    // that lands while the scan runs wins over what the scan read; a Session the supervisor
+    // Which conversations hold a pending approval record, and which ones' newest run failed with
+    // no run since (`pi.live.runFailure` with no `run`): one scan of every conversation, the first
+    // time either is asked, then kept by every commit's `cairn.approvals` and `pi.live` changes. A
+    // change that lands while the scan runs wins over what the scan read; a Session the supervisor
     // reopened is scanned again, since a commit stored as the old one failed may never have been
     // published.
     const pendingIndex: PendingIndex = {
@@ -1479,31 +1490,52 @@ const layerNoDeps = Layer.effectContext(
       during: new Map(),
     };
 
+    const failedIndex: PendingIndex = {
+      known: Option.none(),
+      session: Option.none(),
+      during: new Map(),
+    };
+
+    /** One commit's word on whether `conversationId` belongs in `index`. */
+    const noteChange = (
+      index: PendingIndex,
+      conversationId: PiConversationId,
+      holds: boolean
+    ) => {
+      if (Option.isNone(index.known)) {
+        index.during.set(conversationId, holds);
+      } else if (holds) {
+        index.known.value.add(conversationId);
+      } else {
+        index.known.value.delete(conversationId);
+      }
+    };
+
     yield* brain.subscribeCommits((session, publication) => {
-      if (
-        Option.isSome(pendingIndex.session) &&
-        pendingIndex.session.value !== session
-      ) {
-        pendingIndex.known = Option.none();
-        pendingIndex.session = Option.none();
+      for (const index of [pendingIndex, failedIndex]) {
+        if (Option.isSome(index.session) && index.session.value !== session) {
+          index.known = Option.none();
+          index.session = Option.none();
+        }
       }
 
       for (const change of publication.changes) {
-        if (
-          change.type === "document" &&
-          change.record.kind === Approvals.definition.kind &&
-          change.conversationId !== undefined
-        ) {
-          const holds = holdsPending(documentValue(change));
-
-          if (Option.isSome(pendingIndex.known)) {
-            if (holds) {
-              pendingIndex.known.value.add(change.conversationId);
-            } else {
-              pendingIndex.known.value.delete(change.conversationId);
-            }
-          } else {
-            pendingIndex.during.set(change.conversationId, holds);
+        if (change.type === "document" && change.conversationId !== undefined) {
+          if (change.record.kind === Approvals.definition.kind) {
+            noteChange(
+              pendingIndex,
+              change.conversationId,
+              holdsPending(documentValue(change))
+            );
+          } else if (change.record.kind === LiveDoc.definition.kind) {
+            noteChange(
+              failedIndex,
+              change.conversationId,
+              Option.exists(
+                recordedRunFailureOf(documentValue(change)),
+                reportsFailed
+              )
+            );
           }
         }
       }
@@ -1511,61 +1543,84 @@ const layerNoDeps = Layer.effectContext(
 
     const scanLock = yield* Semaphore.make(1);
 
-    const pendingConversations = scanLock.withPermits(1)(
-      Effect.gen(function* () {
-        if (Option.isSome(pendingIndex.known)) {
-          return new Set(pendingIndex.known.value);
-        }
+    /** Both sets: from one scan of every conversation the first time, then as commits keep them. */
+    const scanned = Effect.gen(function* () {
+      if (
+        Option.isSome(pendingIndex.known) &&
+        Option.isSome(failedIndex.known)
+      ) {
+        return {
+          pending: pendingIndex.known.value,
+          failed: failedIndex.known.value,
+        };
+      }
 
-        const session = yield* open(Option.none());
-        const found = new Set<PiConversationId>();
-        let cursor: Option.Option<Cursor> = Option.none();
-        let scanned = 0;
+      const session = yield* open(Option.none());
+      const pending = new Set<PiConversationId>();
+      const failed = new Set<PiConversationId>();
+      let cursor: Option.Option<Cursor> = Option.none();
+      let count = 0;
 
-        pendingIndex.during.clear();
+      pendingIndex.during.clear();
+      failedIndex.during.clear();
 
-        do {
-          const after = Option.getOrUndefined(cursor);
+      do {
+        const after = Option.getOrUndefined(cursor);
 
-          const page = yield* call(
+        const page = yield* call(
+          Option.none(),
+          "conversations.scan",
+          async (context) =>
+            await session.storage.scanConversations(
+              {},
+              INSPECT_SCAN_PAGE,
+              after,
+              context
+            )
+        );
+
+        for (const conversation of page.items) {
+          const approvals = yield* call(
             Option.none(),
-            "conversations.scan",
+            "approvals.read",
             async (context) =>
-              await session.storage.scanConversations(
-                {},
-                INSPECT_SCAN_PAGE,
-                after,
+              await session.harness.snapshot(
+                Approvals,
+                conversation.id,
                 context
               )
           );
 
-          for (const conversation of page.items) {
-            const approvals = yield* call(
-              Option.none(),
-              "approvals.read",
-              async (context) =>
-                await session.harness.snapshot(
-                  Approvals,
-                  conversation.id,
-                  context
-                )
-            );
+          const live = yield* call(
+            Option.none(),
+            "live.read",
+            async (context) =>
+              await session.harness.snapshot(LiveDoc, conversation.id, context)
+          );
 
-            scanned += 1;
+          count += 1;
 
-            if (
-              Object.values(approvals?.items ?? {}).some(
-                (item) => item.status === "pending"
-              )
-            ) {
-              found.add(conversation.id);
-            }
+          if (
+            Object.values(approvals?.items ?? {}).some(
+              (item) => item.status === "pending"
+            )
+          ) {
+            pending.add(conversation.id);
           }
 
-          cursor = Option.fromUndefinedOr(page.next);
-        } while (Option.isSome(cursor));
+          if (Option.exists(recordedRunFailureOf(live), reportsFailed)) {
+            failed.add(conversation.id);
+          }
+        }
 
-        for (const [conversationId, holds] of pendingIndex.during) {
+        cursor = Option.fromUndefinedOr(page.next);
+      } while (Option.isSome(cursor));
+
+      for (const [index, found] of [
+        [pendingIndex, pending],
+        [failedIndex, failed],
+      ] as const) {
+        for (const [conversationId, holds] of index.during) {
           if (holds) {
             found.add(conversationId);
           } else {
@@ -1573,21 +1628,77 @@ const layerNoDeps = Layer.effectContext(
           }
         }
 
-        pendingIndex.during.clear();
-        pendingIndex.known = Option.some(found);
-        pendingIndex.session = Option.some(session);
+        index.during.clear();
+        index.known = Option.some(found);
+        index.session = Option.some(session);
+      }
 
-        yield* Effect.logInfo("approvals scanned").pipe(
-          Effect.annotateLogs({
-            event: "approvals_scanned",
-            conversations: scanned,
-            pending: found.size,
-          })
-        );
+      yield* Effect.logInfo("approvals scanned").pipe(
+        Effect.annotateLogs({
+          event: "approvals_scanned",
+          conversations: count,
+          pending: pending.size,
+          failed: failed.size,
+        })
+      );
 
-        return new Set(found);
-      })
+      return { pending, failed };
+    });
+
+    const pendingConversations = scanLock.withPermits(1)(
+      Effect.map(scanned, ({ pending }) => new Set(pending))
     );
+
+    /** The conversations whose newest run failed with no run since. */
+    const failedConversations = scanLock.withPermits(1)(
+      Effect.map(scanned, ({ failed }) => new Set(failed))
+    );
+
+    /**
+     * The newest run's failure `pi.live` records while no run is live, as RunTerminal would have
+     * reported it, dated by the end of the task that ended the run.
+     */
+    const lastRunFailureOf = Effect.fnUntraced(function* (
+      session: BrainSession,
+      conversationId: PiConversationId
+    ) {
+      const live = yield* call(
+        Option.none(),
+        "live.read",
+        async (context) =>
+          await session.harness.snapshot(LiveDoc, conversationId, context)
+      );
+
+      const recorded = recordedRunFailureOf(live);
+
+      if (Option.isNone(recorded) || !reportsFailed(recorded.value)) {
+        return Option.none<LastRunFailure>();
+      }
+
+      const ended = yield* Option.match(
+        Option.fromUndefinedOr(live?.runFailure?.taskId),
+        {
+          onNone: () => Effect.succeed(Option.none<number>()),
+          onSome: (taskId) =>
+            call(Option.none(), "task.read", async (context) => {
+              const task = await session.harness.getTask(taskId, context);
+
+              return Option.fromUndefinedOr(task?.endedAt);
+            }),
+        }
+      );
+
+      const at = Option.map(ended, (millis) => DateTime.makeUnsafe(millis));
+      const now = yield* DateTime.now;
+
+      return Option.map(
+        classifyRecordedRunFailure(
+          recorded.value,
+          Option.getOrElse(at, () => now)
+        ),
+        (info): LastRunFailure => ({ failure: info, at })
+      );
+    });
 
     const inspect = Effect.gen(function* () {
       const session = yield* open(Option.none());
@@ -1664,6 +1775,19 @@ const layerNoDeps = Layer.effectContext(
         }
       }
 
+      // A run that failed while nothing watched it leaves no live work, so it is found by its
+      // conversation's `pi.live.runFailure`, read again here: the set only names where to look.
+      const failureOf = new Map<PiConversationId, LastRunFailure>();
+
+      for (const conversationId of yield* failedConversations) {
+        const failed = yield* lastRunFailureOf(session, conversationId);
+
+        if (Option.isSome(failed)) {
+          failureOf.set(conversationId, failed.value);
+          slot(conversationId);
+        }
+      }
+
       const states: Array<LiveThreadState> = [];
 
       for (const [conversationId, found] of byConversation) {
@@ -1686,6 +1810,9 @@ const layerNoDeps = Layer.effectContext(
             runId: found.runId,
             queueLength: found.queueLength,
             pendingApprovals: pending,
+            lastRunFailure: Option.fromUndefinedOr(
+              failureOf.get(conversationId)
+            ),
           });
         }
       }

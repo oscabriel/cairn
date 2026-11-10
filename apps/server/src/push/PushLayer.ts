@@ -1,9 +1,9 @@
 // Web Push as one layer: the VAPID key, the sender, the subscription table, the in-memory presence
 // reports, the decision records approval pushes are worded from, and the notifier, whose event loop
-// and sweep start with the layer. Needs the shell store (`EventStore`, `ThreadRows`, `Projects`), the migrated
-// `SqlClient`, `ServerConfig` and the harness (`HarnessSeam`). The key is made in memory unless the
-// entry point provides `VapidKeyFromFile` (only `main.ts` does), so dev brains, judges and tests
-// never make or read the deployed brain's `push.json`.
+// and sweep start with the layer. Needs the shell store (`EventStore`, `ThreadRows`, `Projects`,
+// `ReconciledEnds`), the migrated `SqlClient`, `ServerConfig` and the harness (`HarnessSeam`). The
+// key is made in memory unless the entry point provides `VapidKeyFromFile` (only `main.ts` does),
+// so dev brains, judges and tests never make or read the deployed brain's `push.json`.
 
 import { Layer } from "effect";
 

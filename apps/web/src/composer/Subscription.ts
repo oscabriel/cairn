@@ -61,6 +61,8 @@ const shouldRedirect = (event: KeyboardEvent): boolean =>
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
     isComposing: event.isComposing,
+    // oxlint-disable-next-line typescript/no-deprecated -- Safari marks its IME confirm keydown only by keyCode 229
+    keyCode: event.keyCode,
     repeat: event.repeat,
   }) &&
   !pathContains(event, EDITABLE) &&

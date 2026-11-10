@@ -93,9 +93,10 @@ page.on("pageerror", (error) => {
 
 await page.goto(origin);
 
+// The connection mark is visually hidden while Live (`next/shell/ConnectionMark.ts`).
 await page.waitForSelector(
   '[data-testid="connection-state"][data-state="Live"]',
-  { timeout: 30_000 }
+  { state: "attached", timeout: 30_000 }
 );
 
 const liveMs = Date.now() - startedAt;

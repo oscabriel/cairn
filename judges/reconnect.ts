@@ -298,11 +298,13 @@ page.on("websocket", (socket) => {
   });
 });
 
+// The shell's connection mark (`next/shell/ConnectionMark.ts`) is visually hidden while Live, so the
+// Live waits ask for it attached, not visible; the mark shows while the socket is down.
 const live = '[data-testid="connection-state"][data-state="Live"]';
 
 await page.goto(`${origin}/`);
 
-await page.waitForSelector(live, { timeout: 30_000 });
+await page.waitForSelector(live, { state: "attached", timeout: 30_000 });
 
 /** One kill and restart: how long the page took to be current again. */
 interface Round {
@@ -348,7 +350,7 @@ for (let round = 1; round <= rounds; round += 1) {
     pass: firstFrameMs !== null && firstFrameMs <= budgetMs,
   });
 
-  await page.waitForSelector(live, { timeout: 15_000 });
+  await page.waitForSelector(live, { state: "attached", timeout: 15_000 });
   await addProject(`round-${round}`);
 }
 

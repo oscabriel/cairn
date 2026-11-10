@@ -310,6 +310,8 @@ _Avoid_: plugin
 
 **Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once. A shell command older than the resend window (seven days) is dropped unsent.
 
+**Connection mark**: The chat header's word for a socket that is not live, beside a spinner in the waiting tone: Connecting on the page's first dial, Reconnecting while it dials again or waits to, Catching up while the shell stream brings the page current. Hidden while the page is live. A page whose dials keep failing asks the server which build it serves over plain HTTP and reloads for a new one.
+
 **Presence**: A device telling the brain whether Cairn is on screen and which thread it shows, so a push waits while the user is looking at that thread or one above it.
 
 **Approval push**: The push for a request waiting on a thread, in the request's own words, one notification per thread; held back while a page shows it, sent late once it has waited a minute unseen, and reminded once 15 minutes after the last push. A subagent's request pushes under its project thread (the root of its lineage), with the root's tag and link and a "<child> asks:" prefix.

@@ -710,7 +710,7 @@ describe("composer drafts", () => {
 
     const reloaded = update(
       inform(initial, contextFor(ComposerTarget.Thread({ threadId }))).model,
-      Message.LoadedDrafts({ drafts: saved })
+      Message.LoadedDrafts({ drafts: saved, unread: false })
     ).model;
 
     assert.strictEqual(activeDraft(reloaded).text, "half a thought");
@@ -786,7 +786,10 @@ const runSaves = (result: UpdateReturn) =>
 
 /** A tab on `target` whose drafts were read from an empty store. */
 const freshTab = (target: ComposerTarget): Model =>
-  update(composerOn(target), Message.LoadedDrafts({ drafts: {} })).model;
+  update(
+    composerOn(target),
+    Message.LoadedDrafts({ drafts: {}, unread: false })
+  ).model;
 
 /** Types `value` into `tab`'s open draft, lets the saver's pause run out, and takes its answer. */
 const typeAndSave = (tab: Model, value: string) =>
@@ -909,7 +912,10 @@ describe("drafts in two tabs", () => {
 /** `model` after both stores answered with what they hold now, drafts first or tray first. */
 const reload = (model: Model, traysFirst: boolean) =>
   Effect.gen(function* () {
-    const drafts = Message.LoadedDrafts({ drafts: yield* loadDrafts });
+    const drafts = Message.LoadedDrafts({
+      drafts: yield* loadDrafts,
+      unread: false,
+    });
 
     const tray = Message.GotAttachmentsMessage({
       message: AttachmentsMessage.LoadedSaved({ drafts: yield* loadSaved }),

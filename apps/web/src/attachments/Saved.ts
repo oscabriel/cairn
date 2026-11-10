@@ -3,7 +3,8 @@
 // reload: the name, type, size and kind the brain answered with). Each attachment's first save time
 // is kept beside them, and one older than the brain's sweep of unclaimed uploads is not restored
 // (T38): the brain no longer has it, so sending it would fail. A save writes only what this tab
-// added or removed, so tabs keep each other's (`TabChanges.ts`).
+// added or removed, so tabs keep each other's (`TabChanges.ts`), and an attachment this build cannot
+// decode is kept as stored.
 
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { Array, Clock, Effect, Option, Record, Schema } from "effect";
@@ -12,12 +13,18 @@ import { KeyValueStore } from "effect/persistence";
 import {
   applyListChanges,
   listChanges,
+  loadShared,
   mergeList,
   mergeStored,
 } from "../storage/TabChanges.ts";
-import type { ListChanges } from "../storage/TabChanges.ts";
+import type { ListChanges, Persisted } from "../storage/TabChanges.ts";
 
-/** The localStorage key of the saved ready attachments, one JSON object keyed by draft. */
+/**
+ * The localStorage key of the saved ready attachments, one JSON object of `AttachmentRef` lists by
+ * draft key. Add a field to `AttachmentRef` as optional, or a literal, and an older build keeps the
+ * refs it cannot decode as stored (`TabChanges.ts`); change what a stored field means, or the
+ * object's outer shape, and bump the version.
+ */
 export const SAVED_ATTACHMENTS_KEY = "cairn:composer-attachments:v1";
 
 /** Ready attachments by draft key. */
@@ -28,9 +35,10 @@ export const SavedAttachments = Schema.Record(
 
 export type SavedAttachments = typeof SavedAttachments.Type;
 
-const SavedJson = Schema.fromJsonString(Schema.toCodecJson(SavedAttachments));
-
-/** The localStorage key of when each saved attachment was first saved, by attachment id. */
+/**
+ * The localStorage key of when each saved attachment was first saved, by attachment id. A change to
+ * its shape needs a new version: a build that cannot read the times reads them as none.
+ */
 export const SAVED_TIMES_KEY = "cairn:composer-attachment-times:v1";
 
 /** How long the brain keeps an upload no turn claimed (its daily sweep). */
@@ -59,46 +67,6 @@ const loadTimes = Effect.gen(function* () {
     onSome: decodeTimes,
   });
 }).pipe(Effect.orElseSucceed((): Readonly<Record<string, number>> => ({})));
-
-/**
- * `saved` without the attachments first saved longer ago than the brain's sweep. One saved before
- * times were kept has none, and is kept until its next save.
- */
-const withinRestoreWindow = (saved: SavedAttachments) =>
-  Effect.gen(function* () {
-    const times: Times = yield* loadTimes;
-    const now = yield* Clock.currentTimeMillis;
-
-    return Record.map(saved, (refs) =>
-      refs.filter(({ id }) =>
-        Option.match(Option.fromUndefinedOr(times[id]), {
-          onNone: () => true,
-          onSome: (at) => now - at < RESTORE_WINDOW_MS,
-        })
-      )
-    );
-  });
-
-const decodeSaved = Schema.decodeEffect(SavedJson);
-
-const encodeSaved = Schema.encodeEffect(SavedJson);
-
-/** Reads the saved attachments. Missing or unreadable storage is none: attaching never waits on it. */
-export const loadSaved: Effect.Effect<
-  SavedAttachments,
-  never,
-  KeyValueStore.KeyValueStore
-> = Effect.gen(function* () {
-  const store = yield* KeyValueStore.KeyValueStore;
-  const saved = yield* store.get(SAVED_ATTACHMENTS_KEY);
-
-  const drafts = yield* Option.match(Option.fromUndefinedOr(saved), {
-    onNone: () => Effect.succeed({}),
-    onSome: decodeSaved,
-  });
-
-  return yield* withinRestoreWindow(drafts);
-}).pipe(Effect.orElseSucceed(() => ({})));
 
 /** One saved attachment: its ref and the draft it belongs to. */
 interface SavedEntry {
@@ -134,6 +102,187 @@ const applySavedChanges = (
   savedOf(applyListChanges(entryKey)(entriesOf(target), changes));
 
 /**
+ * `saved` without the attachments first saved longer ago than the brain's sweep. One saved before
+ * times were kept has none, and is kept until its next save.
+ */
+const withinRestoreWindow = Effect.fnUntraced(function* (
+  saved: SavedAttachments
+) {
+  const times: Times = yield* loadTimes;
+  const now = yield* Clock.currentTimeMillis;
+
+  return Record.map(saved, (refs) =>
+    refs.filter(({ id }) =>
+      Option.match(Option.fromUndefinedOr(times[id]), {
+        onNone: () => true,
+        onSome: (at) => now - at < RESTORE_WINDOW_MS,
+      })
+    )
+  );
+});
+
+/** The saved attachments as stored: each draft's refs as JSON, read one by one. */
+type SavedRaw = Readonly<Record<string, ReadonlyArray<Schema.Json>>>;
+
+const SavedDocument = Schema.fromJsonString(
+  Schema.Record(Schema.String, Schema.Array(Schema.Json))
+);
+
+const decodeSavedDocument = Schema.decodeOption(SavedDocument);
+
+const encodeSavedDocument = Schema.encodeEffect(SavedDocument);
+
+const RefJson = Schema.toCodecJson(AttachmentRef);
+
+const decodeRef = Schema.decodeOption(RefJson);
+
+const encodeRef = Schema.encodeEffect(RefJson);
+
+/** The id of a stored ref, read even from a ref this build cannot decode. */
+const RefId = Schema.Struct({ id: Schema.String });
+
+const decodeRefId = Schema.decodeUnknownOption(RefId);
+
+/** The entry key of a stored ref under `draftKey`, read even from a ref this build cannot decode. */
+const keyOfJson = (draftKey: string, json: Schema.Json) =>
+  Option.match(decodeRef(json), {
+    onNone: () =>
+      Option.map(decodeRefId(json), ({ id }) => `${draftKey} ${id}`),
+    onSome: (ref) => Option.some(entryKey({ draftKey, ref })),
+  });
+
+/**
+ * The saved attachments, read ref by ref: a ref this build decodes is restored unless the brain's
+ * sweep has passed it (then it leaves storage with the next save), and one it cannot decode is kept
+ * as stored.
+ */
+const persistedSaved: Persisted<
+  SavedAttachments,
+  SavedRaw,
+  KeyValueStore.KeyValueStore,
+  Schema.SchemaError | KeyValueStore.KeyValueStoreError
+> = {
+  empty: { value: {}, raw: {}, held: [], unread: 0 },
+  read: (text) =>
+    Effect.gen(function* () {
+      const document = decodeSavedDocument(text);
+
+      if (Option.isNone(document)) {
+        return Option.none();
+      }
+
+      const decoded = Record.map(document.value, (refs) =>
+        refs.map((json) => ({ json, ref: decodeRef(json) }))
+      );
+
+      const value = yield* withinRestoreWindow(
+        Record.map(decoded, (refs) =>
+          Array.getSomes(refs.map(({ ref }) => ref))
+        )
+      );
+
+      const isRestored = (draftKey: string, ref: AttachmentRef) =>
+        Option.exists(Record.get(value, draftKey), (kept) =>
+          kept.some(({ id }) => id === ref.id)
+        );
+
+      const raw = Record.map(decoded, (refs, draftKey) =>
+        refs
+          .filter(({ ref }) =>
+            Option.match(ref, {
+              onNone: () => true,
+              onSome: (read) => isRestored(draftKey, read),
+            })
+          )
+          .map(({ json }) => json)
+      );
+
+      const unread = Record.toEntries(decoded).flatMap(([draftKey, refs]) =>
+        refs
+          .filter(({ ref }) => Option.isNone(ref))
+          .map(({ json }) => keyOfJson(draftKey, json))
+      );
+
+      return Option.some({
+        value,
+        raw,
+        held: Array.getSomes(unread),
+        unread: unread.length,
+      });
+    }),
+  write: (raw, merged) =>
+    Effect.gen(function* () {
+      const kept = Record.map(raw, (refs, draftKey) =>
+        refs.filter(
+          (json) =>
+            !Option.exists(keyOfJson(draftKey, json), (key) =>
+              merged.removed.includes(key)
+            )
+        )
+      );
+
+      const present = new Set(
+        Record.toEntries(kept).flatMap(([draftKey, refs]) =>
+          Array.getSomes(refs.map((json) => keyOfJson(draftKey, json)))
+        )
+      );
+
+      const added = yield* Effect.forEach(
+        entriesOf(merged.value).filter(
+          (entry) =>
+            merged.set.includes(entryKey(entry)) &&
+            !present.has(entryKey(entry))
+        ),
+        (entry) =>
+          Effect.map(encodeRef(entry.ref), (json) => ({
+            draftKey: entry.draftKey,
+            json,
+          }))
+      );
+
+      const next = Record.filter(
+        Array.reduce(added, kept, (document, { draftKey, json }) => ({
+          ...document,
+          [draftKey]: Array.append(document[draftKey] ?? [], json),
+        })),
+        (refs) => refs.length > 0
+      );
+
+      const store = yield* KeyValueStore.KeyValueStore;
+      const known: Times = yield* loadTimes;
+      const now = yield* Clock.currentTimeMillis;
+
+      const ids = Object.values(next).flatMap((refs) =>
+        Array.getSomes(
+          refs.map((json) => Option.map(decodeRefId(json), ({ id }) => id))
+        )
+      );
+
+      const times = Record.fromIterableWith(ids, (id) => [
+        id,
+        known[id] ?? now,
+      ]);
+
+      yield* store.set(SAVED_TIMES_KEY, yield* encodeTimes(times));
+
+      return yield* encodeSavedDocument(next);
+    }),
+};
+
+/**
+ * Reads the saved attachments. Missing storage is none: attaching never waits on it. One this build
+ * cannot decode, or a value it cannot read at all, is left as stored.
+ */
+export const loadSaved: Effect.Effect<
+  SavedAttachments,
+  never,
+  KeyValueStore.KeyValueStore
+> = Effect.map(
+  loadShared(SAVED_ATTACHMENTS_KEY, persistedSaved),
+  ({ value }) => value
+);
+
+/**
  * Writes the attachments this tab added or removed since `base` (the saved attachments as it last
  * read or wrote them) into what storage holds now, so another tab's are kept, and writes back one of
  * this tab's that another tab's write dropped without removing it. One past the brain's sweep is
@@ -154,32 +303,16 @@ export const saveSaved = (
 
     return yield* mergeStored(
       SAVED_ATTACHMENTS_KEY,
-      loadSaved,
-      (stored, removals) =>
+      persistedSaved,
+      (stored, removals, held) =>
         Option.map(
           mergeList(entryKey)(entriesOf(freshBase), entriesOf(fresh))(
             entriesOf(stored),
-            removals
+            removals,
+            held
           ),
           (merged) => ({ ...merged, value: savedOf(merged.value) })
-        ),
-      (next) =>
-        Effect.gen(function* () {
-          const store = yield* KeyValueStore.KeyValueStore;
-          const json = yield* encodeSaved(next);
-          const known: Times = yield* loadTimes;
-          const now = yield* Clock.currentTimeMillis;
-          const times: { [id: string]: number } = {};
-
-          for (const refs of Object.values(next)) {
-            for (const { id } of refs) {
-              times[id] = known[id] ?? now;
-            }
-          }
-
-          yield* store.set(SAVED_ATTACHMENTS_KEY, json);
-          yield* store.set(SAVED_TIMES_KEY, yield* encodeTimes(times));
-        })
+        )
     );
   });
 

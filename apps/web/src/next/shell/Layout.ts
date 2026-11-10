@@ -5,7 +5,7 @@
 // picker float over it. The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
 // (the transcript, the composer, the hero and settings pages, the diff toggle) are the root's
 // regions, placed beside them rather than inside them, so their Mounts keep the root as their
-// render owner.
+// render owner. The chat header carries the connection mark, drawn from the root's connection.
 
 import { Option, Predicate } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -15,6 +15,7 @@ import type { Model } from "../../Model.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import * as Thread from "../page/Thread.ts";
 import { FONT_UI } from "../ui/Classes.ts";
+import { connectionMark } from "./ConnectionMark.ts";
 import { goalChipView, goalInputsOf, goalPanelView } from "./Goal.ts";
 import { chatHeaderBand } from "./Header.ts";
 import * as Hold from "./Hold.ts";
@@ -52,6 +53,7 @@ const header = (h: H, model: Model, controls: ReadonlyArray<Html>): Html =>
       view: Shell.headerLeadView,
       toParentMessage: toShell,
     }),
+    connectionMark(h, model.connection),
     ...controls,
     h.submodel({
       slotId: "next-header-actions",

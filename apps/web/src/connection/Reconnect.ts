@@ -57,6 +57,21 @@ export const backoffDelayMs = (attempt: number, random: number): number => {
   return Math.round(base * (1 - BACKOFF_JITTER + 2 * BACKOFF_JITTER * random));
 };
 
+/** Failed attempts in a row after which the page asks over HTTP which build the server serves. */
+export const BUILD_CHECK_AFTER = 3;
+
+/** After the first check, the page asks again every this many failed attempts. */
+export const BUILD_CHECK_EVERY = 10;
+
+/**
+ * True when the wait before attempt `attempt` should also ask the server which build it serves
+ * (`load/StaleBuild.ts`). A server that refuses a page's protocol answers every dial with a 426 the
+ * browser hides, so only a few failures in a row, never one, raise the question.
+ */
+export const checksBuild = (attempt: number): boolean =>
+  attempt >= BUILD_CHECK_AFTER &&
+  (attempt - BUILD_CHECK_AFTER) % BUILD_CHECK_EVERY === 0;
+
 /** True while a client for the current epoch exists, so its streams may run. */
 export const hasClient = (connection: Connection): boolean =>
   ConnectionState.match(connection.state, {

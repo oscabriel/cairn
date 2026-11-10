@@ -73,10 +73,27 @@ export interface ComposerKeyEvent {
   readonly altKey: boolean;
   readonly ctrlKey: boolean;
   readonly metaKey: boolean;
-  /** True while an IME composes, or for the 229 keydown some browsers send for it. */
+  /** True while an IME composes (the browser's own `isComposing`). */
   readonly isComposing: boolean;
+  /**
+   * The browser's legacy `keyCode`. 229 marks a keydown the input method took, which Safari sends
+   * for the Enter that confirms a conversion after `compositionend`, with `isComposing` false.
+   */
+  readonly keyCode: number;
   readonly repeat: boolean;
 }
+
+/** The `keyCode` of a keydown that belongs to the input method. */
+const IME_COMPOSITION_KEY_CODE = 229;
+
+/**
+ * True when a keydown belongs to an IME composition: while it composes, or the keydown that
+ * confirms it, which some browsers (Safari) send with keyCode 229 and `isComposing` false. Such a
+ * key never sends, picks a menu item or types into the composer. Foldkit's
+ * `isImeCompositionKeydown` and t3code's composer-logic.ts read the same two fields.
+ */
+export const isImeCompositionKey = (event: ComposerKeyEvent): boolean =>
+  event.isComposing || event.keyCode === IME_COMPOSITION_KEY_CODE;
 
 /** Where the composer is when the key is pressed. */
 export interface ComposerKeyContext {
@@ -140,7 +157,7 @@ export const composerSubmissionIntentForKey = (
   event: ComposerKeyEvent,
   context: ComposerKeyContext
 ): Option.Option<ComposerSubmissionIntent> => {
-  if (event.isComposing || event.repeat) {
+  if (isImeCompositionKey(event) || event.repeat) {
     return Option.none();
   }
 
@@ -264,7 +281,7 @@ export const resolveComposerMenuActiveItemId = (
 
 /** A keydown that should start typing into the composer when focus is elsewhere. */
 export const isTypeToFocusKey = (event: ComposerKeyEvent): boolean =>
-  !event.isComposing &&
+  !isImeCompositionKey(event) &&
   !event.metaKey &&
   !event.ctrlKey &&
   !event.altKey &&

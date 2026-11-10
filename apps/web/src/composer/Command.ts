@@ -22,8 +22,8 @@ import { OutboxItem } from "../connection/Outbox.ts";
 import { workspaceStrategy, EnvMode } from "../hero/ContextStrip.ts";
 import { draftRouter, threadRouter } from "../Route.ts";
 import {
-  loadDrafts,
   loadSettings,
+  readDrafts,
   saveDrafts,
   saveSettings,
 } from "./Drafts.ts";
@@ -72,7 +72,9 @@ export const DetectPlatform = Command.define("DetectPlatform", {
 /** Reads the drafts saved on this device. */
 export const LoadDrafts = Command.define("LoadDrafts", {
   messages: [Message.LoadedDrafts],
-  execute: Effect.map(loadDrafts, (drafts) => Message.LoadedDrafts({ drafts })),
+  execute: Effect.map(readDrafts, ({ unread, value }) =>
+    Message.LoadedDrafts({ drafts: value, unread })
+  ),
 });
 
 /** Writes the drafts this tab changed since `base`, the drafts as it last read or wrote them. */

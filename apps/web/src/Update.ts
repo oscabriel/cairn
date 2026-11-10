@@ -21,6 +21,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { modifyFields } from "foldkit/struct";
 
 import {
+  CheckServerBuild,
   LoadExternal,
   NavigateInternal,
   SaveOutbox,
@@ -46,6 +47,7 @@ import {
 } from "./connection/Outbox.ts";
 import {
   acquired,
+  checksBuild,
   elapsed,
   hasClient,
   initialConnection,
@@ -279,7 +281,11 @@ const enterBackoff: Step = (model) => {
     }),
     commands: Option.match(next.wait, {
       onNone: () => [],
-      onSome: (wait) => [WaitForBackoff(wait)],
+      // Dials refused a few times in a row may be a server that moved to another protocol.
+      onSome: (wait) =>
+        checksBuild(wait.attempt)
+          ? [WaitForBackoff(wait), CheckServerBuild()]
+          : [WaitForBackoff(wait)],
     }),
   };
 };
@@ -809,6 +815,10 @@ const restoreScratchTurn = (text: string, launched: boolean): Step =>
     toParentMessage: toGotNextShellMessage,
   });
 
+/** The notice raised at start when storage holds outbox items this build cannot decode. */
+export const UNREAD_OUTBOX_NOTICE =
+  "Some unsent changes were saved by another version of Cairn and cannot be sent from here. They are kept on this device.";
+
 /** The text of the notice raised when the outbox cannot be saved; it clears once a save works. */
 const UNSAVED_NOTICE =
   "Unsent changes could not be saved on this device. Keep this page open until they are sent.";
@@ -1141,6 +1151,7 @@ const step = (received: Message): Step =>
           connection: (connection) => elapsed(connection, epoch, attempt),
         }),
       }),
+    CheckedServerBuild: () => (model) => ({ model }),
     WokeUp: () => (model) => ({
       model: modifyFields(model, { connection: woke }),
     }),
@@ -1399,7 +1410,9 @@ export const init: Runtime.RoutingApplicationInit<
       sentTurns: {},
       outboxAdopted: [],
       outboxLeft: [],
-      notice: Option.none(),
+      notice: flags.outboxUnread
+        ? Option.some(UNREAD_OUTBOX_NOTICE)
+        : Option.none(),
       thread: Thread.Model.initial,
       sidebar: initialSidebar,
       composer,

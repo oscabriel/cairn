@@ -83,7 +83,11 @@ export const Message = defineMessageUnion({
   ChangedSoftwareKeyboard: { open: Schema.Boolean },
 
   DetectedPlatform: { isMac: Schema.Boolean },
-  LoadedDrafts: { drafts: Schema.Record(Schema.String, Draft) },
+  /** `unread`: storage also holds drafts this build cannot decode, kept as they are. */
+  LoadedDrafts: {
+    drafts: Schema.Record(Schema.String, Draft),
+    unread: Schema.Boolean,
+  },
   LoadedSettings: { settings: ComposerSettings },
   MintedHomeDraft: { draftId: ThreadId },
   /** The hero's URL now names its draft (`/new/<draftId>`), so a reload restores it. */

@@ -479,6 +479,10 @@ const clearSentDraft = (model: Model): Model =>
     }
   );
 
+/** The notice raised when storage holds drafts this build cannot decode (another build saved them). */
+export const UNREAD_DRAFTS_NOTICE =
+  "Some saved drafts were written by another version of Cairn and cannot be shown here. They are kept on this device.";
+
 const notice = (model: Model, text: string): UpdateReturn => ({
   model: modifyFields(model, {
     notice: () => Option.some({ draftKey: draftKey(model), text }),
@@ -1335,11 +1339,20 @@ const step = (model: Model, message: Message): UpdateReturn =>
     DetectedPlatform: ({ isMac }) => ({
       model: modifyFields(model, { isMac: () => isMac }),
     }),
-    LoadedDrafts: ({ drafts }) => {
+    LoadedDrafts: ({ drafts, unread }) => {
       // Edits made before storage answered win over what was saved.
       const loaded = modifyFields(
         syncDrafts(model, model.storedDrafts, drafts),
-        { draftsLoaded: () => true }
+        {
+          draftsLoaded: () => true,
+          notice: (current) =>
+            unread
+              ? Option.some({
+                  draftKey: Option.none(),
+                  text: UNREAD_DRAFTS_NOTICE,
+                })
+              : current,
+        }
       );
 
       return {

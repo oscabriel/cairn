@@ -4,8 +4,13 @@
 // answering an id the page can never get cannot cause a loop. Changed: the page's build id comes
 // from the boot JSON the server inlined (the same id `session.hello` reports), not from a Vite
 // define, and a page with no boot JSON (the dev server) never reloads.
+//
+// A page learns the server's build from `session.hello`, which needs a socket. After a protocol
+// bump the server refuses the old page's dial with a 426 that a browser WebSocket cannot read, so a
+// page whose dials keep failing asks `GET /api/build` over plain HTTP (`checkServerBuild`) and
+// reloads through the same rule.
 
-import { Effect, Option, Schema } from "effect";
+import { Duration, Effect, Option, Schema } from "effect";
 
 import { BOOT_ELEMENT_ID } from "../shell/ShellStore.ts";
 
@@ -86,3 +91,56 @@ export const reloadIfStale = Effect.fn("StaleBuild.reloadIfStale")(function* (
     });
   }
 });
+
+/** Where the server answers which web build it serves, over plain HTTP (`apps/server/src/http/Build.ts`). */
+export const BUILD_PATH = "/api/build";
+
+/** What `GET /api/build` answers. */
+const ServerBuild = Schema.Struct({ build: Schema.String });
+
+const decodeServerBuild = Schema.decodeEffect(
+  Schema.fromJsonString(ServerBuild)
+);
+
+/** How long the build check may take; the page tries again at a later failed dial. */
+const BUILD_CHECK_TIMEOUT = Duration.seconds(5);
+
+/** `GET /api/build` did not answer with a build: the server is down, or refused the request. */
+class ServerBuildUnknown extends Schema.TaggedError<ServerBuildUnknown>()(
+  "ServerBuildUnknown",
+  { status: Schema.Int, cause: Schema.Defect() }
+) {}
+
+const fetchServerBuild = Effect.tryPromise({
+  try: async (signal) => {
+    const response = await fetch(BUILD_PATH, { cache: "no-store", signal });
+
+    return { status: response.status, text: await response.text() };
+  },
+  catch: (cause) => new ServerBuildUnknown({ status: 0, cause }),
+});
+
+/**
+ * Asks the server over HTTP which build it serves, and reloads when it is another than this page's
+ * (`shouldReload`: once per server build, never without boot JSON). Run when the socket's dials keep
+ * failing (`checksBuild`); a server that does not answer changes nothing.
+ */
+export const checkServerBuild = Effect.gen(function* () {
+  const answer = yield* fetchServerBuild;
+
+  if (answer.status !== 200) {
+    return yield* new ServerBuildUnknown({
+      status: answer.status,
+      cause: answer.text,
+    });
+  }
+
+  const { build } = yield* decodeServerBuild(answer.text);
+
+  return yield* reloadIfStale(build);
+}).pipe(
+  Effect.timeoutOption(BUILD_CHECK_TIMEOUT),
+  // The next check, a few failed dials later, asks again.
+  Effect.ignore,
+  Effect.withSpan("StaleBuild.checkServerBuild")
+);

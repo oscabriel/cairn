@@ -36,6 +36,8 @@ export const Message = defineMessageUnion({
   LostConnection: { epoch: Schema.Int, reason: Schema.String },
   /** The wait before attempt `attempt` of `epoch` is over. */
   ElapsedBackoff: { epoch: Schema.Int, attempt: Schema.Int },
+  /** The server's build was checked over HTTP; a page of another build has reloaded instead. */
+  CheckedServerBuild: {},
   /** The page came back online, was shown again, or became visible. */
   WokeUp: {},
 

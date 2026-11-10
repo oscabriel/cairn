@@ -11,6 +11,7 @@
 
 import {
   composerSubmissionIntentForKey,
+  isImeCompositionKey,
   SendShortcut,
 } from "@cairn/client-logic/ComposerLogic";
 import type { ComposerKeyEvent } from "@cairn/client-logic/ComposerLogic";
@@ -73,8 +74,11 @@ const keyEvent = (event: KeyboardEvent): ComposerKeyEvent => ({
   altKey: event.altKey,
   ctrlKey: event.ctrlKey,
   metaKey: event.metaKey,
-  // Some browsers send the composition keydown as key "Process" without `isComposing`.
+  // Chromium sends the composition keydown as key "Process"; Safari sends the confirming Enter
+  // with keyCode 229 (`isImeCompositionKey` reads that one).
   isComposing: event.isComposing || event.key === "Process",
+  // oxlint-disable-next-line typescript/no-deprecated -- Safari marks its IME confirm keydown only by keyCode 229
+  keyCode: event.keyCode,
   repeat: event.repeat,
 });
 
@@ -88,7 +92,7 @@ const keydownMessage = (
 ): Option.Option<readonly [EditorMessage, boolean]> => {
   const key = keyEvent(event);
 
-  if (key.isComposing) {
+  if (isImeCompositionKey(key)) {
     return Option.none();
   }
 

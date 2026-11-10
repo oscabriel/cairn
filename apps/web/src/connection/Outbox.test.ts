@@ -4,9 +4,18 @@ import {
   SHELL_COMMAND_RESEND_WINDOW,
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
-import { DateTime, Duration, Effect, Option, Predicate, Ref } from "effect";
+import {
+  DateTime,
+  Duration,
+  Effect,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+} from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { TestClock } from "effect/testing";
+import { Url } from "foldkit";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
@@ -33,7 +42,7 @@ import {
   liveModel,
   sendItem,
 } from "../TestFixtures.ts";
-import { update } from "../Update.ts";
+import { init, UNREAD_OUTBOX_NOTICE, update } from "../Update.ts";
 import { CairnConnection } from "./Connection.ts";
 import {
   enqueue,
@@ -42,6 +51,7 @@ import {
   OUTBOX_STORAGE_KEY,
   OutboxItem,
   outboxKey,
+  readOutbox,
   saveOutbox,
 } from "./Outbox.ts";
 
@@ -430,6 +440,80 @@ describe("the outbox", () => {
     expect(Option.isSome(saved)).toBeTruthy();
     expect(loaded).toStrictEqual([first, second]);
     expect(broken).toStrictEqual([]);
+  });
+
+  it("keeps an item it cannot read beside the ones it can, and writes it back on the next save", async () => {
+    const { after, loaded, stored } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        yield* saveOutbox([], [first]);
+
+        // A send from a build whose `whenBusy` has a value this build does not know.
+        const newer = JSON.stringify(
+          yield* Schema.encodeEffect(Schema.toCodecJson(OutboxItem))(second)
+        ).replace('"whenBusy":"followUp"', '"whenBusy":"sideways"');
+
+        const text = yield* store.get(OUTBOX_STORAGE_KEY);
+
+        yield* store.set(
+          OUTBOX_STORAGE_KEY,
+          `${(text ?? "[]").slice(0, -1)},${newer}]`
+        );
+
+        const read = yield* readOutbox;
+        const third = sendItem("request-3");
+
+        yield* saveOutbox(read.value, [...read.value, third]);
+
+        return {
+          loaded: read,
+          after: yield* loadOutbox,
+          stored: yield* store.get(OUTBOX_STORAGE_KEY),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [first], unread: true });
+    expect(after.map(outboxKey)).toStrictEqual(["request-1", "request-3"]);
+    expect(stored).toContain('"whenBusy":"sideways"');
+  });
+
+  it("says at start that storage holds sends this build cannot read", () => {
+    const url = Option.getOrThrow(Url.fromString("https://code.gneiss.run/"));
+
+    const notice = (outboxUnread: boolean) =>
+      init({ boot: Option.none(), outbox: [first], outboxUnread }, url).model
+        .notice;
+
+    expect(notice(true)).toStrictEqual(Option.some(UNREAD_OUTBOX_NOTICE));
+    expect(notice(false)).toStrictEqual(Option.none());
+  });
+
+  it("never writes over an outbox it cannot read at all", async () => {
+    const { kept, loaded, saved } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
+
+        const read = yield* readOutbox;
+        const stored = yield* saveOutbox(read.value, [first]);
+
+        return {
+          loaded: read,
+          saved: { stored, reread: yield* loadOutbox },
+          kept: yield* store.get(OUTBOX_STORAGE_KEY),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [], unread: true });
+    expect(saved).toStrictEqual({
+      stored: Option.some([first]),
+      reread: [first],
+    });
+    expect(kept).toBe("{not json");
   });
 });
 

@@ -1,8 +1,8 @@
 // The shell's keyboard (U-11, ADR 0050): the bindings are the table's and nothing else, so settle,
 // pin, undo and the classic sidebar's toggle are not bound; Previous and Next thread walk only the
 // rows the sidebar list draws, as a click on each would open it; New thread opens the project
-// thread of the project the user is in (ADR 0048), or a new draft where it has none; and the
-// settings page's Keyboard section lists every key the shell answers.
+// thread of the project the sidebar shows (ADR 0048), or a draft of that project where it has none;
+// and the settings page's Keyboard section lists every key the shell answers.
 
 import { NOW, shellRow } from "@cairn/client-logic/ShellRowTestKit";
 import type { ThreadShell } from "@cairn/protocol/Shell";
@@ -16,7 +16,9 @@ import type { ShortcutCommand } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import {
   CAIRN,
+  DEV,
   MANAGED,
+  MYR,
   onProjectThread,
   PROJECT_THREAD,
   SCRATCH_THREAD,
@@ -208,6 +210,42 @@ describe("New thread", () => {
     );
   });
 
+  it("stays in the project the sidebar shows, never jumping to the hero's default", () => {
+    const draftId = asking.id;
+
+    // A draft of a project with no project thread: the sidebar shows that project.
+    const onMyrDraft = inform(shellModelOn(AppRoute.Draft({ draftId })), {
+      ...shellModelOn(AppRoute.Draft({ draftId })).context,
+      draftProjectId: Option.some(MYR),
+    }).model;
+
+    // Settings, with a project picked on the rail that has no project thread.
+    const onSettings: Model = {
+      ...shellModelOn(AppRoute.Settings()),
+      selectedProjectId: Option.some(DEV),
+    };
+
+    for (const [model, projectId] of [
+      [onMyrDraft, MYR],
+      [onSettings, DEV],
+    ] as const) {
+      const pressed = press(model, "chat.new");
+
+      assert.isUndefined(pressed.outMessage);
+      assert.deepStrictEqual(
+        (pressed.commands ?? []).map(({ name }) => name),
+        ["PrepareProjectDraft"]
+      );
+      assert.deepStrictEqual(
+        update(
+          pressed.model,
+          Message.PreparedProjectDraft({ projectId, draftId })
+        ).outMessage,
+        OutMessage.RequestedProjectDraft({ projectId, draftId })
+      );
+    }
+  });
+
   it("stays put on the project thread itself", () => {
     const pressed = press(onProjectThread, "chat.new");
 
@@ -215,24 +253,36 @@ describe("New thread", () => {
     assert.lengthOf(pressed.commands ?? [], 0);
   });
 
-  it("opens a new draft where no project thread opens", () => {
+  it("opens a draft of the project where it has no project thread, and a new draft where there is no project", () => {
     const shell = Option.getOrThrow(onProjectThread.context.shell);
 
-    const without: Model = {
+    const withProjects = (projects: typeof shell.projects): Model => ({
       ...onProjectThread,
       context: {
         ...onProjectThread.context,
-        shell: Option.some({
-          ...shell,
-          projects: shell.projects.map((project) => ({
-            ...project,
-            projectThreadId: Option.none(),
-          })),
-        }),
+        shell: Option.some({ ...shell, projects }),
       },
-    };
+    });
 
-    const pressed = press(without, "chat.new");
+    const without = withProjects(
+      shell.projects.map((project) => ({
+        ...project,
+        projectThreadId: Option.none(),
+      }))
+    );
+
+    const inProject = press(without, "chat.new");
+
+    assert.deepStrictEqual(
+      (inProject.commands ?? []).map(({ name }) => name),
+      ["PrepareProjectDraft"]
+    );
+
+    const scratchOnly = withProjects(
+      shell.projects.filter((project) => project.kind === "scratch")
+    );
+
+    const pressed = press(scratchOnly, "chat.new");
 
     assert.deepStrictEqual(
       (pressed.commands ?? []).map(({ name }) => name),
@@ -242,7 +292,7 @@ describe("New thread", () => {
     const draftId = asking.id;
 
     assert.deepStrictEqual(
-      update(without, Message.PreparedDraft({ draftId })).outMessage,
+      update(scratchOnly, Message.PreparedDraft({ draftId })).outMessage,
       OutMessage.RequestedNavigate({ url: draftRouter({ draftId }) })
     );
   });

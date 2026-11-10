@@ -66,6 +66,7 @@ import {
   projectThreadFor,
   railProjectsOf,
   scratchRowOf,
+  selectedProjectOf,
   threadRoleOf,
   threadsOf,
 } from "./Derived.ts";
@@ -919,8 +920,9 @@ const closeAddProject = (model: Model): UpdateReturn => ({
 });
 
 /**
- * New thread (ADR 0048): the project thread of the project the open thread is in (else the hero's
- * default project), when it has one; else a new draft.
+ * New thread (ADR 0048): the project thread of the project the sidebar shows, when it has one; a
+ * project with none gets a draft of its own, as a click on its rail bubble does; with no folder
+ * project at all, a new draft.
  */
 const openNewThread = (model: Model): UpdateReturn => {
   const projects = Option.match(model.context.shell, {
@@ -928,13 +930,17 @@ const openNewThread = (model: Model): UpdateReturn => {
     onSome: (shell) => shell.projects,
   });
 
-  const opens = newThreadOpens(
-    projects,
-    Option.map(openThreadOf(model), (thread) => thread.projectId)
+  const selected = Option.map(
+    selectedProjectOf(model),
+    (project) => project.id
   );
 
-  return Option.match(opens, {
-    onNone: () => ({ model, commands: [PrepareDraft()] }),
+  return Option.match(newThreadOpens(projects, selected), {
+    onNone: () =>
+      Option.match(selected, {
+        onNone: () => ({ model, commands: [PrepareDraft()] }),
+        onSome: (projectId) => startProjectThread(model, projectId),
+      }),
     onSome: (threadId) =>
       Option.contains(routedThreadIdOf(model), threadId)
         ? { model }

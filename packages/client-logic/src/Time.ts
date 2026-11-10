@@ -3,9 +3,9 @@
 // (`formatDuration`) and apps/web/src/components/Sidebar.logic.ts (`formatWorkingDurationLabel`)
 // and Sidebar.tsx (`compactSidebarTimeLabel`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept:
 // every label's wording and rounding. Changed: times are `DateTime`s and "now" is passed in as
-// epoch milliseconds (the caller reads `Clock`), so nothing here reads the system clock; local
-// calendar labels take a `DateTime.Zoned` and an optional locale instead of a host bridge; the
-// 12 or 24 hour setting is not ported (Cairn follows the locale).
+// epoch milliseconds (the caller reads `Clock`), so nothing here reads the system clock; the 12 or
+// 24 hour setting is not ported (Cairn follows the locale). Removed: the local calendar labels the
+// snooze presets read, with the presets (ADR 0050).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -180,28 +180,3 @@ export const formatDuration = (durationMs: number): string => {
     .filter((part) => part !== "")
     .join(" ");
 };
-
-/** "3:44 PM" or "15:44" as the locale writes a time of day, in the zone of `at`. */
-export const formatTimeOfDay = (at: DateTime.Zoned, locale?: string): string =>
-  DateTime.format(at, { hour: "numeric", minute: "2-digit", locale });
-
-/** "Mon" as the locale writes a short weekday, in the zone of `at`. */
-export const formatShortWeekday = (
-  at: DateTime.Zoned,
-  locale?: string
-): string => DateTime.format(at, { weekday: "short", locale });
-
-/** "Oct 24" as the locale writes a short date, in the zone of `at`. */
-export const formatShortDate = (at: DateTime.Zoned, locale?: string): string =>
-  DateTime.format(at, { month: "short", day: "numeric", locale });
-
-/** Whole local calendar days from the day of `from` to the day of `to` (negative when earlier). */
-export const calendarDaysBetween = (
-  from: DateTime.Zoned,
-  to: DateTime.Zoned
-): number =>
-  Math.round(
-    (DateTime.toEpochMillis(DateTime.startOf(to, "day")) -
-      DateTime.toEpochMillis(DateTime.startOf(from, "day"))) /
-      DAY_MS
-  );

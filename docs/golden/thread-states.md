@@ -305,7 +305,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `WorkflowState` | `failed` | No word of its own: a node still live under it reads "failed". | Work panel |
 | `WorkflowState` | `stopped` | No word of its own: a node still live under it reads "stopped". | Work panel |
 | `WorkflowState` | `declined` | No word of its own: the launch card's settled-record line says "Declined by you", and a node under it would read "stopped". | Transcript, work panel |
-| `NodeState` | `reserved` | "queued" in the steps panel (`apps/web/src/next/shell/Work.ts`), with Stop while its workflow runs. | Work panel |
+| `NodeState` | `reserved` | "queued" in the steps panel (`apps/web/src/next/shell/WorkPanel.ts`), with Stop while its workflow runs. | Work panel |
 | `NodeState` | `running` | "running", with Stop. | Work panel |
 | `NodeState` | `held` | "held", with Stop. | Work panel |
 | `NodeState` | `settled` | "done", with what it used and its result's summary. | Work panel |
@@ -331,4 +331,4 @@ No status is shown raw but a node's. Only portals (`PortalState`, 6I) are "Not s
 - Approval ledger: `apps/server/src/brain/CairnDocs.ts` (`approvalLedger`).
 - Crash accounting: `apps/server/src/brain/CrashLimit.ts`, `apps/server/src/BootRepairs.ts`.
 - Client presentation: `packages/client-logic/src/ThreadState.ts` (`threadState`, `THREAD_LABELS`, `HOLD_LABELS`), `packages/client-logic/src/PresentThreadShell.ts` (`hasUnseenCompletion`), `packages/client-logic/src/Sidebar.ts` (`partitionSidebarThreads`, `sectionOf`), `packages/client-logic/src/ThreadSettled.ts` (`effectiveSnoozed`), `packages/client-logic/src/PendingRequests.ts` (`settledLineOf`), `packages/client-logic/src/ThreadLineage.ts` (`CHILD_LABELS`, `childStatusOf`), `packages/client-logic/src/WorkflowSteps.ts` (`workflowGroupsOf`, `workflowHeadline`), `packages/client-logic/src/Meters.ts` (`budgetWordOf`), `packages/client-logic/src/GoalProgress.ts` (`criterionStateLabel`).
-- Words: `apps/web/src/next/shell/Derived.ts` (`rowStatusOf`), `apps/web/src/next/shell/Hold.ts`, `apps/web/src/next/shell/Work.ts`, `apps/web/src/next/settings/View.ts` (`STATE_LABEL`, `EXECUTOR_STATUS`), `apps/web/src/next/meters/UsageView.ts` (`planBody`).
+- Words: `apps/web/src/next/shell/Derived.ts` (`rowStatusOf`), `apps/web/src/next/shell/Hold.ts`, `apps/web/src/next/shell/WorkPanel.ts`, `apps/web/src/next/settings/View.ts` (`STATE_LABEL`, `EXECUTOR_STATUS`), `apps/web/src/next/meters/UsageView.ts` (`planBody`).

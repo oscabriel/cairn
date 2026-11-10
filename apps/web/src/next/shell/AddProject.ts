@@ -24,13 +24,10 @@ import {
 import { glyph } from "../ui/Glyph.ts";
 import { folderOf } from "./Derived.ts";
 import { Message } from "./Message.ts";
-import { FolderListing } from "./Model.ts";
+import { ADD_PROJECT_ID, FolderListing } from "./Model.ts";
 import type { AddProjectState } from "./Model.ts";
 import type { Placement } from "./Scratch.ts";
 import { positionOf } from "./Scratch.ts";
-
-/** The picker's id, which takes focus when it opens. */
-export const ADD_PROJECT_ID = "add-project";
 
 const TITLE_ID = "add-project-title";
 

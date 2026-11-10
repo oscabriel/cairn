@@ -1,11 +1,9 @@
 // @vitest-environment node
-// The bundle budget (plan D46, notes/edges.md section 3 "Budgets"): a production build of the web
-// app, read through its Vite manifest. Judged: the entry chunk with every chunk it imports
-// statically (what a cold load must fetch before the app runs) and the CSS those chunks carry,
-// each gzipped. A lazy chunk D46 names (the transcript, markdown, diff and settings folders) is
-// judged only when the manifest has a dynamic entry from that folder, and then it must stay out of
-// the entry's static imports; so the test holds before the integrator splits `diff` and
-// `settings` and keeps holding after.
+// The bundle budget (plan D46, notes/edges.md section 3 "Budgets", ADR 0021): a production build
+// of the web app, read through its Vite manifest. Judged: the entry chunk with every chunk it
+// imports statically (what a cold load must fetch before the app runs), which must be one script,
+// and the CSS those chunks carry, each gzipped; and the views a cold load never draws, which must
+// stay out of that closure whatever imports them (`DEFERRED`).
 
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Record, Schema } from "effect";
@@ -13,40 +11,20 @@ import { build } from "vite";
 import type { Rolldown } from "vite";
 
 /**
- * Entry JS ceiling, gzip bytes (319 KiB). See `ENTRY_JS_TARGET` for the plan's number and why it
- * differs. Wave 4 integration raised it from 256 KiB: the diff panel's and settings page's state,
- * the hold banner and the usage meter add about 22 KB gzip to the entry even with both views
- * split out (ADR 0021). Wave 6a raised it to 300 KiB while the entry carried both the classic
- * views' state and the `next` Models. The cutover (plan 7A) deleted the classic views and made the
- * `next` frame the entry's own instead of a chunk fetched after it, so a cold load makes one round
- * trip fewer and the entry holds every view a first page draws: 315,455 B at 7A, with about 2%
- * headroom. D46's binding bar is round trips and time to interactive, which `judges/load.ts`
- * judges. The product review's fixes raised it 1 KiB (2026-11-09): earlier project threads reached
- * by a reload or a link, and the hero's measured menu room, took the entry from 322,028 B to
- * 322,919 B. Integrating that with the unread-storage notice and the connection mark came to
- * 323,951 B, so the ceiling moved one more KiB; finding W-8 (the ceiling follows the build) is open
- * and its fix, deferring what a cold load never draws, has to bring this back down. The budgets the
- * user sets (ADR 0047: the card's budget field, the raise card's own body, the usage page's
- * default and thread budget forms, `budget.declare`) took it to 326,964 B, so it moved to 320 KiB;
- * the usage page's view is statically imported by the frame and nothing in the `next` frame loads
- * lazily yet, which is W-8's to change.
- * Package C5's
- * transcript fixes (brain inputs as quiet lines, pending rows for queued sends, the outbox's lanes,
- * parked history, Cairn's tool names in words) are all drawn or run on a thread's first page, so
- * nothing of them could load later: 326,040 B, and the ceiling moved two more KiB. Its review fixes
- * (a pending row kept until its own row comes, in the root's update that runs on every message)
- * came to 327,076 B, and the ceiling moved half a KiB more.
- * Package C6 (one state table, one "needs you" count, the worded row Stop, the folded managed list
- * and the header's tooltips) added about 3 KB on its own. Integrated, the three came to 332,947 B,
- * and the ceiling is 326 KiB: about 17 KB above the cutover's entry, all of it drawn on a first
- * page. W-8's package has to bring this down by deferring what a cold load never draws.
+ * Entry JS ceiling, gzip bytes (315.5 KiB): 316,724 B measured on 2026-11-10, once the views a cold
+ * load never draws became chunks of their own (`next/page/Chunks.ts`, finding W-8), with about 2%
+ * headroom. ADR 0021 states the same number.
+ *
+ * What earns a raise: a named feature drawn on a thread list or a thread's first page, which
+ * therefore cannot load later, with its measured cost in gzip bytes, approved in the commit that
+ * raises the number. Anything a cold load does not draw goes into a chunk instead (`DEFERRED`). The
+ * binding bar is still round trips and time to interactive, which `judges/load.ts` judges.
  */
-export const ENTRY_JS_BUDGET = 333_824;
+export const ENTRY_JS_BUDGET = 323_072;
 
 /**
- * The plan's entry target (D46: 200 KB gzip). Not met by wave 3's client: effect, foldkit and
- * its UI package alone are about 100 KB gzip and the sidebar and composer about 60 KB, before
- * the transcript (about 30 KB, which a thread page needs at once). Reported, not enforced.
+ * The plan's entry target (D46: 200 KB gzip). Not met: effect, foldkit and its UI package alone are
+ * about 100 KB gzip before Cairn's own code. Reported, not enforced.
  */
 export const ENTRY_JS_TARGET = 200_000;
 
@@ -56,12 +34,36 @@ export const ENTRY_JS_TARGET = 200_000;
  */
 export const ENTRY_CSS_BUDGET = 34_600;
 
-/** Folders D46 says load on demand; a manifest key is the imported module's path. */
-const LAZY_FOLDERS = [
-  "src/timeline/",
-  "src/timeline/markdown/",
-  "src/diff/",
-  "src/settings/",
+/**
+ * The views a cold load never draws, by a module only each one needs (a path under `apps/web`, or a
+ * package's folder under `node_modules`). Each must be in the build and outside the entry's static
+ * closure, whether or not anything imports it dynamically: a static import anywhere in the entry's
+ * graph fails it. Their state, Messages and updates stay in the entry.
+ */
+const DEFERRED: ReadonlyArray<{
+  readonly view: string;
+  readonly module: string;
+}> = [
+  { view: "the settings page", module: "src/next/settings/View.ts" },
+  { view: "the settings page's push switch", module: "src/next/push/View.ts" },
+  {
+    view: "the usage page and its budget forms",
+    module: "src/next/meters/UsageView.ts",
+  },
+  {
+    view: "the model picker and the composer's menus",
+    module: "src/composer/Popovers.ts",
+  },
+  { view: "the add-project picker", module: "src/next/shell/AddProject.ts" },
+  { view: "the work panel", module: "src/next/shell/WorkPanel.ts" },
+  { view: "the goal panel", module: "src/next/shell/GoalPanel.ts" },
+  { view: "the refresh confirm", module: "src/next/shell/Refresh.ts" },
+  {
+    view: "the rename and remove dialog",
+    module: "src/next/shell/ManageDialog.ts",
+  },
+  { view: "the diff panel", module: "src/diff/View.ts" },
+  { view: "syntax highlighting", module: "node_modules/@shikijs/core/" },
 ];
 
 /** The dev-only look catalogue's folder, as a manifest key starts. */
@@ -108,7 +110,10 @@ const textOf = (item: Rolldown.OutputChunk | Rolldown.OutputAsset): string => {
     : new TextDecoder().decode(item.source);
 };
 
-/** Builds the app in memory and returns its manifest and every emitted file's text by name. */
+/**
+ * Builds the app in memory and returns its manifest, every emitted file's text by name, and the
+ * modules in each chunk by file name.
+ */
 const buildApp = Effect.promise(async () => {
   const output = await build({
     configFile: new URL("../vite.config.ts", import.meta.url).pathname,
@@ -123,16 +128,21 @@ const buildApp = Effect.promise(async () => {
   );
 
   const files = new Map<string, string>();
+  const modules = new Map<string, ReadonlyArray<string>>();
 
   for (const item of outputs.flatMap((result) => result.output)) {
     files.set(item.fileName, textOf(item));
+
+    if (item.type === "chunk") {
+      modules.set(item.fileName, Object.keys(item.modules));
+    }
   }
 
   const manifestText = Option.getOrThrow(
     Option.fromNullishOr(files.get(".vite/manifest.json"))
   );
 
-  return { manifest: decodeManifest(manifestText), files };
+  return { manifest: decodeManifest(manifestText), files, modules };
 });
 
 /** The entry's key and every key it reaches through static imports. */
@@ -263,10 +273,10 @@ const shadowedVariants = (css: string): ReadonlyArray<string> => {
 
 describe("the bundle budget", () => {
   it.live(
-    "keeps the entry's JS and CSS under budget and named lazy chunks lazy",
+    "keeps the entry one script, its JS and CSS under budget, and the deferred views out of it",
     () =>
       Effect.gen(function* () {
-        const { manifest, files } = yield* buildApp;
+        const { manifest, files, modules } = yield* buildApp;
 
         const closure = [...staticClosure(manifest)];
 
@@ -287,18 +297,18 @@ describe("the bundle budget", () => {
         const entryJs = js.reduce((sum, size) => sum + size, 0);
         const entryCss = css.reduce((sum, size) => sum + size, 0);
 
-        const lazy = Object.entries(manifest).filter(
-          ([key, chunk]) =>
-            chunk.isDynamicEntry === true &&
-            LAZY_FOLDERS.some((folder) => key.startsWith(folder))
-        );
+        const scripts = [...new Set(chunks.map((chunk) => chunk.file))];
+
+        const entryModules = scripts.flatMap((file) => modules.get(file) ?? []);
+
+        const builtModules = [...modules.values()].flat();
 
         yield* Effect.logInfo("bundle budget").pipe(
           Effect.annotateLogs({
             entryJsGzip: entryJs,
             entryJsTarget: ENTRY_JS_TARGET,
             entryCssGzip: entryCss,
-            lazyChunks: lazy.map(([key]) => key).join(","),
+            scripts: scripts.join(","),
           })
         );
 
@@ -335,11 +345,20 @@ describe("the bundle budget", () => {
           "emitted files carrying the look catalogue"
         );
 
-        for (const [key] of lazy) {
-          assert.notInclude(
-            closure,
-            key,
-            `${key} is imported statically by the entry`
+        // A cold load runs one script; split shared code would cost a request before interactive.
+        assert.lengthOf(scripts, 1, `entry scripts: ${scripts.join(", ")}`);
+
+        for (const { view, module } of DEFERRED) {
+          const isIt = (id: string) => id.includes(`/${module}`);
+
+          assert.isTrue(
+            builtModules.some(isIt),
+            `${view} (${module}) is not in the build: name the module that draws it now`
+          );
+          assert.deepStrictEqual(
+            entryModules.filter(isIt),
+            [],
+            `${view} (${module}) is in the entry's static closure`
           );
         }
       }),

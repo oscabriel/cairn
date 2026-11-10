@@ -1,7 +1,8 @@
 // The `next` app's layout (plan look track L6), drawn in the root's boundary: the shell's left
 // column (or the phone's sheet), and beside it the open page under the new chat header, with the
 // hold banner above a thread's transcript, and beside the chat column the work panel (plan 6E) or
-// the goal panel (plan 6H) while one is open (a bottom sheet under `lg`); the scratch overlay, the refresh confirm, the add-project
+// the goal panel (plan 6H) while one is open and its chunk is in (a bottom sheet under `lg`;
+// `next/page/Chunks.ts`); the scratch overlay, the refresh confirm, the add-project
 // picker and the rename and remove dialog float over it. An earlier project thread is read only:
 // a bar in place of the composer leads to the project thread (ADR 0048). The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
 // (the transcript, the composer, the hero and settings pages, the diff toggle) are the root's
@@ -14,16 +15,17 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { Message } from "../../Message.ts";
 import type { Model } from "../../Model.ts";
 import { classNames } from "../../ui/ClassNames.ts";
+import { chunkModule } from "../page/Chunks.ts";
 import * as Thread from "../page/Thread.ts";
 import { FONT_UI } from "../ui/Classes.ts";
 import { connectionMark } from "./ConnectionMark.ts";
-import { goalChipView, goalInputsOf, goalPanelView } from "./Goal.ts";
+import { goalChipView, goalInputsOf } from "./Goal.ts";
 import { chatHeaderBand } from "./Header.ts";
 import * as Hold from "./Hold.ts";
 import type { Message as ShellMessage } from "./Message.ts";
 import { scratchBody, scratchPanel } from "./Scratch.ts";
 import * as Shell from "./View.ts";
-import { workInputsOf, workPanelView, workToggleView } from "./Work.ts";
+import { workInputsOf, workToggleView } from "./Work.ts";
 
 /** The root's regions the layout places. */
 export interface ShellRegions {
@@ -142,19 +144,27 @@ const routeBody = (
               ...lane(h, model, regions),
             ]
           ),
-          h.submodel({
-            slotId: "work-panel",
-            model: model.nextShell.work,
-            view: workPanelView,
-            viewInputs: work,
-            toParentMessage: toShell,
+          Option.match(chunkModule("workPanel"), {
+            onNone: () => h.empty,
+            onSome: ({ workPanelView }) =>
+              h.submodel({
+                slotId: "work-panel",
+                model: model.nextShell.work,
+                view: workPanelView,
+                viewInputs: work,
+                toParentMessage: toShell,
+              }),
           }),
-          h.submodel({
-            slotId: "goal-panel",
-            model: model.nextShell.goal,
-            view: goalPanelView,
-            viewInputs: goal,
-            toParentMessage: toShell,
+          Option.match(chunkModule("goalPanel"), {
+            onNone: () => h.empty,
+            onSome: ({ goalPanelView }) =>
+              h.submodel({
+                slotId: "goal-panel",
+                model: model.nextShell.goal,
+                view: goalPanelView,
+                viewInputs: goal,
+                toParentMessage: toShell,
+              }),
           }),
         ]
       ),

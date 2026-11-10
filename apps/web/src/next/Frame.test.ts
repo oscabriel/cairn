@@ -4,7 +4,7 @@
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
-import { Option } from "effect";
+import { Effect, Option } from "effect";
 import { Mount } from "foldkit";
 import type { HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
@@ -24,9 +24,13 @@ import { ObserveList } from "../timeline/list/Place.ts";
 import { update } from "../Update.ts";
 import { view } from "./Frame.ts";
 import { hooksOf } from "./Hooks.ts";
+import { fetchChunk } from "./page/Chunks.ts";
 import { LoadScratch, LookUpEarlierThread } from "./shell/Command.ts";
 import { Message as ShellMessage } from "./shell/Message.ts";
 import { initial as initialShell } from "./shell/Model.ts";
+
+// The settings page is its own chunk (`page/Chunks.ts`); the frame draws it once it is in.
+await Effect.runPromise(fetchChunk("settings"));
 
 /** A live page on `route`, its shell told the same route, as the root's sync tells it. */
 const onRoute = (route: AppRoute): Model => ({

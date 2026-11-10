@@ -27,7 +27,6 @@ import { editorView } from "../../composer/Editor.ts";
 import { icon } from "../../composer/Icon.ts";
 import { Message } from "../../composer/Message.ts";
 import type { Model } from "../../composer/Model.ts";
-import { popoverView } from "../../composer/Popovers.ts";
 import { queuedInputs } from "../../composer/Queue.ts";
 import type { QueuedInput } from "../../composer/Queue.ts";
 import {
@@ -36,6 +35,7 @@ import {
   menuOptionId,
 } from "../../composer/TriggerMenu.ts";
 import { isThreadRunning } from "../../composer/Update.ts";
+import { chunkModule } from "../page/Chunks.ts";
 import { TYPE } from "../ui/Classes.ts";
 import {
   BODY_CLASS,
@@ -187,7 +187,11 @@ export const cardView = (
       h.Class("relative"),
     ],
     [
-      popoverView(model, h),
+      // The popovers are their own chunk (`next/page/Chunks.ts`), asked for when one opens.
+      Option.match(chunkModule("popovers"), {
+        onNone: () => h.empty,
+        onSome: ({ popoverView }) => popoverView(model, h),
+      }),
       triggerMenuView(model, h),
       h.form(
         [

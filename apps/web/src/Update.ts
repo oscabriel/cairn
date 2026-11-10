@@ -69,6 +69,7 @@ import type { Message as MetersMessage } from "./next/meters/Message.ts";
 import { initial as initialMeters } from "./next/meters/Model.ts";
 import type { MetersPage, Model as MetersModel } from "./next/meters/Model.ts";
 import { meters as Meters } from "./next/meters/Update.ts";
+import * as Chunks from "./next/page/Chunks.ts";
 import * as Hold from "./next/shell/Hold.ts";
 import { OutMessage as NextShellOutMessage } from "./next/shell/Message.ts";
 import type { Message as NextShellMessage } from "./next/shell/Message.ts";
@@ -749,6 +750,59 @@ const syncMeters: Step = (model) => {
   return Meters.sameContext(model.meters, context)
     ? { model }
     : informMeters(model, context);
+};
+
+const toGotChunkMessage = (message: Chunks.Message): Message =>
+  Message.GotChunkMessage({ message });
+
+const readChunks = (model: Model): Option.Option<Chunks.Model> =>
+  Option.some(model.chunks);
+
+const writeChunks = (model: Model, chunks: Chunks.Model): Model =>
+  modifyFields(model, { chunks: () => chunks });
+
+/** A chunk its view waited for failed: the notice bar says which, and to reload. */
+const foldChunkOutMessage = (outMessage: Chunks.OutMessage): Step =>
+  Chunks.OutMessage.match<Step>(outMessage, {
+    FailedChunk:
+      ({ chunk }) =>
+      (model) => ({
+        model: modifyFields(model, {
+          notice: () => Option.some(Chunks.failureNotice(chunk)),
+        }),
+      }),
+  });
+
+const foldChunkMessage = Update.foldChild({
+  update: Chunks.update,
+  read: readChunks,
+  write: writeChunks,
+  toParentMessage: toGotChunkMessage,
+  foldOutMessage: foldChunkOutMessage,
+});
+
+/** Starts the warm-up that fetches every chunk once the page is interactive. */
+const startChunks = Update.foldChildStep({
+  update: Chunks.start,
+  read: readChunks,
+  write: writeChunks,
+  toParentMessage: toGotChunkMessage,
+});
+
+const wantChunks = Update.foldChild({
+  update: Chunks.want,
+  read: readChunks,
+  write: writeChunks,
+  toParentMessage: toGotChunkMessage,
+});
+
+/** Asks for the chunks of the views the page now draws (W-8: they are not in the entry). */
+const syncChunks: Step = (model) => {
+  const wanted = Chunks.wantedChunks(model);
+
+  return Chunks.isServed(model.chunks, wanted)
+    ? { model }
+    : wantChunks(model, wanted);
 };
 
 /** Tells the sidebar the shell, the open page and the connection, when they changed. */
@@ -1574,6 +1628,10 @@ const step = (received: Message): Step =>
       ({ message: metersMessage }) =>
       (model) =>
         foldMetersMessage(model, metersMessage),
+    GotChunkMessage:
+      ({ message: chunkMessage }) =>
+      (model) =>
+        foldChunkMessage(model, chunkMessage),
   });
 
 /** The root update. */
@@ -1593,6 +1651,7 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncScratchThread,
     syncRequestCard,
     syncMeters,
+    syncChunks,
   ]);
 };
 
@@ -1633,6 +1692,7 @@ export const init: Runtime.RoutingApplicationInit<
       scratchThread: Thread.Model.initial,
       requestCard: initialRequestCard,
       meters: initialMeters,
+      chunks: Chunks.initial,
     }),
     toParentMessage: toGotComposerMessage,
   });
@@ -1652,6 +1712,8 @@ export const init: Runtime.RoutingApplicationInit<
     syncScratchThread,
     syncRequestCard,
     syncMeters,
+    startChunks,
+    syncChunks,
   ]);
 
   return {

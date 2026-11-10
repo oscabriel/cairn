@@ -21,6 +21,7 @@
 import { assert } from "@effect/vitest";
 import { Duration, Effect, Option } from "effect";
 
+import { slackened, TEST_SLACK } from "../../EventuallyTestKit.ts";
 import {
   isSubagentScenario,
   passingOn,
@@ -44,9 +45,11 @@ import type { Scenario } from "./Transcript.ts";
  * line is `subagent_reply_escalate_reason_bounded`'s wait for the escalation: the faux model
  * streams two 4,000-character arguments, a second of streaming at its rate. With three runs of
  * this folder at once that wait took at most 1.4 s once the faux model streamed in large deltas
- * (`Targets.ts`); in small ones it passed this timeout in five of nine such runs.
+ * (`Targets.ts`); in small ones it passed this timeout in five of nine such runs. It is the judge's
+ * own number, scaled by the test slack like every test deadline: the control runs at the same
+ * scaled timeout, so a timeout alone still never counts as a caught mutation.
  */
-const MUTATION_TIMEOUT = Duration.millis(2500);
+const MUTATION_TIMEOUT = slackened(Duration.millis(2500));
 
 /** Scenarios each broken side must fail, all mutations together and each alone (ADR 0024). */
 const GATE = 5;
@@ -176,7 +179,7 @@ const registerControl = (runner: Runner, side: Side) => {
             "the unmutated harness fails at the mutation check's timeout, so its counts mean nothing"
           );
         }),
-      300_000
+      300_000 * TEST_SLACK
     );
   });
 };
@@ -229,7 +232,7 @@ export const registerMutationCheck = (
             `${broken} failed fewer than ${gate} ${scenarioKind}`
           );
         }),
-      300_000
+      300_000 * TEST_SLACK
     );
   });
 };

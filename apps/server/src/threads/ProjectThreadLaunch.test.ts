@@ -9,17 +9,11 @@ import { RequestId } from "@cairn/protocol/Ids";
 import { RootWorkspace } from "@cairn/protocol/Launch";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import {
-  Duration,
-  Effect,
-  FileSystem,
-  Option,
-  Predicate,
-  Schedule,
-} from "effect";
+import { Effect, FileSystem, Option, Predicate } from "effect";
 import type { Layer } from "effect";
 
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import { eventually } from "../EventuallyTestKit.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
 import { EventSink } from "../shell/EventSink.ts";
@@ -103,18 +97,6 @@ const liveState = Effect.fn("test.liveState")(function* (threadId: ThreadId) {
 const isRunning = (
   state: Option.Option<{ readonly runId: Option.Option<unknown> }>
 ) => Option.exists(state, (live) => Option.isSome(live.runId));
-
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  check: (value: A) => boolean
-) =>
-  read.pipe(
-    Effect.repeat({
-      until: check,
-      schedule: Schedule.spaced(Duration.millis(10)),
-    }),
-    Effect.timeout(Duration.seconds(5))
-  );
 
 describe("launching the project thread", () => {
   it.live("the first launch marks it; a refresh stops and archives it", () =>

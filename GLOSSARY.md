@@ -192,6 +192,8 @@ _Avoid_: provider adapter, harness (alone)
 
 **Conformance suite**: The replay scenarios in `apps/server/src/brain/conformance/` whose hand-written expectations judge every harness behind the seam (ADR 0024).
 
+**Test slack**: The factor every test deadline scales by (`CAIRN_TEST_SLACK`, at least 1): a half plus the one-minute load average per core, which `pnpm check` reads when it starts and `vitest.config.ts` reads for a run outside the gate, unless the caller names one. It stretches `eventually`'s deadline, Vitest's test and hook limits, and the conformance suite's and mutation check's timeouts alike, so a quiet machine runs the tests' own numbers and a busy one does not fail on time alone. _Avoid_: timeout multiplier.
+
 **Bridge**: Cairn's Claude provider, which serves the Claude subscription to pi-durable through the unmodified `claude` binary.
 
 _Avoid_: Claude provider, proxy

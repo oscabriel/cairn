@@ -27,21 +27,15 @@ import {
   Stream,
 } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
+import { eventually } from "../EventuallyTestKit.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { BrainOpenTimeout } from "./BrainOpenTimeout.ts";
 import { BrainStore } from "./BrainStore.ts";
+import { brainExtensions } from "./BrainTestKit.ts";
 import { CommitFeed } from "./CommitFeed.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
@@ -100,14 +94,7 @@ const brainLayer = (dataDir: string, failNext: { value: boolean }) => {
     Layer.provideMerge(
       Brain.layerNoDeps.pipe(Layer.provide(store), Layer.provide(Arms.layer))
     ),
-    Layer.provide(ExtensionSet.layer),
-    Layer.provide(ExecutorLink.layerDisabled),
-    Layer.provide(PiHost.layerEmpty),
-    Layer.provide(ModelHealth.layerTest),
-    Layer.provide(SettingsStore.layerTest),
-    Layer.provide(ReachServicesTest),
-    Layer.provide(Subagents.layerTest),
-    Layer.provide(PiModelSource.layerFromModelSource),
+    Layer.provide(brainExtensions()),
     Layer.provideMerge(
       ModelSource.layerFaux({
         tokensPerSecond: 2000,
@@ -142,22 +129,6 @@ const withBrain = <A, E>(
         rmSync(dataDir, { recursive: true, force: true });
       })
   );
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A>(find: Effect.Effect<Option.Option<A>>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return Option.none<A>();
-  });
 
 describe("Brain supervisor", () => {
   it.live(
@@ -225,10 +196,11 @@ describe("Brain supervisor", () => {
             whenBusy: "followUp",
           });
 
-          const terminal = yield* waitFor(
+          const terminal = yield* eventually(
             Effect.map(Ref.get(events), (all) =>
               Option.fromUndefinedOr(all.find((event) => isRunTerminal(event)))
-            )
+            ),
+            Option.isSome
           );
 
           assert.deepStrictEqual(yield* Ref.get(generations), [1, 2]);
@@ -306,10 +278,11 @@ describe("Brain supervisor", () => {
               whenBusy: "followUp",
             })
           );
-          yield* waitFor(
+          yield* eventually(
             Effect.map(Ref.get(generations), (all) =>
               all.includes(2) ? Option.some(true) : Option.none()
-            )
+            ),
+            Option.isSome
           );
           yield* Effect.sleep(Duration.millis(500));
 
@@ -321,10 +294,11 @@ describe("Brain supervisor", () => {
           // Boot's resume, after its repairs, lets the reopened Session run.
           yield* brain.resume;
 
-          const ran = yield* waitFor(
+          const ran = yield* eventually(
             Effect.map(Ref.get(called), (found) =>
               found ? Option.some(true) : Option.none()
-            )
+            ),
+            Option.isSome
           );
 
           assert.isTrue(Option.isSome(ran));
@@ -383,14 +357,7 @@ describe("Brain supervisor", () => {
             const layer = Brain.layerNoDeps.pipe(
               Layer.provide(gated),
               Layer.provide(Arms.layer),
-              Layer.provide(ExtensionSet.layer),
-              Layer.provide(ExecutorLink.layerDisabled),
-              Layer.provide(PiHost.layerEmpty),
-              Layer.provide(ModelHealth.layerTest),
-              Layer.provide(SettingsStore.layerTest),
-              Layer.provide(ReachServicesTest),
-              Layer.provide(Subagents.layerTest),
-              Layer.provide(PiModelSource.layerFromModelSource),
+              Layer.provide(brainExtensions()),
               Layer.provideMerge(
                 ModelSource.layerFaux({
                   tokensPerSecond: 2000,
@@ -499,14 +466,7 @@ describe("Brain supervisor", () => {
             const layer = Brain.layerNoDeps.pipe(
               Layer.provide(store),
               Layer.provide(Arms.layer),
-              Layer.provide(ExtensionSet.layer),
-              Layer.provide(ExecutorLink.layerDisabled),
-              Layer.provide(PiHost.layerEmpty),
-              Layer.provide(ModelHealth.layerTest),
-              Layer.provide(SettingsStore.layerTest),
-              Layer.provide(ReachServicesTest),
-              Layer.provide(Subagents.layerTest),
-              Layer.provide(PiModelSource.layerFromModelSource),
+              Layer.provide(brainExtensions()),
               Layer.provideMerge(
                 ModelSource.layerFaux({
                   tokensPerSecond: 2000,

@@ -8,8 +8,9 @@ import { randomBytes } from "node:crypto";
 
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, layer } from "@effect/vitest";
-import { Effect, Schedule } from "effect";
+import { Effect } from "effect";
 
+import { eventuallyTrue as eventually } from "../../apps/server/src/EventuallyTestKit.ts";
 import * as Events from "./Events.ts";
 import * as Unit from "./Unit.ts";
 
@@ -36,13 +37,6 @@ const hasUserSystemd = (() => {
 
 const unitName = (role: string) =>
   `cairn-judge-lib-${role}-${process.pid}-${randomBytes(4).toString("hex")}`;
-
-/** Polls until `check` holds, up to five seconds. */
-const eventually = <E, R>(check: Effect.Effect<boolean, E, R>) =>
-  check.pipe(
-    Effect.filterOrFail((ok) => ok),
-    Effect.retry({ schedule: Schedule.spaced("50 millis"), times: 100 })
-  );
 
 const listeningLine =
   '{"message":"listening","level":"INFO","timestamp":"2026-10-22T09:00:00.000Z","annotations":{"event":"listening","port":4100}}';

@@ -23,6 +23,7 @@ import path from "node:path";
 import { assert } from "@effect/vitest";
 import { Duration, Effect, Option, Result } from "effect";
 
+import { slackened, TEST_SLACK } from "../../EventuallyTestKit.ts";
 import {
   registerHarnessConformance,
   runScenario,
@@ -105,9 +106,12 @@ export const passingOn = (side: Side) =>
 const pendingOn = (side: Side) =>
   scenarios.filter((scenario) => PENDING[side].has(scenario.name));
 
-/** The suite's run options: no mutation, and a timeout long enough that only a fault trips it. */
+/**
+ * The suite's run options: no mutation, and a timeout long enough that only a fault trips it (five
+ * seconds on a quiet machine, scaled by the test slack).
+ */
 export const SUITE_OPTIONS: RunOptions = {
-  timeout: Duration.seconds(5),
+  timeout: slackened(Duration.seconds(5)),
   mutations: new Set<Mutation>(),
   awaitAtRest: false,
 };
@@ -181,7 +185,7 @@ export const registerSide = (runner: Runner, side: Side) => {
             `these scenarios now pass on the ${side} harness: remove them from PENDING`
           );
         }),
-      300_000
+      300_000 * TEST_SLACK
     );
   });
 };

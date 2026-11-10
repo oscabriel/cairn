@@ -33,24 +33,16 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
+import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
 import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
-import { BrainConfig } from "./BrainConfig.ts";
-import { Approvals, ThreadMeta, UNDECIDED } from "./CairnDocs.ts";
+import { testBrain } from "./BrainTestKit.ts";
+import { UNDECIDED, Approvals, ThreadMeta } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
+import { FAUX_MODEL } from "./ModelSource.ts";
 import { piConversationId } from "./PiIds.ts";
 
 const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d1");
@@ -94,41 +86,9 @@ const SubagentsDoc = defineDoc<SubagentsState>({
 });
 
 const harnessLayer = (dataDir: string) =>
-  PiDurableHarness.layer.pipe(
-    Layer.provide(
-      ExtensionSet.layer.pipe(
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(Subagents.layerTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
-    ),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 2000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
-    Layer.provide(BrainConfig.layerFrom(dataDir))
-  );
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A>(find: Effect.Effect<Option.Option<A>>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
+  testBrain({
+    dataDir,
+    model: { tokensPerSecond: 2000, settings: { retry: { enabled: false } } },
   });
 
 interface Fixture {

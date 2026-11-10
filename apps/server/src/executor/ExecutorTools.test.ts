@@ -10,6 +10,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer, Option, Result } from "effect";
 
 import { ApprovalLedgerError } from "../brain/CairnDocs.ts";
+import { eventuallyTrue } from "../EventuallyTestKit.ts";
 import { ExecutorGrant, ExecutorGrantError } from "./ExecutorGrant.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
 import { INTERRUPTED, REFUSED, RERUN_AFTER_START } from "./ExecutorReply.ts";
@@ -542,16 +543,6 @@ describe("the link under a failing Executor or store", () => {
   );
 });
 
-/** Polls `done` every 10 ms until it holds, for up to five seconds. */
-const eventually = (done: () => boolean) =>
-  Effect.gen(function* () {
-    for (let tries = 0; tries < 500 && !done(); tries += 1) {
-      yield* Effect.sleep("10 millis");
-    }
-
-    assert.isTrue(done(), "the condition never held");
-  });
-
 /** Consents on `page` as the user's browser would, then answers Cairn's callback. */
 const consentAndCallBack = (fake: FakeExecutorHandle, page: string) =>
   Effect.gen(function* () {
@@ -596,7 +587,9 @@ describe("a sign-in beside other flows", () => {
 
           const signingIn = yield* Effect.forkChild(link.signIn);
 
-          yield* eventually(() => fake.state.registersHeld === 1);
+          yield* eventuallyTrue(
+            Effect.sync(() => fake.state.registersHeld === 1)
+          );
 
           const calling = yield* Effect.forkChild(
             link.call("skills", {}).pipe(Effect.result)

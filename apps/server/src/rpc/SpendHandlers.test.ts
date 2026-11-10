@@ -6,9 +6,10 @@
 
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
-import { Duration, Effect, Option, Predicate, Ref, Result } from "effect";
+import { Effect, Option, Predicate, Ref, Result } from "effect";
 
 import { FREE_KEY, SpendScript, usageOf } from "../brain/SpendTestKit.ts";
+import { eventuallyTrue as eventually } from "../EventuallyTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { BudgetGuard } from "../usage/BudgetGuard.ts";
@@ -25,20 +26,6 @@ import { declareBudget, readBudget } from "./SpendHandlers.ts";
 const ROOT = testThreadId(1);
 
 const CHILD = testThreadId(2);
-
-/** Waits (up to two seconds) until `check` holds. */
-const eventually = (check: Effect.Effect<boolean>) =>
-  Effect.gen(function* () {
-    for (let tries = 0; tries < 100; tries += 1) {
-      if (yield* check) {
-        return true;
-      }
-
-      yield* Effect.sleep(Duration.millis(20));
-    }
-
-    return false;
-  });
 
 const declare = (threadId: typeof ROOT, tokens: number) =>
   Effect.gen(function* () {

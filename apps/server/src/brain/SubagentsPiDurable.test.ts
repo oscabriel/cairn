@@ -38,18 +38,10 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
-import {
-  Context,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Ref,
-  Stream,
-} from "effect";
+import { Context, Effect, Layer, Option, Predicate, Ref, Stream } from "effect";
 import type { Scope } from "effect";
 
+import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
@@ -93,22 +85,6 @@ const QUESTION_TTL_MILLIS = 2000;
 
 /** The entry a user's attachment input is placed as. */
 const STEER_ENTRY = { kind: "cairn.test-attachment", data: { by: "user" } };
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A, E, R>(find: Effect.Effect<Option.Option<A>, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
-  });
 
 /** The first event `pick` accepts, waited for. */
 const eventWhere = <A>(

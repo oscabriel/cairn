@@ -19,12 +19,12 @@ import {
   Option,
   Ref,
   References,
-  Schedule,
 } from "effect";
 import type { Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
+import { eventually } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { Projects } from "../projects/Projects.ts";
@@ -111,19 +111,6 @@ const row = Effect.fn("test.row")(function* (threadId: ThreadId) {
 
   return Option.getOrThrow(found).shell;
 });
-
-/** Polls `check` until it holds, for up to five seconds. */
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  check: (value: A) => boolean
-) =>
-  read.pipe(
-    Effect.repeat({
-      until: check,
-      schedule: Schedule.spaced(Duration.millis(20)),
-    }),
-    Effect.timeout(Duration.seconds(5))
-  );
 
 const branchesOf = Effect.fn("test.branchesOf")(function* (repo: string) {
   const out = yield* (yield* Git).stdout("test", repo, [

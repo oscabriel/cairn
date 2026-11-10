@@ -17,18 +17,11 @@ import {
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import {
-  Context,
-  Duration,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Schedule,
-} from "effect";
+import { Context, Effect, FileSystem, Layer, Option } from "effect";
 import type { Scope } from "effect";
 import { RpcTest } from "effect/rpc";
 
+import { eventually } from "../EventuallyTestKit.ts";
 import { FolderRules } from "../projects/FolderRules.ts";
 import { folderClaimant, ScratchProject } from "../projects/ScratchProject.ts";
 import { ShellHandlers } from "../rpc/ShellHandlers.ts";
@@ -120,18 +113,6 @@ const withData = <A, E>(
       Effect.provide(layerFor(dataDir, brain))
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
-
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  check: (value: A) => boolean
-) =>
-  read.pipe(
-    Effect.repeat({
-      until: check,
-      schedule: Schedule.spaced(Duration.millis(10)),
-    }),
-    Effect.timeout(Duration.seconds(5))
-  );
 
 const isRunning = Effect.fn("test.isRunning")(function* (threadId: ThreadId) {
   const states = yield* (yield* HarnessSeam).inspect;

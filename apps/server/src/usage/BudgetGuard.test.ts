@@ -15,6 +15,7 @@ import { TestClock } from "effect/testing";
 
 import { RuntimeRequestUpdated } from "../brain/HarnessSeam.ts";
 import { FREE_KEY, SpendScript, usageOf } from "../brain/SpendTestKit.ts";
+import { eventuallyTrue as eventually } from "../EventuallyTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import type { BudgetMode } from "./BudgetBook.ts";
 import { BudgetGuard } from "./BudgetGuard.ts";
@@ -57,20 +58,6 @@ const spend = (conversation: number, thread: typeof ROOT, tokens: number) =>
       responses: [{ modelKey: FREE_KEY, usage: usageOf({ input: tokens }) }],
     });
     yield* settle;
-  });
-
-/** Waits (up to two seconds) until `check` holds. */
-const eventually = (check: Effect.Effect<boolean>) =>
-  Effect.gen(function* () {
-    for (let tries = 0; tries < 100; tries += 1) {
-      if (yield* check) {
-        return true;
-      }
-
-      yield* Effect.sleep(Duration.millis(20));
-    }
-
-    return false;
   });
 
 /** Moves the test clock in 20 ms steps, up to two seconds, until `check` holds. */

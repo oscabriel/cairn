@@ -196,7 +196,7 @@ const cases: ReadonlyArray<RuleCase> = [
     fires:
       'import { Effect } from "effect";\n\nexport const f = async () => await Effect.runPromise(Effect.log("x"));',
     quiet:
-      'import { Context, Effect } from "effect";\n\nexport const f = async () =>\n  await Effect.runPromiseWith(Context.empty())(Effect.log("x"));',
+      'import { Effect } from "effect";\nimport type { Context } from "effect";\n\nexport const f = async (context: Context.Context<never>) =>\n  await Effect.runPromiseWith(context)(Effect.log("x"));',
   },
   {
     code: "automation(no-silent-error-swallow)",

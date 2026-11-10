@@ -291,8 +291,11 @@ export const subagentsExtension = (
 
 /**
  * The task definitions host code creates tasks from. pi-durable runs a task by its registered name,
- * so the installed extension's code runs it, faults included; this copy's code never runs, so its
- * runner has no context to carry.
+ * so the installed extension's code runs its phases, faults included. This copy's own code runs
+ * only inside a host commit (`briefAnswered`, in the answer's commit), and that code must never use
+ * the runner: built at module load, it has no layer context to carry, so a line written through it
+ * would leave the events log. A lifecycle line about that commit belongs to the Effect code that
+ * runs it (`answerApproval`'s `approval_answered`).
  */
 const host = build(
   NO_SUBAGENT_FAULTS,
@@ -303,6 +306,7 @@ const host = build(
   NO_SUBAGENT_CRASHES,
   ADMIT_ALL,
   NO_DEFAULT_BUDGET,
+  // oxlint-disable-next-line automation/no-bare-effect-run -- never used by host code (doc above)
   runnerOf(Context.empty())
 );
 

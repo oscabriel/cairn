@@ -1436,6 +1436,20 @@ export const relayedQuestion = (record: ApprovalRecord) =>
 /** A stored task id as pi-durable types it. */
 const piTaskOf = (id: number) => piTaskId(TaskId.make(id));
 
+/** The lifecycle line of a system cancel: which records of `conversationId` it ended, and why. */
+const cancelledLine =
+  (conversationId: ConversationId, why: CancelWhy) =>
+  (ids: ReadonlyArray<string>) =>
+    Effect.logInfo("approvals cancelled").pipe(
+      Effect.annotateLogs({
+        event: "approvals_cancelled",
+        conversationId,
+        why,
+        cancelled: ids.length,
+        approvalIds: ids.join(","),
+      })
+    );
+
 /** Why the system cancelled a record: a stop, or boot finding its tool task abandoned. */
 export type CancelWhy = "run-stopped" | "boot";
 
@@ -1582,7 +1596,7 @@ export const cancelStoppedApprovals = (
 
         return cancelled.map((record) => record.id);
       }, context)
-  );
+  ).pipe(Effect.tap(cancelledLine(conversationId, "run-stopped")));
 
 /**
  * Whether a held record's tool task will never wait on it again: the task (or an owner up its
@@ -1639,14 +1653,20 @@ export const answerApproval = (
 ): Effect.Effect<AnswerOutcome, DurableCallError> =>
   durable("approvals.answer", async (context) => {
     const link = await session.snapshot(ChildDoc, conversationId, context);
+    // The record's status as the commit left it, copied out for the lifecycle line.
+    let status: string | null = null;
 
-    return await session.commit(async (tx): Promise<AnswerOutcome> => {
+    const taken = await session.commit(async (tx): Promise<AnswerOutcome> => {
+      status = null;
+
       const { items } = await tx.doc(Approvals, conversationId);
       const record = items[approvalId];
 
       if (record === undefined) {
         return "not_found";
       }
+
+      ({ status } = record);
 
       // A mirror is answered through its open escalation entry, which is also its authorization
       // (ADR 0027): a pending mirror with none was never escalated here.
@@ -1690,6 +1710,8 @@ export const answerApproval = (
 
       const outcome = applyAnswer(record, answer, now);
 
+      ({ status } = record);
+
       if (outcome !== "answered") {
         return outcome;
       }
@@ -1705,7 +1727,28 @@ export const answerApproval = (
 
       return outcome;
     }, context);
-  });
+
+    return { outcome: taken, status };
+  }).pipe(
+    Effect.tap(({ outcome, status }) =>
+      Effect.logInfo(
+        outcome === "answered"
+          ? "approval answered"
+          : "approval answer not taken"
+      ).pipe(
+        Effect.annotateLogs({
+          event: "approval_answered",
+          conversationId,
+          approvalId,
+          outcome,
+          status,
+          decision: answer.decision,
+          decidedBy: answer.by.kind,
+        })
+      )
+    ),
+    Effect.map(({ outcome }) => outcome)
+  );
 
 /**
  * Cancels, in one transaction, every record of one conversation that a run held and whose tool
@@ -1746,7 +1789,7 @@ export const cancelAbandonedApprovals = (
 
         return cancelled.map((record) => record.id);
       }, context)
-  );
+  ).pipe(Effect.tap(cancelledLine(conversationId, why)));
 
 /** How many conversations one page of the boot scan reads. */
 const SCAN_PAGE = 200;

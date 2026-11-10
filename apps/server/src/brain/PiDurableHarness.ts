@@ -336,6 +336,24 @@ const agentChange = (change: ThreadAgentChange) => {
   return agent;
 };
 
+/**
+ * The journal's map from a thread to its conversation, once per thread a process binds: the brain's
+ * lifecycle lines name the conversation, the user sees the thread (coding standard S57).
+ */
+const bound = (
+  threadId: ThreadId,
+  conversationId: number,
+  how: "created" | "ensured" | "found"
+) =>
+  Effect.logInfo("thread bound to its conversation").pipe(
+    Effect.annotateLogs({
+      event: "thread_bound",
+      threadId,
+      conversationId,
+      how,
+    })
+  );
+
 const layerNoDeps = Layer.effectContext(
   Effect.gen(function* () {
     const brain = yield* Brain;
@@ -394,6 +412,7 @@ const layerNoDeps = Layer.effectContext(
         );
 
         conversations.set(threadId, id);
+        yield* bound(threadId, id, "found");
 
         return id;
       }
@@ -485,6 +504,11 @@ const layerNoDeps = Layer.effectContext(
       const conversationId = ConversationId.make(result.id);
 
       conversations.set(input.threadId, piConversationId(conversationId));
+      yield* bound(
+        input.threadId,
+        conversationId,
+        result.created ? "created" : "ensured"
+      );
       yield* PubSub.publish(ensured, input.threadId);
 
       return {

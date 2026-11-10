@@ -458,6 +458,14 @@ type Reserved =
   | { readonly kind: "waiting"; readonly row: NodeItemState }
   | { readonly kind: "problem"; readonly text: string };
 
+/** The admission line's words for what the reserve found or made. */
+const admissionMessage: Readonly<Record<Reserved["kind"], string>> = {
+  running: "workflow node admitted",
+  ended: "workflow node already ended",
+  waiting: "workflow node still waits for its own brief",
+  problem: "workflow node not admitted",
+};
+
 /** What the reserve commit is given, read before it. */
 interface ReserveInput {
   readonly nodeId: string;
@@ -1789,9 +1797,14 @@ export const workflowExtension = (
     );
 
     run.line(
-      Option.isSome(held)
-        ? "workflow node held for its usage limit"
-        : "workflow node not held",
+      Option.match(held, {
+        onNone: () => "workflow node not held",
+        // A rerun that finds this attempt already counted goes on at once.
+        onSome: (until) =>
+          until === 0
+            ? "workflow node hold already counted"
+            : "workflow node held for its usage limit",
+      }),
       {
         event: "workflow_node_held",
         conversationId: api.conversationId,
@@ -2102,11 +2115,18 @@ export const workflowExtension = (
     const { dispatch } = input;
     const first = await reserve(api, input, context);
 
-    /** The node's lifecycle line: `message`, with how it stands (`outcome`, `state`). */
+    /**
+     * The node's lifecycle line: `message`, with how it stands (`outcome`, its row's state) and,
+     * once it has one, its child's thread and conversation, so the journal maps the node's thread
+     * to its conversation.
+     */
     const nodeLine = (
       message: string,
       outcome: string,
-      state: string | null
+      row:
+        | (Pick<NodeItemState, "state"> &
+            Partial<Pick<NodeItemState, "childThreadId" | "conversationId">>)
+        | null
     ) => {
       run.line(message, {
         event: "workflow_node",
@@ -2115,7 +2135,9 @@ export const workflowExtension = (
         workflowId: dispatch.workflowId,
         nodeId: input.nodeId,
         outcome,
-        state,
+        state: row?.state ?? null,
+        childThreadId: row?.childThreadId ?? null,
+        childConversationId: row?.conversationId ?? null,
       });
     };
 
@@ -2129,11 +2151,9 @@ export const workflowExtension = (
         : first;
 
     nodeLine(
-      reserved.kind === "running"
-        ? "workflow node admitted"
-        : "workflow node not admitted",
+      admissionMessage[reserved.kind],
       reserved.kind,
-      reserved.kind === "problem" ? null : reserved.row.state
+      reserved.kind === "problem" ? null : reserved.row
     );
 
     if (reserved.kind === "waiting") {
@@ -2199,10 +2219,7 @@ export const workflowExtension = (
     nodeLine(
       "workflow node settled",
       Result.isSuccess(ending) ? "answered" : "failed",
-      Option.match(settled, {
-        onNone: () => null,
-        onSome: (found) => found.state,
-      })
+      Option.getOrNull(settled)
     );
 
     if (Option.isSome(settled) && settled.value.state === "stopped") {

@@ -7,10 +7,10 @@
 // - the allowlist: a package no policy names never runs its code, one outside its version ranges
 //   loads nothing, one inside any of them loads, and one that registers a provider is dropped
 //   while boot goes on.
-//
-// The user's real pi packages are judged by `judges/pi-host.ts`, outside the gate.
 // - the pool: concurrent first calls in one folder share one start, the least recently used idle
 //   folder is shut down past the limit, and closing the host shuts every instance down.
+//
+// The user's real pi packages are judged by `judges/pi-host.ts`, outside the gate.
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";

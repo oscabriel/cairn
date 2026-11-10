@@ -415,19 +415,24 @@ const checkReal = (
         ? Option.none()
         : Option.some(other(`the host did not load ${name}`));
 
-    const verdict = PackageDecision.$match(
-      decidePackage(PI_HOST_POLICY, name, installedVersion(name)),
-      {
-        Allowed: notLoaded,
-        NotAllowed: notLoaded,
-        OutOfRange: ({ policy, version }) =>
-          Option.some(
-            other(
-              `${name} ${version} is installed, but the allowlist admits ${policy.versions.join(", ")}: vet that version, then add its range to PiHostPolicy.ts`
-            )
-          ),
-      }
-    );
+    const version = installedVersion(name);
+
+    const verdict = Option.isNone(version)
+      ? Option.some(
+          other(
+            `${name} is not installed under ${path.join(userAgent, "npm", "node_modules")} (or its package.json is unreadable)`
+          )
+        )
+      : PackageDecision.$match(decidePackage(PI_HOST_POLICY, name, version), {
+          Allowed: notLoaded,
+          NotAllowed: notLoaded,
+          OutOfRange: ({ policy, version: found }) =>
+            Option.some(
+              other(
+                `${name} ${found} is installed, but the allowlist admits ${policy.versions.join(", ")}: vet that version, then add its range to PiHostPolicy.ts`
+              )
+            ),
+        });
 
     failures.push(...Option.toArray(verdict));
   }

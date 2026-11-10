@@ -37,6 +37,7 @@ import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
+import { isolatePiSetup } from "../models/PiConfigTestKit.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
@@ -57,6 +58,9 @@ import {
   requestImages,
 } from "./ProviderRequestExtension.ts";
 import { UploadTokens } from "./UploadTokens.ts";
+
+// The pi-durable brain below builds the brain's own pi setup: an empty one, never the user's.
+isolatePiSetup();
 
 const NONCES = ["heron-5821", "quartz-1907", "lantern-4466"];
 

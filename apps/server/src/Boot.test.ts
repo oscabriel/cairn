@@ -57,6 +57,7 @@ import { Identity, IdentityRefused, USER_HEADER } from "./http/Identity.ts";
 import { BootJson } from "./http/Static.ts";
 import { PeerPath } from "./load/PeerPath.ts";
 import { ModelHealth } from "./models/ModelHealth.ts";
+import { isolatePiSetup } from "./models/PiConfigTestKit.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { PushLayer } from "./push/PushLayer.ts";
@@ -86,6 +87,9 @@ import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
 import { START_TASK } from "./subagents/SubagentTasks.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
+
+// The pi-durable brains below build the brain's own pi setup: an empty one, never the user's.
+isolatePiSetup();
 
 const unsupported = (operation: string) =>
   Effect.die(`the fake harness does not ${operation}`);

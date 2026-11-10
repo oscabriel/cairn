@@ -23,13 +23,12 @@ import {
   parseFrozenRound,
   sha256,
   shotVerdict,
+  TOKENS_PATH,
   tokensFinding,
 } from "./lib/LookFreeze.ts";
 import type { FrozenRound, Image } from "./lib/LookFreeze.ts";
 
 const root = path.join(import.meta.dirname, "..");
-
-const TOKENS_PATH = "apps/web/src/tokens.css";
 
 const tokens = readFileSync(path.join(root, TOKENS_PATH), "utf-8");
 

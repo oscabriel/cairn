@@ -92,6 +92,7 @@ import {
   sha256,
   shotName,
   shotVerdict,
+  TOKENS_PATH,
   tokensFinding,
 } from "./lib/LookFreeze.ts";
 import type { FrozenRound, ShotVerdict } from "./lib/LookFreeze.ts";
@@ -112,8 +113,6 @@ import { recordOnExit } from "./lib/Record.ts";
 recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
-
-const TOKENS_PATH = "apps/web/src/tokens.css";
 
 const FROZEN_DIR = path.join(root, "judges/look/frozen");
 

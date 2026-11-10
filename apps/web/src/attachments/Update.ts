@@ -494,17 +494,17 @@ const isIn = (saved: SavedAttachments, item: Item, ref: AttachmentRef) =>
  * attachment this tab did not add or remove since `written`, so one another tab removed goes and
  * one it added comes in. Items still on their way stay. One this tab took out in a refused save
  * never comes back: a save asked before the refusal answered did not write its removal, so storage
- * may still hold it until a later save does.
+ * may still hold it until a later save does. One this tab holds again (a turn put back into its
+ * draft) is no longer a removal.
  */
 const syncSaved = (
   model: Model,
   written: SavedAttachments,
   stored: SavedAttachments
 ) => {
-  const target = savedWithout(
-    rebaseSaved(written, savedFrom(model.items), stored),
-    model.refusedRemovals
-  );
+  const mine = savedFrom(model.items);
+  const refused = savedWithout(model.refusedRemovals, mine);
+  const target = savedWithout(rebaseSaved(written, mine, stored), refused);
 
   const isGone = (item: Item): boolean =>
     Option.exists(readyRef(item), (ref) => !isIn(target, item, ref));
@@ -518,7 +518,7 @@ const syncSaved = (
     restoreSaved(modifyFields(model, { items: () => kept }), target),
     {
       stored: () => rebaseSaved(written, model.stored, stored),
-      refusedRemovals: (refused) => savedWithin(refused, stored),
+      refusedRemovals: () => savedWithin(refused, stored),
     }
   );
 

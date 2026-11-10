@@ -41,11 +41,13 @@
 // About 70 MB a year without it (the workflows note, "Operations").
 
 import { ConversationId, EntryId } from "@cairn/protocol/Ids";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import {
   EventEnvelope,
   EventName,
   EVENTS_DOCUMENT,
 } from "@cairn/protocol/Workflows";
+import type { EventsDocument } from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   Cursor,
@@ -58,22 +60,11 @@ import { DateTime, Option, Predicate, Schema } from "effect";
 
 import { piConversationId, piEntryId } from "./PiIds.ts";
 
-/** Where one reactor has read to: its log and the last entry it passed there (null: none yet). */
-export interface EventCursorState {
-  [key: string]: JsonValue;
-  logConversationId: number;
-  entryId: number | null;
-}
+/** `cairn.events` state: the protocol's `EventsDocument` as its writer holds it. */
+export type EventsState = DocumentState<typeof EventsDocument>;
 
-/** `cairn.events` state; the plain JSON form of the protocol's `EventsDocument`. */
-export interface EventsState {
-  [key: string]: JsonValue;
-  /** The current log; null until the first event. */
-  logConversationId: number | null;
-  /** The UTC month the current log covers, `YYYY-MM`. */
-  logMonth: string | null;
-  cursors: { [reactor: string]: EventCursorState };
-}
+/** Where one reactor has read to: its log and the last entry it passed there (null: none yet). */
+export type EventCursorState = EventsState["cursors"][string];
 
 /** `cairn.events`: the current log and each reactor's cursor (session scope). */
 export const EventsDoc = defineDoc<EventsState>({

@@ -66,7 +66,7 @@ const node = (index: number, overrides: Json = {}): Row => ({
   index,
   requestId: `wf-wf-1-n-${String(100 + index)}`,
   briefId: "launch-wf-1",
-  role: "faux/scripted",
+  model: "faux/scripted",
   provider: "faux",
   modelId: "kit",
   effort: null,

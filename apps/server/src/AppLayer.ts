@@ -140,7 +140,7 @@ export const ModelHealthLive = ModelHealth.layerNoDeps.pipe(
 
 /**
  * The server settings over the database. One reference, which `AppLayer` uses and each entry point
- * gives `PiDurableBrain` (the `roles` tool reads the role table from it).
+ * gives `PiDurableBrain` (the `models` tool and the brain's budgets read it).
  */
 export const SettingsLive = SettingsStore.layerNoDeps.pipe(
   Layer.provide(DatabaseLive)
@@ -229,7 +229,7 @@ export const withCatalog = <E, R>(models: Layer.Layer<ModelSource, E, R>) =>
  * it after the repairs. The `cairn.reach` tools' `Artifacts` and `PortalTools` are the entry
  * point's too: `ReachLive`, as `AppLayer` uses. `ModelHealth`, which the set's health feed records into, is left to the
  * entry point: `ModelHealthLive`, the reference `AppLayer` uses, so one store serves both; so is
- * `SettingsStore` (`SettingsLive`), which the `roles` tool reads. The models layer is also
+ * `SettingsStore` (`SettingsLive`), which the brain's tools read. The models layer is also
  * exposed, so the app's catalog and title model read the same runtime the harness does.
  */
 export const PiDurableBrain = <Models = never>(options: {

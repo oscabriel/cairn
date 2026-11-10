@@ -7,7 +7,7 @@
 // transient failures inside five minutes with no success between, which lapses `TRANSIENT_HOLD_MS`
 // after the newest of them so one request can find out), a usage limit as its own state
 // (`limited` until the reset a Codex limit names; a limit that names none, as OpenCode Go's and the
-// Claude plan's, lifts at the next success or after `UNSTATED_LIMIT_MS`, so role resolution sends one
+// Claude plan's, lifts at the next success or after `UNSTATED_LIMIT_MS`, so a model check sends one
 // request an hour to find out; a quota or billing exhaustion pi-ai will not retry is such a limit);
 // pi-ai's credential errors (no API key, a token with no account id, a failed refresh) as auth;
 // request-specific failures (bad request, unknown model, context
@@ -59,7 +59,7 @@ export const STREAK_WINDOW_MS = 5 * 60_000;
 
 /**
  * How long a transient streak holds a provider failing after its newest failure. The failures are
- * transient and role resolution never sends to a failing provider, so without this no success would
+ * transient and a model check never sends to a failing provider, so without this no success would
  * ever come to clear the streak; after it one request finds out, and three more failures inside
  * `STREAK_WINDOW_MS` mark the provider again.
  */
@@ -67,7 +67,7 @@ export const TRANSIENT_HOLD_MS = 15 * 60_000;
 
 /**
  * How long a usage limit that names no reset holds without a success. OpenCode Go's monthly limit
- * and a spent Claude window say nothing about when they lift, and role resolution never sends to a
+ * and a spent Claude window say nothing about when they lift, and a model check never sends to a
  * limited provider, so without this ceiling no success would ever come to clear one. After it the
  * provider reads as it did before the limit; one more limited answer marks it again.
  */
@@ -612,8 +612,8 @@ const reportOf = (
 };
 
 /**
- * Each provider's health, fed by the outcomes of its responses and runs, so role resolution can
- * pass over a provider that is failing or limited. Kept in memory and in `model_health`, so a
+ * Each provider's health, fed by the outcomes of its responses and runs, so a model check can
+ * refuse a provider that is failing or limited. Kept in memory and in `model_health`, so a
  * restart does not forget a revoked login or a spent plan.
  */
 export class ModelHealth extends Context.Service<

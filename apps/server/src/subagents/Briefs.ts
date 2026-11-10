@@ -4,8 +4,8 @@
 //
 // A result schema is checked when the brief is asked (`checkResultSchema`), so a schema the result
 // tool cannot hold a child to comes back to the parent at once, naming what to change. A model must
-// be `provider/modelId[:level]` by its form here, never a role name (ADR 0043); whether it is ready
-// is the tool's check at the ask, and the start task checks it again at Go. The budget is what the
+// be `provider/modelId[:level]` by its form here (ADR 0043); whether it is ready is the tool's check
+// at the ask, and the start task checks it again at Go. The budget is what the
 // call asks (`max_tokens`, `max_usd`) over the server's default, frozen with the rest (ADR 0047).
 //
 // How the result will be judged (`doneWhen`, ADR 0055): the command the parent names in
@@ -19,11 +19,11 @@ import type { RuntimeMode } from "@cairn/protocol/Policy";
 import type { Budget } from "@cairn/protocol/Spend";
 import { Option, Result, Schema } from "effect";
 
+import type { ApprovalPayloadState } from "../brain/CairnDocs.ts";
 import { SubagentToolText } from "../brain/SubagentText.ts";
-import { isRoleName } from "../models/ModelSpecs.ts";
 import { checkResultSchema } from "../models/ResultTool.ts";
 import { budgetAsked } from "../usage/DefaultBudget.ts";
-import { jsonRecordOf } from "./SubagentDocs.ts";
+import { jsonRecordOf, plainCopy } from "./SubagentDocs.ts";
 import type { JsonRecord } from "./SubagentDocs.ts";
 
 /** What `subagent_spawn` was called with, after its flat arguments are read. */
@@ -98,10 +98,6 @@ export const briefOf = (
 
   const model = Option.map(args.model, (text) => text.trim());
 
-  if (Option.isSome(model) && isRoleName(model.value)) {
-    return Result.fail(SubagentToolText.roleRemoved(model.value));
-  }
-
   const spec = Option.flatMap(model, decodeModelSpec);
 
   if (Option.isSome(model) && Option.isNone(spec)) {
@@ -151,8 +147,7 @@ export const briefOf = (
       : "shared",
     base: null,
     writes: [],
-    role: Option.getOrNull(spec),
-    model: null,
+    model: Option.getOrNull(spec),
     thinking: null,
     mode,
     mayCommit: false,
@@ -163,19 +158,16 @@ export const briefOf = (
   });
 };
 
-/** A brief as its approval record's payload holds it: plain JSON. */
-export const briefPayload = (brief: Brief): JsonRecord | null =>
-  jsonRecordOf(encodeBrief(brief));
+/** A brief as its approval record's payload holds it. */
+export const briefPayload = (brief: Brief): ApprovalPayloadState =>
+  plainCopy(encodeBrief(brief));
 
 /** The brief a record's payload froze; none when it holds no brief. */
 export const briefOfPayload = (
-  payload: JsonRecord | null
+  payload: Readonly<ApprovalPayloadState> | null
 ): Option.Option<Brief> =>
   payload === null ? Option.none() : decodeBrief(payload);
 
-/**
- * The model a brief names, as a spec; none when it names none, or names a role (a brief recorded
- * before ADR 0043), which reads as no model named: the parent's.
- */
+/** The model a brief names, as a spec; none when it names none and runs on its parent's. */
 export const namedSpecOf = (brief: Brief): Option.Option<string> =>
-  Option.filter(Option.fromNullOr(brief.role), (spec) => !isRoleName(spec));
+  Option.fromNullOr(brief.model);

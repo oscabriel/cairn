@@ -1,7 +1,7 @@
 // Scene tests for the brief card's Go (plan wave 6, 6B; ADR 0043): the model a brief names is
 // checked with `models.check` as it shows, Go waits for the answer and is blocked with a plain
-// reason while the model is not ready; a brief that names no model, or a role recorded before roles
-// were removed, runs on its parent's model and is neither checked nor held; Check again asks again
+// reason while the model is not ready; a brief that names no model runs on its parent's model and
+// is neither checked nor held; Check again asks again
 // and an earlier answer does nothing; the connection coming back (a brain restart) asks again; a check that could not be made
 // holds nothing; Send back needs notes and answers `revise` with them; Run on 1 first is a launch's
 // only and answers `accept_sample`; and the notes typed on a brief settled elsewhere are kept.
@@ -58,7 +58,7 @@ const record = (fields: { readonly [key: string]: Json }): Json => ({
   ...fields,
 });
 
-const briefPayload = (role: string | null) => ({
+const briefPayload = (model: string | null) => ({
   type: "brief",
   title: "Count the files",
   task: "Count the TypeScript files under src.",
@@ -70,8 +70,7 @@ const briefPayload = (role: string | null) => ({
   workspace: "shared",
   base: null,
   writes: [],
-  role,
-  model: null,
+  model,
   thinking: null,
   mode: "full-access",
   mayCommit: false,
@@ -81,8 +80,8 @@ const briefPayload = (role: string | null) => ({
   decisions: [],
 });
 
-const brief = (role: string | null, id = "b-1"): Json =>
-  record({ id, payload: briefPayload(role) });
+const brief = (model: string | null, id = "b-1"): Json =>
+  record({ id, payload: briefPayload(model) });
 
 const launch = (count: number): Json =>
   record({
@@ -115,7 +114,9 @@ const launch = (count: number): Json =>
         scriptHash: "hash-1",
         maxNodes: Math.max(count, 1),
         maxConcurrent: 2,
-        roles: [{ spec: "faux/scripted:medium", readonly: true, arms: "host" }],
+        models: [
+          { spec: "faux/scripted:medium", readonly: true, arms: "host" },
+        ],
         modes: ["full-access"],
         writes: [],
         budget,
@@ -378,25 +379,23 @@ describe("the brief card", () => {
       )
     );
 
-    // No model named, or a role a brief recorded before roles were removed: the parent's model.
-    for (const role of [null, "@worker"]) {
-      const parentModel = inform(initial, context(doc(brief(role))));
+    // No model named: the parent's model.
+    const parentModel = inform(initial, context(doc(brief(null))));
 
-      assert.lengthOf(parentModel.commands ?? [], 0);
+    assert.lengthOf(parentModel.commands ?? [], 0);
 
-      Scene.scene(
-        config,
-        Scene.given(parentModel.model),
-        Scene.expect(goButton).not.toBeDisabled(),
-        Scene.inside(
-          Scene.testId("request-card"),
-          Scene.expect(Scene.selector("dl")).not.toContainText("Runs on"),
-          Scene.expect(Scene.selector("dl")).toContainText(
-            "WhoThe parent's model"
-          )
+    Scene.scene(
+      config,
+      Scene.given(parentModel.model),
+      Scene.expect(goButton).not.toBeDisabled(),
+      Scene.inside(
+        Scene.testId("request-card"),
+        Scene.expect(Scene.selector("dl")).not.toContainText("Runs on"),
+        Scene.expect(Scene.selector("dl")).toContainText(
+          "WhoThe parent's model"
         )
-      );
-    }
+      )
+    );
   });
 
   it("sends a launch back with notes for its model, which runs nothing", () => {
@@ -456,46 +455,6 @@ describe("the brief card", () => {
       Scene.given(checked(doc(nodeBrief(NOPE)), nId, unready(NOPE))),
       Scene.expect(Scene.testId("request-card-go-blocked")).toExist(),
       Scene.expect(goButton).toBeDisabled()
-    );
-  });
-
-  it("neither checks nor blocks a workflow node's own brief that names a role from before roles were removed", () => {
-    const olderNodeBrief = record({
-      id: "n-1",
-      tool: "agent",
-      payload: briefPayload("@judge"),
-    });
-
-    const nId = ApprovalId.make("n-1");
-
-    const shown = inform(initial, context(doc(olderNodeBrief)));
-
-    assert.lengthOf(shown.commands ?? [], 0);
-
-    Scene.scene(
-      config,
-      Scene.given(shown.model),
-      Scene.expect(goButton).not.toBeDisabled(),
-      Scene.expect(Scene.testId("request-card-go-blocked")).not.toExist(),
-      Scene.inside(
-        Scene.testId("request-card"),
-        Scene.expect(Scene.selector("dl")).not.toContainText("Runs on")
-      ),
-      Scene.click(goButton),
-      Scene.Command.expectExact(
-        RespondToRequest({
-          threadId,
-          approvalId: nId,
-          decision: "accept",
-          reason: Option.none(),
-          answers: Option.none(),
-          launch: Option.none(),
-        })
-      ),
-      Scene.Command.resolve(
-        RespondToRequest,
-        Message.SucceededRespond({ approvalId: nId })
-      )
     );
   });
 

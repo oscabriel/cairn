@@ -29,7 +29,10 @@ import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Duration, Effect, Option, Ref, Result } from "effect";
 
 import { settlementOf, settlementText } from "../brain/CairnDocs.ts";
-import type { ApprovalLedger, JsonRecord } from "../brain/CairnDocs.ts";
+import type {
+  ApprovalLedger,
+  ApprovalPayloadState,
+} from "../brain/CairnDocs.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
 import type { ExecutorCallError } from "./ExecutorLink.ts";
 import {
@@ -65,7 +68,7 @@ export interface GatedRequest {
   /** One line for the approval record. */
   readonly summary: string;
   /** Frozen on the record: a program's code, so the card shows what the user approves. */
-  readonly payload: Option.Option<JsonRecord>;
+  readonly payload: Option.Option<ApprovalPayloadState>;
   /** The mode that lets the call through without asking (the record is still written). */
   readonly acceptedBy: Option.Option<RuntimeMode>;
 }

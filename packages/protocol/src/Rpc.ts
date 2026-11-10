@@ -98,7 +98,7 @@ import {
 } from "./Workflows.ts";
 
 /** The wire protocol this package describes. Bumped on any change an older client cannot read. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** The query parameter that carries the protocol version on the WebSocket upgrade. */
 export const PROTOCOL_QUERY_PARAM = "protocol";

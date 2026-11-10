@@ -84,14 +84,9 @@ import {
 } from "../brain/Events.ts";
 import type { Reactor } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
-import {
-  FAILURE_WORDS,
-  isRoleName,
-  ParsedSpec,
-  parseModelSpec,
-} from "../models/ModelSpecs.ts";
+import { FAILURE_WORDS, parseModelSpec } from "../models/ModelSpecs.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../subagents/SubagentDocs.ts";
 import { fixedDefaultBudget } from "../usage/DefaultBudget.ts";
 import { NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
 import type { BudgetPushSink } from "./WorkflowBudget.ts";
@@ -171,18 +166,11 @@ export const WORK_TOOL = "work";
 export const PAUSE_TOOL = "pause";
 
 /**
- * Resolves a spec as `Workflows.ts` does over `ModelSpecs`, with no catalog: a role name to none
- * (the launching thread's model), `UNREADY_MODEL` to its refusal, any other spec to the model and
- * level it names.
+ * Resolves a spec as `Workflows.ts` does over `ModelSpecs`, with no catalog: `UNREADY_MODEL` to its
+ * refusal, any other spec to the model and level it names.
  */
 export const kitResolver: ModelResolver = async (spec) => {
-  if (isRoleName(spec)) {
-    return await Promise.resolve(Result.succeed(Option.none()));
-  }
-
-  const named = Option.flatMap(parseModelSpec(spec), (parsed) =>
-    ParsedSpec.$is("Named")(parsed) ? Option.some(parsed) : Option.none()
-  );
+  const named = parseModelSpec(spec);
 
   if (spec === UNREADY_MODEL || Option.isNone(named)) {
     return await Promise.resolve(
@@ -193,14 +181,12 @@ export const kitResolver: ModelResolver = async (spec) => {
   }
 
   return await Promise.resolve(
-    Result.succeed(
-      Option.some({
-        spec,
-        provider: named.value.model.provider,
-        modelId: named.value.model.modelId,
-        thinkingLevel: named.value.level,
-      })
-    )
+    Result.succeed({
+      spec,
+      provider: named.value.model.provider,
+      modelId: named.value.model.modelId,
+      thinkingLevel: named.value.level,
+    })
   );
 };
 
@@ -767,7 +753,7 @@ export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
 
   const approvalId = launchApprovalIdOf(input.workflowId);
 
-  const payload = jsonRecordOf(
+  const payload = plainCopy(
     encodeLaunch({ ...launch, envelope: input.envelope(launch.envelope) })
   );
 

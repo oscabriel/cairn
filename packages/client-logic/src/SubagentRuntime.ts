@@ -48,13 +48,15 @@ import type { ThreadShell } from "@cairn/protocol/Shell";
 import {
   BRIEF_ANSWER_ENTRY,
   CHILD_DOCUMENT,
+  ChildDocument,
   SettlementOutcome,
   SUBAGENT_RESULT_ENTRY,
+  SubagentRecord,
   SUBAGENTS_DOCUMENT,
-  SubagentStatus,
 } from "@cairn/protocol/Subagents";
+import type { SubagentStatus } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
-import { Option, Predicate, Schema } from "effect";
+import { Option, Predicate, Schema, Struct } from "effect";
 
 import { approvalRecordsOf } from "./PendingRequests.ts";
 import type { SubagentRequest } from "./SubagentRollup.ts";
@@ -406,15 +408,16 @@ export interface RegistryChild {
   }>;
 }
 
-const RegistryItem = Schema.Struct({
-  threadId: ThreadId,
-  briefApprovalId: Schema.String,
-  status: SubagentStatus,
-  dispatch: Schema.Struct({ dispatchedAt: Schema.Finite }),
-  settlements: Schema.Array(
-    Schema.Struct({ outcome: SettlementOutcome, reportedAt: Schema.Finite })
-  ),
-});
+/** What a client reads of one registry item, as the protocol's `SubagentRecord` has it. */
+const RegistryItem = SubagentRecord.mapFields(
+  Struct.pick([
+    "threadId",
+    "briefApprovalId",
+    "status",
+    "dispatch",
+    "settlements",
+  ])
+);
 
 const decodeRegistry = Schema.decodeUnknownOption(
   Schema.Struct({ items: Schema.Record(Schema.String, Schema.Json) })
@@ -662,7 +665,8 @@ export const subagentLinksOf = (
   });
 };
 
-const ChildLink = Schema.Struct({ parentThreadId: ThreadId });
+/** What a client reads of a `cairn.child` document, as the protocol's `ChildDocument` has it. */
+const ChildLink = ChildDocument.mapFields(Struct.pick(["parentThreadId"]));
 
 const decodeChildLink = Schema.decodeUnknownOption(ChildLink);
 

@@ -70,7 +70,17 @@ const registryItem = (index: number, fields: Record<string, Schema.Json>) => ({
   anchorTaskId: 7,
   briefApprovalId: `call-${String(index)}`,
   description: DESCRIPTIONS[index] ?? "",
-  dispatch: { spec: null, resolved: null, previewed: null, dispatchedAt: 2000 },
+  dispatch: {
+    spec: null,
+    resolved: {
+      spec: "faux/scripted",
+      model: { provider: "faux", modelId: "scripted" },
+      thinkingLevel: null,
+      priced: false,
+    },
+    previewed: null,
+    dispatchedAt: 2000,
+  },
   isolation: "shared",
   worktree: null,
   status: "working",

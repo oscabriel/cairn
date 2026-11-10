@@ -28,13 +28,16 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
-import type { Envelope, NodeArms } from "@cairn/protocol/Policy";
+import type { Decider, Envelope } from "@cairn/protocol/Policy";
+import type { Budget } from "@cairn/protocol/Spend";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import { WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
 import type {
-  NodeRefusal,
-  NodeStage,
+  NodeReceipt,
+  NodeRecord,
   NodeState,
-  WorkflowOutcome,
+  WorkflowRecord,
+  WorkflowsDocument,
   WorkflowState,
 } from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord/json";
@@ -43,124 +46,32 @@ import type { UsageState } from "@earendil-works/pi-durable";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { Option, Schema } from "effect";
 
-import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
+import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import { migrateWorkflows } from "../brain/RolesRetired.ts";
 
-/** What a settled node used: the protocol's `NodeReceipt` as plain JSON. */
-export interface NodeReceiptState {
-  [key: string]: JsonValue;
-  answerEntry: number | null;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  listMicros: number | null;
-  toolCalls: number;
-  durationMs: number;
-}
+/** What a settled node used: the protocol's `NodeReceipt` as its writer holds it. */
+export type NodeReceiptState = DocumentState<typeof NodeReceipt>;
 
-/** One dispatch: the protocol's `NodeRecord` as plain JSON. */
-export interface NodeItemState {
-  [key: string]: JsonValue;
-  id: string;
-  workflowId: string;
-  key: string | null;
-  label: string;
-  phase: string | null;
-  index: number;
-  requestId: string;
-  briefId: string | null;
-  /**
-   * The model spec the node asked for (the script's, else the launching thread's model and level);
-   * a row written before ADR 0043 holds a role name. The wire name `role` is kept for those rows.
-   */
-  role: string | null;
-  provider: string | null;
-  modelId: string | null;
-  effort: string | null;
-  /** The level the child runs at (effort, else the spec's); null for the model's default. */
-  thinkingLevel?: string | null;
-  readonly: boolean;
-  arms: NodeArms;
-  state: NodeState;
-  stage: NodeStage;
-  childThreadId: string | null;
-  conversationId: number | null;
-  submissionId: number | null;
-  nestedTaskId: number | null;
-  attempt: number;
-  schemaAttempts: number;
-  receipt: NodeReceiptState | null;
-  result: JsonValue;
-  resultSummary: string | null;
-  refusal: NodeRefusal | null;
-  held: { [key: string]: JsonValue; until: number | null } | null;
-  startedAt: number | null;
-  endedAt: number | null;
-  error: string | null;
-}
+/** One dispatch: the protocol's `NodeRecord` as its writer holds it. */
+export type NodeItemState = DocumentState<typeof NodeRecord>;
 
-/** A launch's budget: the protocol's `Budget` as plain JSON. */
-export interface BudgetState {
-  [key: string]: JsonValue;
-  maxListMicros: number | null;
-  maxTokens: number | null;
-  maxTurns: number | null;
-  maxMinutes: number | null;
-  planGuard: JsonRecord | null;
-  warnAt: number;
-}
+/** A launch's budget: the protocol's `Budget` as its writer holds it. */
+export type BudgetState = DocumentState<typeof Budget>;
 
-/** One workflow: the protocol's `WorkflowRecord` as plain JSON. */
-export interface WorkflowItemState {
-  [key: string]: JsonValue;
-  id: string;
-  name: string;
-  description: string;
-  phases: Array<{
-    [key: string]: JsonValue;
-    title: string;
-    detail: string | null;
-  }>;
-  scriptHash: string;
-  scriptRef: string;
-  args: JsonValue;
-  state: WorkflowState;
-  outcome: WorkflowOutcome | null;
-  approvalId: string;
-  decidedBy: JsonRecord | null;
-  decidedAt: number | null;
-  sample: number | null;
-  budget: BudgetState;
-  estimate: JsonRecord | null;
-  codemodeTaskId: number | null;
-  startedAt: number | null;
-  endedAt: number | null;
-  result: string | null;
-  nodes: { [nodeId: string]: NodeItemState };
-  log: {
-    [taskId: string]: { [key: string]: JsonValue; at: number; text: string };
-  };
-  spent: {
-    [key: string]: JsonValue;
-    tokens: number;
-    listMicros: number;
-    unpricedTokens: number;
-  };
-  softAt: number | null;
-  spentAt: number | null;
-}
+/** One workflow: the protocol's `WorkflowRecord` as its writer holds it. */
+export type WorkflowItemState = DocumentState<typeof WorkflowRecord>;
 
-/** `cairn.workflows` state. */
-export interface WorkflowsState {
-  [key: string]: JsonValue;
-  items: { [workflowId: string]: WorkflowItemState };
-}
+/** `cairn.workflows` state: the protocol's `WorkflowsDocument` as its writer holds it. */
+export type WorkflowsState = DocumentState<typeof WorkflowsDocument>;
 
-/** `cairn.workflows`: every workflow a thread launched, by id (the dispatch ledger). */
+/**
+ * `cairn.workflows`: every workflow a thread launched, by id (the dispatch ledger). Version 2
+ * retired the nodes' `role` (ADR 0052).
+ */
 export const WorkflowsDoc = defineDoc<WorkflowsState>({
   kind: WORKFLOWS_DOCUMENT,
-  version: 1,
+  version: 2,
+  migrate: migrateWorkflows,
   scope: "conversation",
   history: "latest",
   // A fork is another thread, which launched nothing.
@@ -349,7 +260,7 @@ export const proposedRecord = (input: ProposeInput): WorkflowItemState => {
  */
 export const approveRecord = (
   record: WorkflowItemState,
-  decidedBy: JsonRecord,
+  decidedBy: DocumentState<typeof Decider>,
   at: number
 ): boolean => {
   if (record.state !== "proposed") {

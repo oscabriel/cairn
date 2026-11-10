@@ -37,21 +37,20 @@ import {
 import { Brief, BudgetRaisePayload, LaunchEdits } from "@cairn/protocol/Policy";
 import { Budget } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
-import type { NoticeEntryData } from "@cairn/protocol/Thread";
+import type { DocumentState, NoticeEntryData } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ConversationId,
   Cursor,
   Harness,
-  JsonObject,
 } from "@earendil-works/pi-durable";
 import { defineDoc, InboxDoc } from "@earendil-works/pi-durable";
-import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import {
   ChildDoc,
-  isJsonRecord,
   isLinked,
+  plainCopy,
   SubagentsDoc,
 } from "../subagents/SubagentDocs.ts";
 import { hasLimits } from "../usage/BudgetBook.ts";
@@ -67,7 +66,11 @@ import {
   ThreadReceipt,
   UNDECIDED,
 } from "./CairnDocs.ts";
-import type { ApprovalRecord, JsonRecord } from "./CairnDocs.ts";
+import type {
+  ApprovalPayloadState,
+  ApprovalRecord,
+  JsonRecord,
+} from "./CairnDocs.ts";
 import { RUN_TASK } from "./CommitFeed.ts";
 import { durable } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
@@ -102,9 +105,9 @@ export interface RaiseFacts {
   readonly spent: { readonly tokens: number; readonly listMicros: number };
 }
 
-/** A completed child and the role name its dispatch resolved, for estimates. */
+/** A completed child and the model spec its dispatch resolved (`resolved.spec`), for estimates. */
 export interface ChildSample {
-  readonly role: string;
+  readonly spec: string;
   readonly threadId: ThreadId;
 }
 
@@ -157,10 +160,9 @@ const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 /** How many conversations one page of the scan reads. */
 const SCAN_PAGE = 200;
 
-/** A budget as a document holds it: plain JSON. */
-export const budgetJson = (budget: Budget): JsonRecord => ({
-  ...encodeBudget(budget),
-});
+/** A budget as a document holds it. */
+export const budgetJson = (budget: Budget): DocumentState<typeof Budget> =>
+  plainCopy(encodeBudget(budget));
 
 /**
  * The accepted raises of one conversation's records, oldest first. A workflow's raise (5B, its
@@ -339,7 +341,7 @@ export class BudgetSources extends Context.Service<
       requestId: string,
       data: NoticeEntryData
     ): Effect.Effect<boolean, BudgetSourceError>;
-    /** Every settled child with the role spec it was dispatched as. */
+    /** Every settled child with the model spec it was dispatched as. */
     readonly samples: Effect.Effect<
       ReadonlyArray<ChildSample>,
       BudgetSourceError
@@ -495,7 +497,7 @@ export class BudgetSources extends Context.Service<
         const approvalId = raiseIdOf(limit.epoch);
         const now = brain.now();
 
-        const payload: JsonObject = {
+        const payload: ApprovalPayloadState = {
           type: "budget-raise",
           scope: limit.threadId,
           ...Option.match(facts.title, {
@@ -605,11 +607,10 @@ export class BudgetSources extends Context.Service<
           );
 
           for (const item of Object.values(registry?.items ?? {})) {
-            const { resolved } = item.dispatch;
-            const role = isJsonRecord(resolved) ? resolved.role : null;
+            const { spec } = item.dispatch.resolved;
             const threadId = decodeThreadId(item.threadId);
 
-            // A child that failed or was stopped says nothing of what its role's work costs.
+            // A child that failed or was stopped says nothing of what its model's work costs.
             const completed =
               item.settlements.length > 0 &&
               item.settlements.every(
@@ -619,10 +620,9 @@ export class BudgetSources extends Context.Service<
             if (
               item.status === "settled" &&
               completed &&
-              Predicate.isString(role) &&
               Option.isSome(threadId)
             ) {
-              found.push({ role, threadId: threadId.value });
+              found.push({ spec, threadId: threadId.value });
             }
           }
         }

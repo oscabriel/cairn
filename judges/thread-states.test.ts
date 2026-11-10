@@ -392,7 +392,7 @@ const ledgerOf = (workflowState: string, nodeState: string) => ({
           index: 1,
           requestId: "wf-wf-1-n-1",
           briefId: "launch-wf-1",
-          role: "faux/scripted",
+          model: "faux/scripted",
           provider: "faux",
           modelId: "kit",
           effort: null,

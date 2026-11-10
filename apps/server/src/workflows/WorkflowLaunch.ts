@@ -36,10 +36,14 @@ import {
   isLaunchRecord,
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
-import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
+import type {
+  ApprovalPayloadState,
+  ApprovalRecord,
+  JsonRecord,
+} from "../brain/CairnDocs.ts";
 import { emit } from "../brain/Events.ts";
-import { isRoleName, modelOfSpec, modelText } from "../models/ModelSpecs.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { modelOfSpec, modelText } from "../models/ModelSpecs.ts";
+import { plainCopy } from "../subagents/SubagentDocs.ts";
 import {
   approveRecord,
   declineRow,
@@ -292,20 +296,7 @@ export interface NodeAsk {
   readonly mode: RuntimeMode;
   /** Nodes of the workflow dispatched or waiting before this one. */
   readonly dispatched: number;
-  /**
-   * The launching thread's model: what an envelope entry recorded before ADR 0043 under a role
-   * name (`@worker`) grants, since such a role now reads as no model named. None grants nothing
-   * through those entries.
-   */
-  readonly threadModel: Option.Option<ModelRef>;
 }
-
-/** The model an envelope entry grants: its spec's, or the launching thread's for a role name. */
-const grantedModel = (
-  spec: string,
-  threadModel: Option.Option<ModelRef>
-): Option.Option<ModelRef> =>
-  isRoleName(spec) ? threadModel : modelOfSpec(spec);
 
 /** Why a node is outside its envelope: the refusal it ends with if declined, and the card's words. */
 export interface Outside {
@@ -331,14 +322,13 @@ export const briefWithin = (
     });
   }
 
-  // The envelope's wire field keeps its name `roles` for launches recorded before ADR 0043.
   const wanted = modelText(node.model);
 
-  const grants = envelope.roles.filter(
+  const grants = envelope.models.filter(
     (entry) =>
       entry.arms === "host" &&
       Option.exists(
-        grantedModel(entry.spec, node.threadModel),
+        modelOfSpec(entry.spec),
         (model) => modelText(model) === wanted
       )
   );
@@ -404,7 +394,9 @@ const cut = (text: string, limit: number) =>
 const COVERED_TASK_LIMIT = 280;
 
 /** The brief a node runs under, as a record's payload freezes it. */
-export const nodeBriefPayload = (input: NodeBriefInput): JsonRecord | null => {
+export const nodeBriefPayload = (
+  input: NodeBriefInput
+): ApprovalPayloadState => {
   const why = Option.match(input.outside, {
     onNone: () =>
       `A node of workflow ${input.workflowName}, covered by its launch's envelope.`,
@@ -414,7 +406,7 @@ export const nodeBriefPayload = (input: NodeBriefInput): JsonRecord | null => {
 
   const thinking = Option.filter(input.effort, isThinkingLevel);
 
-  return jsonRecordOf(
+  return plainCopy(
     encodeBrief(
       Brief.make({
         type: "brief",
@@ -438,8 +430,7 @@ export const nodeBriefPayload = (input: NodeBriefInput): JsonRecord | null => {
         base: null,
         writes: [],
         // Only a named model is frozen, for the card to check; none runs on the launching thread's.
-        role: Option.getOrNull(Option.flatMap(input.spec, decodeSpec)),
-        model: null,
+        model: Option.getOrNull(Option.flatMap(input.spec, decodeSpec)),
         thinking: Option.getOrNull(thinking),
         mode: input.mode,
         mayCommit: !input.readonly,
@@ -459,7 +450,7 @@ export interface NodeRecordInput {
   readonly tool: string;
   readonly summary: string;
   readonly at: number;
-  readonly payload: JsonRecord | null;
+  readonly payload: ApprovalPayloadState | null;
   /** The launch approval whose envelope accepts it; none raises its own card. */
   readonly envelope: Option.Option<string>;
 }

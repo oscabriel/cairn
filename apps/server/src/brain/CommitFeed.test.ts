@@ -85,7 +85,7 @@ interface SubagentsState {
 
 const SubagentsDoc = defineDoc<SubagentsState>({
   kind: SUBAGENTS_DOCUMENT,
-  version: 1,
+  version: 2,
   scope: "conversation",
   history: "latest",
   fork: "initial",
@@ -283,7 +283,18 @@ const setSettledItem = (
       threadId: CHILD,
       status,
       delivered,
-      settlements: status === "settled" ? [{ outcome: "completed" }] : [],
+      settlements:
+        status === "settled"
+          ? [
+              {
+                seq: 1,
+                outcome: "completed",
+                answerEntry: null,
+                reportedAt: 1,
+                inputs: [],
+              },
+            ]
+          : [],
     };
   });
 

@@ -129,9 +129,6 @@ const kitScope = Effect.acquireRelease(
               await Promise.resolve(Result.fail("No model judges here.")),
             ask: async () =>
               await Promise.resolve(Result.fail("No model judges here.")),
-            roleNameRead: async () => {
-              await Promise.resolve();
-            },
           },
           faults: NO_JUDGE_FAULTS,
         },

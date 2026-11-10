@@ -14,72 +14,33 @@
 // Both start empty in a fork, which is another thread.
 
 import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
-import type { CriterionState, JudgeRef } from "@cairn/protocol/Policy";
+import type {
+  Criterion,
+  GoalDocument,
+  JudgeRef,
+  Verdict,
+} from "@cairn/protocol/Policy";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { Match } from "effect";
 
-/** A judge as a document holds it: the protocol's `JudgeRef` as plain JSON. */
-export type JudgeRefState =
-  | {
-      [key: string]: JsonValue;
-      kind: "command";
-      argv: Array<string>;
-      expectExit: number;
-      timeoutSec: number;
-    }
-  | { [key: string]: JsonValue; kind: "user" }
-  | {
-      [key: string]: JsonValue;
-      kind: "model";
-      /** Null for the goal thread's model (ADR 0043). */
-      spec: string | null;
-      rubric: string;
-    }
-  | { [key: string]: JsonValue; kind: "verification"; recipe: string };
+import { migrateGoal } from "../brain/RolesRetired.ts";
+
+/** A judge as a document holds it: the protocol's `JudgeRef`. */
+export type JudgeRefState = DocumentState<typeof JudgeRef>;
+
+/** A judge run's recorded result: the protocol's `Verdict`. */
+export type VerdictState = DocumentState<typeof Verdict>;
 
 /** A verdict's evidence; null where the judge has none of that kind. */
-export interface EvidenceState {
-  [key: string]: JsonValue;
-  exit: number | null;
-  tail: string | null;
-  sha: string | null;
-  model: string | null;
-  note: string | null;
-}
+export type EvidenceState = VerdictState["evidence"];
 
-/** A judge run's recorded result: the protocol's `Verdict` as plain JSON. */
-export interface VerdictState {
-  [key: string]: JsonValue;
-  at: number;
-  ok: boolean;
-  judge: JudgeRefState;
-  evidence: EvidenceState;
-  runId: string;
-}
+/** One criterion: the protocol's `Criterion`. */
+export type CriterionStateDoc = DocumentState<typeof Criterion>;
 
-/** One criterion: the protocol's `Criterion` as plain JSON. */
-export interface CriterionStateDoc {
-  [key: string]: JsonValue;
-  id: string;
-  text: string;
-  judge: JudgeRefState;
-  state: CriterionState;
-  verdict: VerdictState | null;
-  tries: number;
-  changedAt: number;
-}
-
-/** `cairn.goal` state: the protocol's `GoalDocument` as plain JSON. */
-export interface GoalState {
-  [key: string]: JsonValue;
-  objective: string;
-  criteria: Array<CriterionStateDoc>;
-  /** Reserved for hands-off goals; phase 2 never writes it. */
-  envelope: { [key: string]: JsonValue } | null;
-  closedAt: number | null;
-  closedBy: { [key: string]: JsonValue } | null;
-}
+/** `cairn.goal` state: the protocol's `GoalDocument`. */
+export type GoalState = DocumentState<typeof GoalDocument>;
 
 /** A goal with no objective and no criteria: a thread that is not a goal. */
 export const NO_GOAL = (): GoalState => ({
@@ -90,10 +51,14 @@ export const NO_GOAL = (): GoalState => ({
   closedBy: null,
 });
 
-/** `cairn.goal`: a goal thread's objective and criteria (ADR 0026). */
+/**
+ * `cairn.goal`: a goal thread's objective and criteria (ADR 0026). Version 2 retired the role names
+ * its judges held (ADR 0052).
+ */
 export const GoalDoc = defineDoc<GoalState>({
   kind: GOAL_DOCUMENT,
-  version: 1,
+  version: 2,
+  migrate: migrateGoal,
   scope: "conversation",
   history: "latest",
   // A fork is another thread, with no goal of its own until the user gives it one.

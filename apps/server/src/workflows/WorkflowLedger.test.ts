@@ -5,7 +5,6 @@
 // row, and a node's tool result never carrying usage.
 
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
-import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -54,6 +53,8 @@ const context = BACKGROUND_CONTEXT;
 const ANSWERED_AT = 2;
 
 const isWorkflowsDocument = Schema.is(WorkflowsDocument);
+
+const decodeWorkflows = Schema.decodeUnknownOption(WorkflowsDocument);
 
 const WF = "wf-1";
 
@@ -496,7 +497,7 @@ return { a, b, c };`)
       const outcome = yield* scenario(
         workflow(`return await agent("node:a", { label: "a" });`),
         {
-          run: `return await tools.agent({ workflowId: "${WF}", prompt: "node:a", site: null, label: "a", phase: null, role: null, schema: null, key: null, readonly: false, resume: null, effort: null, unknownOptions: [] });`,
+          run: `return await tools.agent({ workflowId: "${WF}", prompt: "node:a", site: null, label: "a", phase: null, model: null, schema: null, key: null, readonly: false, resume: null, effort: null, unknownOptions: [] });`,
         }
       );
 
@@ -534,7 +535,7 @@ return { a, b };`),
             planted: Option.some({
               envelope: (granted) => ({
                 ...granted,
-                roles: granted.roles.filter(
+                models: granted.models.filter(
                   (entry) => entry.spec !== ALT_MODEL
                 ),
               }),
@@ -585,7 +586,7 @@ return { a };`),
             planted: Option.some({
               envelope: (granted) => ({
                 ...granted,
-                roles: granted.roles.filter(
+                models: granted.models.filter(
                   (entry) => entry.spec !== ALT_MODEL
                 ),
               }),
@@ -616,7 +617,7 @@ return { a };`),
             planted: Option.some({
               envelope: (granted) => ({
                 ...granted,
-                roles: granted.roles.map((entry) => ({
+                models: granted.models.map((entry) => ({
                   ...entry,
                   readonly: true,
                 })),
@@ -836,7 +837,7 @@ return await verify(found, { claim: "a is fine" });`)
       const nodes = Object.values(Option.getOrThrow(outcome.row).nodes);
 
       assert.deepStrictEqual(
-        nodes.map((node) => [node.role, node.readonly, node.stage]),
+        nodes.map((node) => [node.model, node.readonly, node.stage]),
         [
           [KIT_SPEC, false, "answered"],
           [KIT_SPEC, true, "verified"],
@@ -888,7 +889,7 @@ return [a, b];`)
             node.thinkingLevel,
             Option.getOrUndefined(
               workflowNodeRun(
-                Option.some(outcome.ledger),
+                decodeWorkflows(outcome.ledger),
                 ThreadId.make(node.childThreadId ?? "")
               )
             )?.thinkingLevel,
@@ -919,7 +920,7 @@ return [a, b];`)
         assert.deepStrictEqual(
           nodes.map((node) => [
             node.label,
-            node.role,
+            node.model,
             `${node.provider ?? ""}/${node.modelId ?? ""}`,
             node.thinkingLevel,
             outcome.identities.get(node.id)?.model,
@@ -931,61 +932,6 @@ return [a, b];`)
           ]
         );
         assert.deepStrictEqual(starts(outcome.effects), ["a", "b"]);
-      })
-  );
-
-  it.live(
-    "runs a script approved before roles were removed: a role reads as the launching thread's model, inside an envelope keyed by role",
-    () =>
-      Effect.gen(function* () {
-        // The dry run refuses `role` now, so the script passes it only when it runs live, as a
-        // script approved before ADR 0043 does; its envelope is keyed by role as it was then.
-        const outcome = yield* scenario(
-          workflow(`const x = await agent("node:x", { label: "x" });
-const live = !String(x).startsWith("(dry run");
-const a = await agent("node:a", live ? { label: "a", role: "@scout" } : { label: "a" });
-const v = await verify(a, live ? { claim: "a", role: "@verifier" } : { claim: "a" });
-return { a, v };`),
-          {
-            planted: Option.some({
-              envelope: (granted) => ({
-                ...granted,
-                roles: [
-                  {
-                    spec: ModelSpec.make("@worker"),
-                    readonly: false,
-                    arms: "host",
-                  },
-                  {
-                    spec: ModelSpec.make("@verifier"),
-                    readonly: true,
-                    arms: "host",
-                  },
-                ],
-              }),
-            }),
-            briefs: "decline",
-          }
-        );
-
-        assert.deepStrictEqual(outcome.problems, []);
-
-        const nodes = Object.values(Option.getOrThrow(outcome.row).nodes);
-        const kit = `${KIT_MODEL.provider}/${KIT_MODEL.modelId}`;
-
-        assert.deepStrictEqual(
-          nodes.map((node) => [
-            node.label,
-            node.state,
-            `${node.provider ?? ""}/${node.modelId ?? ""}`,
-            outcome.records[node.briefId ?? ""]?.decidedBy?.kind,
-          ]),
-          [
-            ["x", "settled", kit, "envelope"],
-            ["a", "settled", kit, "envelope"],
-            ["Verify: a", "settled", kit, "envelope"],
-          ]
-        );
       })
   );
 
@@ -1050,7 +996,7 @@ return { a, b, c };`)
   );
 
   it.live(
-    "refuses a node whose script names a role as its model, saying roles were removed",
+    "refuses a node whose script names a role name as its model: it is no model spec",
     () =>
       Effect.gen(function* () {
         const outcome = yield* scenario(
@@ -1063,7 +1009,7 @@ return [d.status, d.reason];`)
         assert.deepStrictEqual(outcome.problems, []);
         // The node tool refuses the call before any row: the script's `agent.full` sees it failed.
         assert.include(outcome.result, '["failed"');
-        assert.include(outcome.result, "is a role, and roles were removed");
+        assert.include(outcome.result, "is not provider/modelId[:level]");
         assert.deepStrictEqual(starts(outcome.effects), ["x"]);
       })
   );

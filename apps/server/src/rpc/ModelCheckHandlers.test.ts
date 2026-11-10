@@ -94,7 +94,7 @@ describe("models.check", () => {
           [
             ["faux/scripted:high", "faux/scripted", "high"],
             ["opencode-go/gpt-6-luna", "unknown_model"],
-            ["@judge", "role_removed"],
+            ["@judge", "invalid_spec"],
             ["gpt-6-luna", "invalid_spec"],
           ]
         );

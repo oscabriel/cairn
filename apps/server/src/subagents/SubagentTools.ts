@@ -430,10 +430,10 @@ export const subagentToolSet = (
       // ready; it is checked again at Go, which decides (ADR 0043). A replayed call that already
       // asked is not checked again: its brief is pending whatever the model's readiness is now.
       if (
-        brief.success.role !== null &&
+        brief.success.model !== null &&
         asked?.items[approvalId] === undefined
       ) {
-        const resolved = await models.resolve(brief.success.role);
+        const resolved = await models.resolve(brief.success.model);
 
         if (Result.isFailure(resolved)) {
           return refused(

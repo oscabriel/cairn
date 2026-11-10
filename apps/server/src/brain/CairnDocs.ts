@@ -30,18 +30,23 @@ import {
   DEFAULT_RUNTIME_MODE,
   LaunchEdits,
   PERMISSIONS_DOCUMENT,
+  QuestionAnswer as QuestionAnswerSchema,
   QuestionsPayload,
   RuntimeRequestKind,
   WorkflowLaunch,
 } from "@cairn/protocol/Policy";
 import type {
+  ApprovalAnswer,
   ApprovalDecision,
-  ApprovalRoute,
+  ApprovalPayload,
+  ApprovalRecord as ApprovalRecordSchema,
+  ApprovalsDocument,
   Decider,
+  PermissionsDocument,
   QuestionAnswer,
   RuntimeMode,
 } from "@cairn/protocol/Policy";
-import { copyJson } from "@earendil-works/chord/json";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ConversationId,
@@ -71,8 +76,8 @@ import {
   ChildDoc,
   EscalationsDoc,
   isLinked,
-  jsonRecordOf,
   markQuestion,
+  plainCopy,
 } from "../subagents/SubagentDocs.ts";
 import type { ChildState } from "../subagents/SubagentDocs.ts";
 import {
@@ -88,6 +93,7 @@ import type { DurableCallError } from "./Durable.ts";
 import { emit } from "./Events.ts";
 import { PendingApprovals } from "./PendingApprovals.ts";
 import { piConversationId, piTaskId } from "./PiIds.ts";
+import { approvalsFromV2 } from "./RolesRetired.ts";
 
 /** The creation receipt of one thread: the conversation it lives in, 0 until created. */
 export interface ThreadReceiptState {
@@ -133,89 +139,22 @@ export interface JsonRecord {
   [key: string]: JsonValue;
 }
 
-/** A question's answer as a record keeps it: the option labels picked and any custom text. */
-export interface QuestionAnswerState {
-  [key: string]: JsonValue;
-  index: number;
-  picks: Array<string>;
-  custom: string | null;
-}
+/** A record's payload as the record keeps it: the protocol's `ApprovalPayload`. */
+export type ApprovalPayloadState = DocumentState<typeof ApprovalPayload>;
 
-/** What the decider answered: the protocol's `ApprovalAnswer` as plain JSON. */
-export interface ApprovalAnswerState {
-  [key: string]: JsonValue;
-  decision: ApprovalDecision;
-  answers: Array<QuestionAnswerState> | null;
-  note: string | null;
-  /**
-   * The edited budget of a workflow's launch (package 5A) or a subagent's brief (ADR 0047); null
-   * runs the payload as proposed. An answer recorded before ADR 0043 may also hold role
-   * overrides, which nothing reads.
-   */
-  launch: JsonRecord | null;
-}
-
-/** The child a brief started, set once by its start task. */
-export interface StartedState {
-  [key: string]: JsonValue;
-  childThreadId: string;
-}
-
-/** The child's escalated question a parent's record mirrors. */
-export interface MirrorState {
-  [key: string]: JsonValue;
-  threadId: string;
-  approvalId: string;
-}
+/** What the decider answered: the protocol's `ApprovalAnswer` as its writer holds it. */
+export type ApprovalAnswerState = DocumentState<typeof ApprovalAnswer>;
 
 /**
  * One decision record (ADR 0013, ADR 0029): a gated tool call, a question, a brief or proposed
- * criteria, and who decided it and why. The protocol's `ApprovalRecord` schema describes the same
- * JSON. `payload` never changes after the ask; `status` leaves `pending` once, and every status
- * past `pending` has `decidedBy` set.
+ * criteria, and who decided it and why; the protocol's `ApprovalRecord` as its writer holds it.
+ * `payload` never changes after the ask; `status` leaves `pending` once, and every status past
+ * `pending` has `decidedBy` set.
  */
-export interface ApprovalRecord {
-  [key: string]: JsonValue;
-  id: string;
-  /** The pi-durable tool task that asked; a rerun of it finds its record again. 0 for a mirror. */
-  toolTaskId: number;
-  tool: string;
-  kind: RuntimeRequestKind;
-  /** One line for the approval card. */
-  summary: string;
-  status: ApprovalStatus;
-  askedAt: number;
-  expiresAt: number;
-  answeredAt: number | null;
-  /** The effect sandwich: `started` is committed before the effect runs, `done` after it. */
-  run: "started" | "done" | null;
-  /** Executor's own `apr_` request id, once Executor asked; boot declines unfinished ones. */
-  executorRequestId: string | null;
-  /** Frozen at ask time: a brief, questions or criteria. A plain tool call keeps `summary`. */
-  payload: JsonRecord | null;
-  answer: ApprovalAnswerState | null;
-  /** Null only while `pending`. */
-  decidedBy: Decider | null;
-  /** The user's words on Decline or Send back, a parent's reason, or a rule's text. */
-  reason: string | null;
-  /** Questions only; every other kind is `user`. */
-  route: ApprovalRoute;
-  escalatedAt: number | null;
-  /** Briefs: the revision this one replaces. */
-  supersedes: string | null;
-  /** Briefs: set once, by the start task. */
-  started: StartedState | null;
-  /** Briefs: the hash of the rendered input the child received. */
-  briefHash: string | null;
-  /** In a parent's document: the child's escalated question this record mirrors. */
-  mirrorOf: MirrorState | null;
-}
+export type ApprovalRecord = DocumentState<typeof ApprovalRecordSchema>;
 
-/** `cairn.approvals` document state. */
-export interface ApprovalsState {
-  [key: string]: JsonValue;
-  items: { [id: string]: ApprovalRecord };
-}
+/** `cairn.approvals` document state: the protocol's `ApprovalsDocument`. */
+export type ApprovalsState = DocumentState<typeof ApprovalsDocument>;
 
 const isJsonRecord = (value: JsonValue | undefined): value is JsonRecord =>
   Predicate.isObject(value) && !Array.isArray(value);
@@ -333,18 +272,28 @@ const unreadable = (id: string, raw: JsonValue | undefined): ApprovalRecord => {
 };
 
 /**
- * `cairn.approvals` version 1 to 2, pure as pi-durable's `migrate` must be. Every record keeps its
- * fields and gains version 2's: `payload`, `reason` and the brief and question fields are null and
- * `route` is `user`, because version 1 held only tool calls and kept no words; `decidedBy` and
- * `answer` are read from the status, so every status past `pending` names a decider (invariant 8
- * of `docs/golden/thread-states.md`). A record that is not version 1's shape is kept as cancelled
- * (`unreadable`), never dropped. A version this code does not know throws: a later version adds its
- * own case here, so nothing is lost by a migration that skipped it.
+ * `cairn.approvals` to version 3, pure as pi-durable's `migrate` must be.
+ *
+ * Version 1 to 2: every record keeps its fields and gains version 2's: `payload`, `reason` and the
+ * brief and question fields are null and `route` is `user`, because version 1 held only tool calls
+ * and kept no words; `decidedBy` and `answer` are read from the status, so every status past
+ * `pending` names a decider (invariant 8 of `docs/golden/thread-states.md`). A record that is not
+ * version 1's shape is kept as cancelled (`unreadable`), never dropped. Such a record held no
+ * payload, so it has no role to retire.
+ *
+ * Version 2 to 3 retires the roles its payloads and answers still hold (ADR 0052, `RolesRetired.ts`).
+ *
+ * A version this code does not know throws: a later version adds its own case here, so nothing is
+ * lost by a migration that skipped it.
  */
 export const migrateApprovals = (
   value: JsonRecord,
   fromVersion: number
 ): ApprovalsState => {
+  if (fromVersion === 2) {
+    return approvalsFromV2(value);
+  }
+
   if (fromVersion !== 1) {
     throw new Error(
       `cairn.approvals has no migration from version ${fromVersion} to ${APPROVALS_VERSION}`
@@ -376,12 +325,8 @@ export const Approvals = defineDoc<ApprovalsState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
-/** `cairn.permissions` state: the thread's mode, and the tools "Allow for this thread" added. */
-export interface PermissionsState {
-  [key: string]: JsonValue;
-  mode: RuntimeMode;
-  allow: Array<string>;
-}
+/** `cairn.permissions` state: the protocol's `PermissionsDocument`. */
+export type PermissionsState = DocumentState<typeof PermissionsDocument>;
 
 /** `cairn.permissions`: the mode gated tools read at call time (ADR 0031). */
 export const Permissions = defineDoc<PermissionsState>({
@@ -454,7 +399,7 @@ export interface ApprovalRequest {
   /** How long the record stays answerable. */
   readonly ttlMillis: number;
   /** Frozen on the record at ask time, such as the program an Executor `execute` runs. */
-  readonly payload: Option.Option<JsonRecord>;
+  readonly payload: Option.Option<ApprovalPayloadState>;
   /**
    * The permission mode that accepts this call at ask time without asking (`decidedBy` mode), for
    * the audit trail and the sandwich; none asks the user.
@@ -465,7 +410,7 @@ export interface ApprovalRequest {
 /** How a record settled: its status, who decided and the reason they gave. */
 export interface ApprovalSettlement {
   readonly status: ApprovalStatus;
-  readonly decidedBy: Option.Option<Decider>;
+  readonly decidedBy: Option.Option<DocumentState<typeof Decider>>;
   readonly reason: Option.Option<string>;
 }
 
@@ -531,44 +476,9 @@ const missing = (approvalId: string) =>
     reason: "missing_record",
   });
 
-const copyObject = (value: JsonRecord | null): JsonRecord | null => {
-  if (value === null) {
-    return null;
-  }
-
-  const copied = copyJson(value);
-
-  return isJsonRecord(copied) ? copied : null;
-};
-
-const copyAnswers = (
-  answers: ReadonlyArray<QuestionAnswer | QuestionAnswerState>
-): Array<QuestionAnswerState> =>
-  answers.map((answer) => ({
-    index: answer.index,
-    picks: [...answer.picks],
-    custom: answer.custom,
-  }));
-
 /** A detached deep copy of a record, safe to hold after its transaction ends. */
-export const copyRecord = (record: ApprovalRecord): ApprovalRecord => ({
-  ...record,
-  payload: copyObject(record.payload),
-  answer:
-    record.answer === null
-      ? null
-      : {
-          ...record.answer,
-          answers:
-            record.answer.answers === null
-              ? null
-              : copyAnswers(record.answer.answers),
-          launch: copyObject(record.answer.launch),
-        },
-  decidedBy: record.decidedBy === null ? null : { ...record.decidedBy },
-  started: record.started === null ? null : { ...record.started },
-  mirrorOf: record.mirrorOf === null ? null : { ...record.mirrorOf },
-});
+export const copyRecord = (record: Readonly<ApprovalRecord>): ApprovalRecord =>
+  plainCopy(record);
 
 /** The fields a new record starts with past the ask's own: nothing decided, nothing started. */
 export const UNDECIDED = {
@@ -605,6 +515,8 @@ const STATUS_OF: Readonly<Record<ApprovalDecision, ApprovalStatus>> = {
 };
 
 const encodeLaunchEdits = Schema.encodeSync(LaunchEdits);
+
+const encodeAnswers = Schema.encodeSync(Schema.Array(QuestionAnswerSchema));
 
 /**
  * One way a pending record settles (ADR 0029): an answer that took, its expiry, the system's
@@ -662,12 +574,12 @@ export const settleRecord = (
       decision: answer.decision,
       answers: Option.match(answer.answers, {
         onNone: () => null,
-        onSome: copyAnswers,
+        onSome: (answers) => plainCopy(encodeAnswers(answers)),
       }),
       note: null,
       launch: Option.match(answer.launch, {
         onNone: () => null,
-        onSome: (edits) => jsonRecordOf(encodeLaunchEdits(edits)),
+        onSome: (edits) => plainCopy(encodeLaunchEdits(edits)),
       }),
     };
   }
@@ -752,7 +664,7 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
         run: null,
         executorRequestId: null,
         ...UNDECIDED,
-        payload: copyObject(Option.getOrNull(request.payload)),
+        payload: Option.getOrNull(Option.map(request.payload, plainCopy)),
         answer: accepted ? ACCEPTED_AT_ASK : null,
         decidedBy: Option.match(request.acceptedBy, {
           onNone: () => null,

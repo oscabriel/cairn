@@ -173,15 +173,16 @@ type Writable<A> = { -readonly [K in keyof A]: A[K] };
  * `cairn.*` kind of `VISIBLE_DOCUMENTS` that a token exists for. A package that defines another
  * visible document adds its token here, and the stream watches it with no other edit.
  */
-const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
-  Approvals,
-  Permissions,
-  SubagentsDoc,
-  ChildDoc,
-  EscalationsDoc,
-  WorkflowsDoc,
-  GoalDoc,
-];
+export const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> =
+  [
+    Approvals,
+    Permissions,
+    SubagentsDoc,
+    ChildDoc,
+    EscalationsDoc,
+    WorkflowsDoc,
+    GoalDoc,
+  ];
 
 const encoder = new TextEncoder();
 

@@ -13,7 +13,9 @@
 //   expires (a short TTL here, a day in production), ends in the parent too: its mirror expires
 //   and the registry stops counting the question open;
 // - a worktree brief whose parent is outside any repository starts nothing: the parent is told why,
-//   and no child, registry item, worktree or plan row exists.
+//   and no child, registry item, worktree or plan row exists;
+// - what the real writers left (the parent's registry, approvals and escalations index, the child's
+//   link and permissions) decodes with the protocol's schemas, the ones clients read them with.
 //
 // Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
@@ -34,6 +36,12 @@ import {
   ApprovalId,
   ConversationId as ConversationIdOf,
 } from "@cairn/protocol/Ids";
+import { ApprovalsDocument, PermissionsDocument } from "@cairn/protocol/Policy";
+import {
+  ChildDocument,
+  EscalationsDocument,
+  SubagentsDocument,
+} from "@cairn/protocol/Subagents";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { AgentDoc } from "@earendil-works/pi-durable";
@@ -46,6 +54,8 @@ import {
   Option,
   Predicate,
   Ref,
+  Result,
+  Schema,
   Stream,
 } from "effect";
 import type { Scope } from "effect";
@@ -60,7 +70,11 @@ import {
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { childThreadIdOf } from "../subagents/Delivery.ts";
-import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  SubagentsDoc,
+} from "../subagents/SubagentDocs.ts";
 import { repairSubagentRows, SubagentRows } from "../subagents/SubagentRows.ts";
 import { steerReporter } from "../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
@@ -69,7 +83,7 @@ import { ThreadTitles } from "../threads/ThreadTitles.ts";
 import { TitleModel } from "../threads/TitleModel.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import { Brain } from "./Brain.ts";
-import { Approvals } from "./CairnDocs.ts";
+import { Approvals, Permissions } from "./CairnDocs.ts";
 import { piDurableLayer } from "./conformance/Targets.ts";
 import { durable } from "./Durable.ts";
 import { FauxModels } from "./FauxModels.ts";
@@ -118,6 +132,45 @@ const eventWhere = <A>(
   waitFor(
     Effect.map(Ref.get(events), (all) => Option.firstSomeOf(all.map(pick)))
   );
+
+/** Why a decode failed, in its own words; empty when it did not. */
+const failureOf = <A>(decoded: Result.Result<A, Schema.SchemaError>): string =>
+  Result.isFailure(decoded) ? decoded.failure.message : "";
+
+const decodeApprovals = Schema.decodeUnknownResult(ApprovalsDocument);
+
+const decodePermissions = Schema.decodeUnknownResult(PermissionsDocument);
+
+const decodeSubagents = Schema.decodeUnknownResult(SubagentsDocument);
+
+const decodeChild = Schema.decodeUnknownResult(ChildDocument);
+
+const decodeEscalations = Schema.decodeUnknownResult(EscalationsDocument);
+
+/**
+ * Why a document of each kind a real writer left does not decode with the protocol's schema a
+ * client reads it with; empty when it decodes.
+ */
+const decodeFailure = {
+  "cairn.approvals": (value: Schema.Json | undefined) =>
+    failureOf(decodeApprovals(value)),
+  "cairn.permissions": (value: Schema.Json | undefined) =>
+    failureOf(decodePermissions(value)),
+  "cairn.subagents": (value: Schema.Json | undefined) =>
+    failureOf(decodeSubagents(value)),
+  "cairn.child": (value: Schema.Json | undefined) =>
+    failureOf(decodeChild(value)),
+  "cairn.escalations": (value: Schema.Json | undefined) =>
+    failureOf(decodeEscalations(value)),
+};
+
+/** Asserts that `value`, a document of kind `kind` a real writer left, decodes as the protocol's. */
+const assertDecodes = (
+  kind: keyof typeof decodeFailure,
+  value: Schema.Json | undefined
+) => {
+  assert.strictEqual(decodeFailure[kind](value), "", kind);
+};
 
 /** What a started child is known by. */
 interface StartedChild {
@@ -401,6 +454,46 @@ describe("subagents over a pi-durable brain", () => {
   );
 
   it.live(
+    "the registry, link and records a settled child left decode as the protocol's documents",
+    () =>
+      withChild(false, (child) =>
+        Effect.gen(function* () {
+          const brain = yield* Brain;
+          const { harness } = yield* Effect.orDie(brain.session);
+
+          const read = yield* durable("test.read", async (context) => {
+            const link = await harness.snapshot(
+              ChildDoc,
+              piConversationId(child.conversationId),
+              context
+            );
+
+            const parent = piConversationId(
+              ConversationIdOf.make(link?.parentConversationId ?? 0)
+            );
+
+            return {
+              link,
+              registry: await harness.snapshot(SubagentsDoc, parent, context),
+              approvals: await harness.snapshot(Approvals, parent, context),
+            };
+          });
+
+          assertDecodes("cairn.child", read.link);
+          assertDecodes("cairn.subagents", read.registry);
+          assertDecodes("cairn.approvals", read.approvals);
+
+          // A settled child, with its settlement and its run marked: the shapes a tally reads.
+          const [item] = Object.values(read.registry?.items ?? {});
+
+          assert.strictEqual(item?.status, "settled");
+          assert.lengthOf(item?.settlements ?? [], 1);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "the boot repair makes a missing child row, once",
     () =>
       withChild(false, (child) =>
@@ -531,13 +624,36 @@ describe("subagents over a pi-durable brain", () => {
                 ConversationIdOf.make(link?.parentConversationId ?? 0)
               );
 
+              const childConversation = piConversationId(child.conversationId);
+
               return {
                 approvals: await harness.snapshot(Approvals, parent, context),
                 registry: await harness.snapshot(SubagentsDoc, parent, context),
+                escalations: await harness.snapshot(
+                  EscalationsDoc,
+                  parent,
+                  context
+                ),
+                link,
+                permissions: await harness.snapshot(
+                  Permissions,
+                  childConversation,
+                  context
+                ),
               };
             });
 
-            const { approvals, registry } = yield* read;
+            const { approvals, registry, escalations, link, permissions } =
+              yield* read;
+
+            // What the real writers left decodes as the protocol's documents, as a client reads them.
+            assertDecodes("cairn.approvals", approvals);
+            assertDecodes("cairn.subagents", registry);
+            assertDecodes("cairn.escalations", escalations);
+            assertDecodes("cairn.child", link);
+            assertDecodes("cairn.permissions", permissions);
+            assert.lengthOf(Object.keys(escalations?.items ?? {}), 1);
+
             const records = Object.values(approvals?.items ?? {});
 
             const mirrors = records.filter(

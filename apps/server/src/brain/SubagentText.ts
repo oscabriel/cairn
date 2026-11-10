@@ -273,9 +273,6 @@ export const SubagentToolText = {
   /** `subagent_spawn` whose `model` is not `provider/modelId[:level]`. */
   modelInvalid: (model: string) =>
     `subagent_spawn's model "${model}" is not provider/modelId[:level]. Call models to see what a child can run on, then call it again with one, or leave model out to run the child on your own model.`,
-  /** `subagent_spawn` whose `model` is a role name: roles were removed (ADR 0043). */
-  roleRemoved: (role: string) =>
-    `subagent_spawn's model "${role}" is a role, and roles were removed. Pass model as provider/modelId[:level] (call models to see what a child can run on), or leave it out to run the child on your own model and level.`,
   /** `subagent_spawn` whose `done_when` is not a command as an argv list. */
   doneWhenInvalid:
     'subagent_spawn\'s done_when must be a command as an argv list of non-empty strings, run without a shell, for example ["npm", "test"]. Pass one, or leave it out when you will judge the result yourself.',

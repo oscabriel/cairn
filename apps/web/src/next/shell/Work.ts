@@ -67,11 +67,15 @@ import {
 } from "@cairn/client-logic/WorkflowSteps";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
-import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
+import {
+  CHILD_DOCUMENT,
+  ChildDocument,
+  SUBAGENTS_DOCUMENT,
+} from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
 import { WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
 import type { WorkflowRecord } from "@cairn/protocol/Workflows";
-import { Option, Predicate, Schema } from "effect";
+import { Option, Predicate, Schema, Struct } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { CornerLeftUp, ListTree, X } from "lucide";
@@ -115,7 +119,8 @@ export interface WorkInputs {
   readonly workflows: ReadonlyArray<WorkflowGroup>;
 }
 
-const ChildReportOf = Schema.Struct({ report: Schema.NullOr(Schema.Json) });
+/** What the panel reads of a `cairn.child` document, as the protocol's `ChildDocument` has it. */
+const ChildReportOf = ChildDocument.mapFields(Struct.pick(["report"]));
 
 const decodeChildReport = Schema.decodeUnknownOption(ChildReportOf);
 

@@ -84,6 +84,21 @@ export const VISIBLE_DOCUMENTS: ReadonlyArray<string> = [
   WORKFLOWS_DOCUMENT,
 ];
 
+/**
+ * A value of encoded type `T` as a pi-durable writer holds it: the same plain JSON, mutable, since a
+ * transaction hands out a draft to change in place. A document schema's `Encoded` type is already
+ * plain JSON (no transformations, `JsonSchema.test.ts` holds that), so this is the only declaration
+ * a writer needs.
+ */
+export type PlainJson<T> = T extends string | number | boolean | null
+  ? T
+  : T extends ReadonlyArray<infer Item>
+    ? Array<PlainJson<Item>>
+    : { -readonly [Key in keyof T]: PlainJson<T[Key]> };
+
+/** What a document or entry schema `S` holds, as its pi-durable writer keeps it (`PlainJson`). */
+export type DocumentState<S extends Schema.Top> = PlainJson<S["Encoded"]>;
+
 const Segment = Schema.Union([Schema.String, Schema.Int]);
 
 const Path = Schema.Array(Segment);

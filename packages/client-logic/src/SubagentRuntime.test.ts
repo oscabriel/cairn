@@ -172,7 +172,17 @@ const registryItem = (fields: { readonly [key: string]: Json }): Json => ({
   anchorTaskId: 7,
   briefApprovalId: "call-1",
   description: "Count the files",
-  dispatch: { spec: null, resolved: null, previewed: null, dispatchedAt: 2000 },
+  dispatch: {
+    spec: null,
+    resolved: {
+      spec: "faux/scripted",
+      model: { provider: "faux", modelId: "scripted" },
+      thinkingLevel: null,
+      priced: false,
+    },
+    previewed: null,
+    dispatchedAt: 2000,
+  },
   isolation: "shared",
   worktree: null,
   status: "working",

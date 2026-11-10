@@ -406,7 +406,7 @@ describe("launch approval and the envelope on pi-durable", () => {
 
         assert.deepStrictEqual(plan.nodes, { count: 5, unbounded: false });
         assert.deepStrictEqual(
-          plan.envelope.roles.map((entry) => entry.spec),
+          plan.envelope.models.map((entry) => entry.spec),
           [KIT_SPEC]
         );
         assert.strictEqual(plan.envelope.maxNodes, 5);
@@ -798,8 +798,8 @@ return { a, args, total: budget.total };`);
             ]?.payload
           );
 
-        assert.strictEqual(briefOf("e").role, ALT_MODEL);
-        assert.isNull(briefOf("a").role);
+        assert.strictEqual(briefOf("e").model, ALT_MODEL);
+        assert.isNull(briefOf("a").model);
 
         const e = nodes.find((node) => node.label === "e");
 

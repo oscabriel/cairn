@@ -49,7 +49,17 @@ const itemWith = (inputs: {
   anchorTaskId: 0,
   briefApprovalId: "brief",
   description: "Count the files",
-  dispatch: {},
+  dispatch: {
+    spec: null,
+    resolved: {
+      spec: "faux/scripted",
+      model: { provider: "faux", modelId: "scripted" },
+      thinkingLevel: null,
+      priced: false,
+    },
+    previewed: null,
+    dispatchedAt: 0,
+  },
   isolation: "shared",
   worktree: null,
   status: "working",

@@ -41,7 +41,7 @@ import {
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { emit } from "../brain/Events.ts";
 import { cutSummary, readPermissions } from "../brain/Permissions.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../subagents/SubagentDocs.ts";
 import { budgetAsked, MAX_TOKENS, MAX_USD } from "../usage/DefaultBudget.ts";
 import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import {
@@ -176,7 +176,7 @@ const launchRecord = (
     run: null,
     executorRequestId: null,
     ...UNDECIDED,
-    payload: jsonRecordOf(encodeLaunch(launch)),
+    payload: plainCopy(encodeLaunch(launch)),
   };
 };
 

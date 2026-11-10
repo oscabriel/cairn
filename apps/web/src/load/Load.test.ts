@@ -40,7 +40,7 @@ describe("stale build", () => {
       element.type = "application/json";
       element.textContent = JSON.stringify({
         shell: { snapshotSequence: 0, projects: [], threads: [] },
-        protocol: 2,
+        protocol: 3,
         build: "0123456789ab",
         vapidPublicKey: null,
       });

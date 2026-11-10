@@ -66,7 +66,10 @@ import {
   ThreadMeta,
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
-import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
+import type {
+  ApprovalPayloadState,
+  ApprovalRecord,
+} from "../brain/CairnDocs.ts";
 import {
   emit,
   eventKind,
@@ -960,7 +963,7 @@ const raiseRecord = (
   elapsedMillis: number
 ): ApprovalRecord => {
   // The card names the run and reads what it spent against its line (ADR 0047).
-  const payload: JsonRecord = {
+  const payload: ApprovalPayloadState = {
     type: "budget-raise",
     scope: line.workflowId,
     title: name,

@@ -309,7 +309,12 @@ const scriptedDocuments =
             description: "Count the files",
             dispatch: {
               spec: null,
-              resolved: { model: { provider: "scripted", modelId: "echo" } },
+              resolved: {
+                spec: "scripted/echo",
+                model: { provider: "scripted", modelId: "echo" },
+                thinkingLevel: null,
+                priced: false,
+              },
               previewed: null,
               dispatchedAt: 5,
             },

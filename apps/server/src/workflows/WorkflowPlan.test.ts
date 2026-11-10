@@ -372,23 +372,18 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
   );
 
   test.effect(
-    "refuses a role, as an option or as a model, since roles were removed",
+    "refuses a role name, as an option or as a model: it is no option and no model",
     () =>
       Effect.gen(function* () {
         yield* expectRefusal(
           `${META}await agent("x", { role: "@scout" });`,
           "agent_options_invalid",
-          "agent() takes no `role` any more: roles were removed"
-        );
-        yield* expectRefusal(
-          `${META}await verify("x", { role: "${LUNA}" });`,
-          "agent_options_invalid",
-          "verify() takes no `role` any more"
+          "agent() does not take `role`"
         );
         yield* expectRefusal(
           `${META}await agent("x", { model: "@worker" });`,
           "agent_options_invalid",
-          "model `@worker` is a role, and roles were removed"
+          "model `@worker` is not `provider/modelId[:level]`"
         );
       })
   );
@@ -736,9 +731,9 @@ describe(estimateRun, () => {
         assert.strictEqual(roundTrip.envelope.maxNodes, 5);
         assert.strictEqual(roundTrip.envelope.scriptHash, run.script.hash);
         assert.deepStrictEqual(
-          roundTrip.envelope.roles.map((role) => [
-            String(role.spec),
-            role.readonly,
+          roundTrip.envelope.models.map((entry) => [
+            String(entry.spec),
+            entry.readonly,
           ]),
           [
             [THREAD_SPEC, true],

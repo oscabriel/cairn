@@ -693,7 +693,9 @@ return { a, b };`,
             briefsAfterRaise: true,
             envelope: (granted) => ({
               ...granted,
-              roles: granted.roles.filter((entry) => entry.spec !== ALT_MODEL),
+              models: granted.models.filter(
+                (entry) => entry.spec !== ALT_MODEL
+              ),
             }),
           }
         );

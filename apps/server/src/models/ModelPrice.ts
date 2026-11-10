@@ -5,7 +5,7 @@
 // with the same id and is labelled as an equivalent at API list price. A model whose rates are all
 // zero, or that is not in the catalog, is unpriced: it counts tokens only and is never shown as $0.
 //
-// Pure over a catalog lookup, so the spend ledger, the role check and their tests share one rule.
+// Pure over a catalog lookup, so the spend ledger, the model check and their tests share one rule.
 // The arithmetic matches pi-ai's `calculateCost` (`models.ts`): the tier with the highest threshold
 // below the request's whole input (fresh, cache read and cache write) wins, and a one-hour cache
 // write costs twice the base input rate.

@@ -13,22 +13,21 @@
 //   (approvals/QuestionRoute.ts) and resolved when the question is answered or ends.
 
 import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
-import type {
-  RuntimeMode,
-  RuntimeRequestKind,
-  WakeMode,
-} from "@cairn/protocol/Policy";
 import {
   CHILD_DOCUMENT,
   ESCALATIONS_DOCUMENT,
   SUBAGENTS_DOCUMENT,
 } from "@cairn/protocol/Subagents";
 import type {
-  EscalationStatus,
-  SettlementOutcome,
+  ChildDocument,
+  EscalationsDocument,
+  RunMark,
+  SettlementMark,
   SubagentQuestionState,
-  SubagentStatus,
+  SubagentRecord,
+  SubagentsDocument,
 } from "@cairn/protocol/Subagents";
+import type { DocumentState, PlainJson } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { copyJson } from "@earendil-works/chord/json";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
@@ -36,45 +35,18 @@ import { defineDoc } from "@earendil-works/pi-durable";
 import { Option, Predicate } from "effect";
 import type { Schema } from "effect";
 
+import { migrateSubagents } from "../brain/RolesRetired.ts";
+
 /** A JSON object as a document holds it. */
 export interface JsonRecord {
   [key: string]: JsonValue;
 }
 
-/** One delivered settlement, as the registry keeps it: the answer is an entry id, never its text. */
-export interface SettlementMarkState {
-  [key: string]: JsonValue;
-  seq: number;
-  outcome: SettlementOutcome;
-  answerEntry: number | null;
-  reportedAt: number;
-  /** The request ids of every input the settled run answered or ended. */
-  inputs: Array<string>;
-}
+/** One delivered settlement, as the registry keeps it: the protocol's `SettlementMark`. */
+export type SettlementMarkState = DocumentState<typeof SettlementMark>;
 
-/**
- * One child run nudged or settled: the protocol's `RunMark` as plain JSON. `run` is the run's
- * identity: its answer entry, or for a run that ended unanswered the entry of its first input, read
- * from the committed transcript.
- */
-export type RunMarkState =
-  | {
-      [key: string]: JsonValue;
-      run: string;
-      phase: "nudge";
-      seq: number;
-      /** The request ids of every input the nudged run ended. */
-      inputs: Array<string>;
-      /** Whether every one of them was a user's own steer: the run's settlement wakes no one. */
-      quiet: boolean;
-    }
-  | {
-      [key: string]: JsonValue;
-      run: string;
-      phase: "settled";
-      /** Its settlement's, whose `inputs` are the run's. */
-      seq: number;
-    };
+/** One child run nudged or settled: the protocol's `RunMark`. */
+export type RunMarkState = DocumentState<typeof RunMark>;
 
 /** The inputs a run mark names: a nudge mark's own, a settled mark's settlement's. */
 export const markInputs = (
@@ -86,36 +58,8 @@ export const markInputs = (
     : (item.settlements.find((settled) => settled.seq === mark.seq)?.inputs ??
       []);
 
-/** Where a child's question stands, from the parent's side. */
-export interface QuestionMarkState {
-  [key: string]: JsonValue;
-  state: SubagentQuestionState;
-  escalatedAt: number | null;
-}
-
-/** One child in its parent's registry: the protocol's `SubagentRecord` as plain JSON. */
-export interface SubagentItemState {
-  [key: string]: JsonValue;
-  threadId: string;
-  conversationId: number;
-  anchorTaskId: number;
-  briefApprovalId: string;
-  description: string;
-  /** The protocol's `DispatchRecord`. */
-  dispatch: JsonRecord;
-  isolation: "worktree" | "shared";
-  worktree: JsonRecord | null;
-  status: SubagentStatus;
-  wake: WakeMode;
-  settlements: Array<SettlementMarkState>;
-  /** Every child run nudged or settled, so a run settles once whichever reporter gets there first. */
-  runs: Array<RunMarkState>;
-  /** The last settlement whose note (and wake, when due) was written. */
-  delivered: number;
-  questions: { [approvalId: string]: QuestionMarkState };
-  /** Each input's request id to the reporter task delivering it, so a resent input lands once. */
-  inputs: { [requestId: string]: number };
-}
+/** One child in its parent's registry: the protocol's `SubagentRecord`. */
+export type SubagentItemState = DocumentState<typeof SubagentRecord>;
 
 /** Whether a JSON value is an object. */
 export const isJsonRecord = (
@@ -129,16 +73,30 @@ export const jsonRecordOf = (value: Schema.Json): JsonRecord | null => {
   return isJsonRecord(copied) ? copied : null;
 };
 
-/** `cairn.subagents` state. */
-export interface SubagentsState {
-  [key: string]: JsonValue;
-  items: { [key: string]: SubagentItemState };
-}
+/**
+ * A detached copy of `value` as its writer holds it (`PlainJson`): the same JSON, alias-free and
+ * mutable, safe to keep past its transaction or to write into another document. `value` is plain
+ * JSON already: a document's value, or what a protocol schema encoded.
+ */
+export const plainCopy = <T>(value: T): PlainJson<T> =>
+  // SAFETY: `copyJson` copies a strict-JSON tree into an alias-free tree of the same shape, and
+  // `PlainJson<T>` is `T` with its readonly modifiers dropped; a value that is not strict JSON throws.
+  // Verified by: SubagentsPiDurable.test.ts, CairnDocs.test.ts and WorkflowLedger.test.ts (each
+  // document a real writer built decodes with its protocol schema).
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+  copyJson(value) as PlainJson<T>;
 
-/** `cairn.subagents`: every child a thread started, by the brief's approval id (ADR 0028). */
+/** `cairn.subagents` state: the protocol's `SubagentsDocument`. */
+export type SubagentsState = DocumentState<typeof SubagentsDocument>;
+
+/**
+ * `cairn.subagents`: every child a thread started, by the brief's approval id (ADR 0028). Version 2
+ * retired the dispatch records' roles (ADR 0052).
+ */
 export const SubagentsDoc = defineDoc<SubagentsState>({
   kind: SUBAGENTS_DOCUMENT,
-  version: 1,
+  version: 2,
+  migrate: migrateSubagents,
   scope: "conversation",
   history: "latest",
   // A fork is another thread, with no children.
@@ -166,36 +124,11 @@ export const SubagentParentsDoc = defineDoc<SubagentParentsState>({
 });
 
 /**
- * A child's first `report`: the protocol's `ChildReport` as plain JSON. `payload` stays null: a
- * typed result is `submit_result`'s, in `cairn.result`.
+ * `cairn.child` state: the protocol's `ChildDocument`. `attempts` stays 0: a typed result's attempts
+ * are derived from the child's transcript (`readAttemptState`, models/ResultTool.ts), and `report`'s
+ * `payload` stays null: a typed result is `submit_result`'s, in `cairn.result`.
  */
-export interface ChildReportState {
-  [key: string]: JsonValue;
-  summary: string;
-  divergence: string;
-  payload: JsonValue;
-  commit: string | null;
-}
-
-/** `cairn.child` state: the protocol's `ChildDocument` as plain JSON. */
-export interface ChildState {
-  [key: string]: JsonValue;
-  key: string;
-  parentThreadId: string;
-  parentConversationId: number;
-  rootThreadId: string;
-  depth: number;
-  briefApprovalId: string;
-  resultSchema: JsonRecord | null;
-  /**
-   * Always 0: a typed result's attempts are derived from the child's transcript
-   * (`readAttemptState`, models/ResultTool.ts), never kept as a counter.
-   */
-  attempts: number;
-  report: ChildReportState | null;
-  /** The mode the child started in: the narrower of its brief's and its parent's. */
-  permissionMode: RuntimeMode;
-}
+export type ChildState = DocumentState<typeof ChildDocument>;
 
 /**
  * `cairn.child`: a subagent's link to its parent, written in its creating commit (ADR 0028). The
@@ -223,24 +156,8 @@ export const ChildDoc = defineDoc<ChildState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
 
-/** One escalated child question in its parent's index: the protocol's `Escalation` as plain JSON. */
-export interface EscalationState {
-  [key: string]: JsonValue;
-  childThreadId: string;
-  kind: RuntimeRequestKind;
-  payload: JsonRecord | null;
-  askedAt: number;
-  escalatedAt: number;
-  /** Why it reached the user (`EscalationWhy`, or the parent's own reason). */
-  why: string;
-  status: EscalationStatus;
-}
-
-/** `cairn.escalations` state. */
-export interface EscalationsState {
-  [key: string]: JsonValue;
-  items: { [approvalId: string]: EscalationState };
-}
+/** `cairn.escalations` state: the protocol's `EscalationsDocument`. */
+export type EscalationsState = DocumentState<typeof EscalationsDocument>;
 
 /**
  * `cairn.escalations`: a parent's index of its children's questions escalated to the user (ADR

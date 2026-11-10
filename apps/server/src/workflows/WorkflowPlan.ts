@@ -44,7 +44,6 @@ import {
 } from "effect";
 
 import {
-  isRoleName,
   modelOfSpec,
   modelText,
   parseModelSpec,
@@ -56,7 +55,6 @@ import {
   isObjectRootSchema,
   preludeLineOf,
   rewriteScript,
-  ROLE_OPTION,
   TOO_MANY_ITEMS,
   VerifyCall,
 } from "./Prelude.ts";
@@ -482,32 +480,15 @@ class Recorder {
 
   /**
    * The model spec a call runs on, or the problem with it: the script's `model`, else the launching
-   * thread's model and level (ADR 0043). A `role` option (prelude version 3 still passes one on)
-   * and a role name in `model` are refused, since roles were removed.
+   * thread's model and level (ADR 0043).
    */
   spec(
     site: string,
     tool: string,
-    call: Pick<AgentCall, "model" | "role">
+    call: Pick<AgentCall, "model">
   ): Option.Option<ModelSpec> {
-    if (Option.isSome(call.role)) {
-      this.problem(
-        `line ${site}: ${tool}() takes no \`role\` any more: roles were removed; name a model with \`model: "provider/modelId[:level]"\` (the models tool lists them), or leave it out to run on this thread's model`
-      );
-
-      return Option.none();
-    }
-
     if (Option.isSome(call.model)) {
       const written = call.model.value.trim();
-
-      if (isRoleName(written)) {
-        this.problem(
-          `line ${site}: model \`${written}\` is a role, and roles were removed; name a model as \`provider/modelId[:level]\` (the models tool lists them), or leave model out to run on this thread's model`
-        );
-
-        return Option.none();
-      }
 
       const spec = Option.filter(decodeModelSpec(written), (found) =>
         Option.isSome(parseModelSpec(found))
@@ -538,8 +519,7 @@ class Recorder {
   agent(call: AgentCall): NodeOutcome {
     const site = Option.getOrElse(call.site, () => "?");
 
-    // `role` is reported by `spec`, with what to pass instead.
-    const unknown = call.unknownOptions.filter((key) => key !== ROLE_OPTION);
+    const unknown = call.unknownOptions;
 
     if (unknown.length > 0) {
       this.problem(
@@ -968,7 +948,7 @@ export const toLaunch = (run: DryRun, input: LaunchInput): WorkflowLaunch => {
         Option.getOrElse(input.maxNodes, () => counted)
       ),
       maxConcurrent: MAX_CONCURRENT_NODES,
-      roles: [...models.values()].map((model) => ({ ...model, arms: ARMS })),
+      models: [...models.values()].map((model) => ({ ...model, arms: ARMS })),
       modes: input.modes,
       writes: input.writes,
       budget: input.budget,

@@ -13,7 +13,8 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { Effect, Fiber, Layer, Option, Predicate, Stream } from "effect";
 
-import { testBrain } from "../brain/BrainTestKit.ts";
+import { FAUX_MODEL_OPTIONS, testBrain } from "../brain/BrainTestKit.ts";
+import type { FauxModelOptions } from "../brain/BrainTestKit.ts";
 import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import { PiConfig } from "../models/PiConfig.ts";
@@ -137,10 +138,19 @@ export const hostLayer = (fixture: HostFixture, policy: PiHostPolicy) =>
 
 /**
  * A brain on the faux model with the production set, whose `cairn.pi-tools` extension comes from
- * `host`, and the host itself.
+ * `host`, and the host itself. `model` is what the faux model is built with, when a caller needs
+ * other settings than the kit's (a kill judge needs retries on: see `judges/fixtures/pi-host`).
  */
-export const brainLayer = <E>(host: Layer.Layer<PiHost, E>, dataDir: string) =>
-  testBrain({ piHost: host, dataDir }).pipe(Layer.provideMerge(host));
+export const brainLayer = <E>(
+  host: Layer.Layer<PiHost, E>,
+  dataDir: string,
+  model?: FauxModelOptions
+) =>
+  testBrain({
+    piHost: host,
+    dataDir,
+    model: model ?? FAUX_MODEL_OPTIONS,
+  }).pipe(Layer.provideMerge(host));
 
 const isRunEnd = Predicate.isTagged("RunTerminal");
 

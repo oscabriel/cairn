@@ -47,6 +47,7 @@ import {
 } from "effect";
 
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
+import { FAUX_MODEL_OPTIONS } from "../../../apps/server/src/brain/BrainTestKit.ts";
 import {
   FauxModels,
   FAUX_MODEL,
@@ -411,6 +412,17 @@ const host = PiHost.layerWith({
   )
 );
 
+// pi-durable 1.5 charges a request a kill cut off as a failed attempt instead of resending it. A
+// kill of a resume life can land while the unsafe thread's model answers its interrupted call, so
+// this brain retries as pi's default policy does, with a short backoff; with retries off that
+// thread never finished and the last life timed out (about one run in four).
+const RETRYING_MODEL = {
+  ...FAUX_MODEL_OPTIONS,
+  settings: { retry: { enabled: true, maxRetries: 10, baseDelayMs: 50 } },
+};
+
 NodeRuntime.runMain(
-  program.pipe(Effect.provide(brainLayer(host, path.join(dir, "brain"))))
+  program.pipe(
+    Effect.provide(brainLayer(host, path.join(dir, "brain"), RETRYING_MODEL))
+  )
 );

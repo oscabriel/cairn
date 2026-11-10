@@ -10,7 +10,10 @@ import { NodeServices } from "@effect/platform-node";
 import { assert, describe, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { eventuallyTrue as eventually } from "../../apps/server/src/EventuallyTestKit.ts";
+import {
+  eventuallyTrue,
+  testLimit,
+} from "../../apps/server/src/EventuallyTestKit.ts";
 import * as Events from "./Events.ts";
 import * as Unit from "./Unit.ts";
 
@@ -37,6 +40,13 @@ const hasUserSystemd = (() => {
 
 const unitName = (role: string) =>
   `cairn-judge-lib-${role}-${process.pid}-${randomBytes(4).toString("hex")}`;
+
+/**
+ * Polls `check` until it holds. A failed read (`systemctl show` exiting non-zero while the unit
+ * restarts or the user bus is slow) counts as not yet, so it is polled through rather than failing.
+ */
+const eventually = <E, R>(check: Effect.Effect<boolean, E, R>) =>
+  eventuallyTrue(check.pipe(Effect.orElseSucceed(() => false)));
 
 const listeningLine =
   '{"message":"listening","level":"INFO","timestamp":"2026-10-22T09:00:00.000Z","annotations":{"event":"listening","port":4100}}';
@@ -93,7 +103,7 @@ describe.skipIf(!hasUserSystemd)("transient units", () => {
             ["listening"]
           );
         }).pipe(Effect.scoped),
-      { timeout: 20_000 }
+      { timeout: testLimit(20_000) }
     );
 
     it.effect(
@@ -134,7 +144,7 @@ describe.skipIf(!hasUserSystemd)("transient units", () => {
             ["/usr/bin/sleep 300"]
           );
         }).pipe(Effect.scoped),
-      { timeout: 20_000 }
+      { timeout: testLimit(20_000) }
     );
 
     it.effect(
@@ -176,7 +186,7 @@ describe.skipIf(!hasUserSystemd)("transient units", () => {
           );
           assert.strictEqual(yield* Unit.activeState(live), "active");
         }).pipe(Effect.scoped),
-      { timeout: 20_000 }
+      { timeout: testLimit(20_000) }
     );
 
     it.effect(
@@ -197,7 +207,7 @@ describe.skipIf(!hasUserSystemd)("transient units", () => {
             )
           );
         }).pipe(Effect.scoped),
-      { timeout: 20_000 }
+      { timeout: testLimit(20_000) }
     );
   });
 });

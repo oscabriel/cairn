@@ -20,6 +20,7 @@ import {
   ThreadReceipt,
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { workflowNodeRun } from "../subagents/SubagentRows.ts";
 import { PRELUDE_VERSION, rewriteScript } from "./Prelude.ts";
@@ -87,12 +88,12 @@ interface Identity {
   readonly model: string | null;
 }
 
-/** Waits until the workflow row has ended (its watcher wrote it), at most `ms`. */
+/** Waits until the workflow row has ended (its watcher wrote it), at most `ms` scaled by the slack. */
 const settledRow = async (
   brain: KitBrain,
   ms: number
 ): Promise<Readonly<WorkflowsState> | undefined> => {
-  const until = performance.now() + ms;
+  const until = performance.now() + testLimit(ms);
   let ledger = await brain.harness.snapshot(WorkflowsDoc, brain.root, context);
 
   while (performance.now() < until) {

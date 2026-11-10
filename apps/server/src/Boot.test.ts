@@ -40,6 +40,7 @@ import { FAUX_MODEL, ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
+import { eventuallyTrue, testLimit } from "./EventuallyTestKit.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Diffs } from "./git/Diffs.ts";
 import { Health } from "./http/Health.ts";
@@ -347,15 +348,7 @@ layer(GatedApp, { excludeTestServices: true })("the serving gate", (gated) => {
 
       yield* Deferred.succeed(resumeGate, true);
 
-      for (
-        let attempt = 0;
-        attempt < 100 && !(yield* healthReady);
-        attempt += 1
-      ) {
-        yield* Effect.sleep("20 millis");
-      }
-
-      assert.isTrue(yield* healthReady);
+      assert.isTrue(yield* eventuallyTrue(healthReady, "/health says ready"));
       assert.strictEqual(yield* upgradeStatus, 101);
     })
   );
@@ -494,6 +487,6 @@ describe("boot over a brain of 300 threads", () => {
             rmSync(dataDir, { recursive: true, force: true });
           })
       ),
-    60_000
+    testLimit(60_000)
   );
 });

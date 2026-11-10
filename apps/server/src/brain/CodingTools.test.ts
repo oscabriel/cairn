@@ -21,6 +21,7 @@ import {
   Stream,
 } from "effect";
 
+import { testLimit } from "../EventuallyTestKit.ts";
 import { brainExtensions, testBrain } from "./BrainTestKit.ts";
 import {
   ScriptSlots,
@@ -323,7 +324,7 @@ describe("coding tools", () => {
 
         assert.include(plain, "ran plainly");
       }).pipe(Effect.provide(harness)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -372,6 +373,6 @@ describe("coding tools", () => {
         ),
         Effect.provide(harness)
       ),
-    30_000
+    testLimit(30_000)
   );
 });

@@ -19,6 +19,7 @@ import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
+import { testLimit } from "../EventuallyTestKit.ts";
 import { PiHost } from "./PiHost.ts";
 import {
   brainLayer,
@@ -71,7 +72,7 @@ layer(
     hostLayer(isolated, fixturePolicy(isolated, { scope: "folder" })),
     path.join(isolated.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("one instance per folder", (live) => {
   live.effect("each folder's calls see their own session_start", () =>
     Effect.gen(function* () {
@@ -138,7 +139,7 @@ layer(
     hostLayer(shared, fixturePolicy(shared, { scope: "brain" })),
     path.join(shared.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("one instance shared between folders (mutation control)", (live) => {
   live.effect("fails the isolation check", () =>
     Effect.gen(function* () {
@@ -162,7 +163,7 @@ layer(
     ),
     path.join(pooled.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("the folder pool", (live) => {
   live.effect(
     "shuts the least recently used idle folder down past its limit",

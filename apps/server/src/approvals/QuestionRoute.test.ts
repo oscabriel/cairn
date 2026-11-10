@@ -53,7 +53,7 @@ import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { piConversationId } from "../brain/PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "../brain/SubagentFaults.ts";
 import { EscalationWhy } from "../brain/SubagentText.ts";
-import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
   createProject,
@@ -442,7 +442,7 @@ describe("question routing's automatic escalations", () => {
         "none",
         ({ parent }) => answeredInParent(parent, EscalationWhy.parentSlow(300))
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -464,7 +464,7 @@ describe("question routing's automatic escalations", () => {
           yield* answeredInParent(parent, EscalationWhy.parentArchived);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -476,7 +476,7 @@ describe("question routing's automatic escalations", () => {
         ({ parent }) => answeredInParent(parent, EscalationWhy.parentArchived),
         "archive-then-ask"
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -502,7 +502,7 @@ describe("question routing's automatic escalations", () => {
           yield* answeredInParent(parent, EscalationWhy.parentDeleted);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 

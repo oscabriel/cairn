@@ -21,6 +21,11 @@ import path from "node:path";
 
 import { afterAll, afterEach, assert, describe, it } from "@effect/vitest";
 
+import {
+  slackenedTries,
+  testLimit,
+} from "../../apps/server/src/EventuallyTestKit.ts";
+
 const nightly = path.join(
   import.meta.dirname,
   "..",
@@ -104,7 +109,11 @@ const holdLock = () => {
     { stdio: "ignore" }
   );
 
-  for (let tries = 0; tries < 200 && !lockIsHeld(); tries += 1) {
+  for (
+    let tries = 0;
+    tries < slackenedTries(200) && !lockIsHeld();
+    tries += 1
+  ) {
     spawnSync("sleep", ["0.05"]);
   }
 
@@ -113,94 +122,106 @@ const holdLock = () => {
 
 // Each case spawns the script and waits out its lock timeout, about 3 s alone and more under the
 // gate's load, so the cases take a longer limit than Vitest's 5 s.
-describe("nightly.sh and the judge lock", { timeout: 30_000 }, () => {
-  afterEach(() => {
-    holder?.kill();
-    holder = undefined;
+describe(
+  "nightly.sh and the judge lock",
+  { timeout: testLimit(30_000) },
+  () => {
+    afterEach(() => {
+      holder?.kill();
+      holder = undefined;
 
-    for (let tries = 0; tries < 200 && lockIsHeld(); tries += 1) {
-      spawnSync("sleep", ["0.05"]);
-    }
-  });
+      for (
+        let tries = 0;
+        tries < slackenedTries(200) && lockIsHeld();
+        tries += 1
+      ) {
+        spawnSync("sleep", ["0.05"]);
+      }
+    });
 
-  afterAll(() => {
-    rmSync(root, { recursive: true, force: true });
-  });
+    afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
 
-  it("runs every step under the lock, each within the nightly, and records itself as its own run", () => {
-    const result = runNightly(homeOf("free"));
+    it("runs every step under the lock, each within the nightly, and records itself as its own run", () => {
+      const result = runNightly(homeOf("free"));
 
-    assert.strictEqual(result.status, 0, result.out);
-    assert.deepStrictEqual(
-      result.calls.map((call) => call.split("|").slice(0, 2).join("|")),
-      [
-        "held|fixtures/durability/nightly.sh",
-        "held|fixtures/durability/nightly.sh",
-        "held|fixtures/durability/nightly.sh",
-        "held|",
-      ]
-    );
-    assert.match(result.calls[0] ?? "", /judges\/durability\.ts --runs 3$/u);
-    assert.match(
-      result.calls[3] ?? "",
-      /judges\/lib\/append-record\.ts --file fixtures\/durability\/nightly\.sh /u
-    );
-  });
+      assert.strictEqual(result.status, 0, result.out);
+      assert.deepStrictEqual(
+        result.calls.map((call) => call.split("|").slice(0, 2).join("|")),
+        [
+          "held|fixtures/durability/nightly.sh",
+          "held|fixtures/durability/nightly.sh",
+          "held|fixtures/durability/nightly.sh",
+          "held|",
+        ]
+      );
+      assert.match(result.calls[0] ?? "", /judges\/durability\.ts --runs 3$/u);
+      assert.match(
+        result.calls[3] ?? "",
+        /judges\/lib\/append-record\.ts --file fixtures\/durability\/nightly\.sh /u
+      );
+    });
 
-  it("runs its steps under a caller that already holds the lock, as a hand run wraps it", () => {
-    const home = homeOf("wrapped");
+    it("runs its steps under a caller that already holds the lock, as a hand run wraps it", () => {
+      const home = homeOf("wrapped");
 
-    const result = runNightly(home, true);
+      const result = runNightly(home, true);
 
-    assert.strictEqual(result.status, 0, result.out);
-    assert.notInclude(result.out, '"nightly":"skipped"');
-    assert.lengthOf(result.calls, 4, result.out);
-    assert.isTrue(
-      result.calls.every((call) => call.startsWith("held|")),
-      result.out
-    );
-    assert.isFalse(
-      existsSync(path.join(home, "cairn-judges", "nightly-skipped"))
-    );
-  });
+      assert.strictEqual(result.status, 0, result.out);
+      assert.notInclude(result.out, '"nightly":"skipped"');
+      assert.lengthOf(result.calls, 4, result.out);
+      assert.isTrue(
+        result.calls.every((call) => call.startsWith("held|")),
+        result.out
+      );
+      assert.isFalse(
+        existsSync(path.join(home, "cairn-judges", "nightly-skipped"))
+      );
+    });
 
-  it("skips a night the lock stays held, and fails the second such night in a row", () => {
-    const home = homeOf("held");
+    it("skips a night the lock stays held, and fails the second such night in a row", () => {
+      const home = homeOf("held");
 
-    holdLock();
+      holdLock();
 
-    const first = runNightly(home);
+      const first = runNightly(home);
 
-    assert.strictEqual(first.status, 0, first.out);
-    assert.deepStrictEqual(first.calls, []);
-    assert.include(first.out, '"nightly":"skipped"');
-    assert.include(
-      readFileSync(path.join(home, "durability.jsonl"), "utf-8"),
-      '"nightly":"skipped"'
-    );
+      assert.strictEqual(first.status, 0, first.out);
+      assert.deepStrictEqual(first.calls, []);
+      assert.include(first.out, '"nightly":"skipped"');
+      assert.include(
+        readFileSync(path.join(home, "durability.jsonl"), "utf-8"),
+        '"nightly":"skipped"'
+      );
 
-    const second = runNightly(home);
+      const second = runNightly(home);
 
-    assert.strictEqual(second.status, 1, second.out);
-    assert.deepStrictEqual(second.calls, []);
-    assert.include(second.out, "skipped the night before too");
-  });
+      assert.strictEqual(second.status, 1, second.out);
+      assert.deepStrictEqual(second.calls, []);
+      assert.include(second.out, "skipped the night before too");
+    });
 
-  it("forgets a skipped night once a night runs", () => {
-    const home = homeOf("recovered");
+    it("forgets a skipped night once a night runs", () => {
+      const home = homeOf("recovered");
 
-    holdLock();
-    assert.strictEqual(runNightly(home).status, 0);
-    holder?.kill();
+      holdLock();
+      assert.strictEqual(runNightly(home).status, 0);
+      holder?.kill();
 
-    for (let tries = 0; tries < 200 && lockIsHeld(); tries += 1) {
-      spawnSync("sleep", ["0.05"]);
-    }
+      for (
+        let tries = 0;
+        tries < slackenedTries(200) && lockIsHeld();
+        tries += 1
+      ) {
+        spawnSync("sleep", ["0.05"]);
+      }
 
-    assert.strictEqual(runNightly(home).status, 0);
+      assert.strictEqual(runNightly(home).status, 0);
 
-    holdLock();
+      holdLock();
 
-    assert.strictEqual(runNightly(home).status, 0);
-  });
-});
+      assert.strictEqual(runNightly(home).status, 0);
+    });
+  }
+);

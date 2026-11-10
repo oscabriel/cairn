@@ -30,7 +30,7 @@ import { Effect, Function, Option, Schema } from "effect";
 import { Type } from "typebox";
 
 import { KEPT_WAITS } from "../BootRepairs.ts";
-import { eventuallyTrue } from "../EventuallyTestKit.ts";
+import { eventuallyTrue, testLimit } from "../EventuallyTestKit.ts";
 import { conversationOf, taskOf } from "../subagents/Delivery.ts";
 import { Approvals, approvalIdOf } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
@@ -490,6 +490,6 @@ describe("the crash accounting on a real store", () => {
           rmSync(dir, { recursive: true, force: true });
         }
       }),
-    30_000
+    testLimit(30_000)
   );
 });

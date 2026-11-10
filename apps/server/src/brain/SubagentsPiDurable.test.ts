@@ -41,7 +41,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Context, Effect, Layer, Option, Predicate, Ref, Stream } from "effect";
 import type { Scope } from "effect";
 
-import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
@@ -373,7 +373,7 @@ describe("subagents over a pi-durable brain", () => {
   it.live(
     "the SubagentRows fiber makes the child's row as it is created",
     () => withChild(true, assertChildRow),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -397,7 +397,7 @@ describe("subagents over a pi-durable brain", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -462,7 +462,7 @@ describe("subagents over a pi-durable brain", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -557,7 +557,7 @@ describe("subagents over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -653,7 +653,7 @@ describe("subagents over a pi-durable brain", () => {
             rmSync(dir, { recursive: true, force: true });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a worktree brief whose parent is outside any repository starts nothing, and says so",
@@ -755,6 +755,6 @@ describe("subagents over a pi-durable brain", () => {
             rmSync(outside, { recursive: true, force: true });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

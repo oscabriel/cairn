@@ -412,12 +412,20 @@ describe("the Codex sign-in against a fake OpenAI", () => {
       const fake = yield* fakeAuth();
       const brain = yield* brainAt(place());
 
+      const shown = yield* Deferred.make<true>();
+
       const first = yield* brain.login.start.pipe(
+        Stream.tap((step) =>
+          Predicate.isTagged(step, "DeviceCode")
+            ? Deferred.succeed(shown, true)
+            : Effect.void
+        ),
         Stream.runCollect,
         Effect.forkChild
       );
 
-      yield* Effect.sleep("200 millis");
+      // The first sign-in holds the slot once it shows its code.
+      yield* Deferred.await(shown);
 
       const busy = yield* Stream.runCollect(brain.login.start).pipe(
         Effect.flip

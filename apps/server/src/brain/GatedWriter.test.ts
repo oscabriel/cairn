@@ -21,6 +21,7 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Option, Schema } from "effect";
 
+import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { MAY_HAVE_RUN } from "./Permissions.ts";
 
 const fixture = path.join(
@@ -99,7 +100,7 @@ const runFixture = (
     });
   }).pipe(
     // A fixture that hangs is killed by the finalizer above, and the case fails.
-    Effect.timeout(Duration.seconds(30)),
+    Effect.timeout(slackened(Duration.seconds(30))),
     Effect.orDie
   );
 
@@ -229,7 +230,7 @@ describe("a gated writer across kill -9 (probe 2)", () => {
         assert.notDeepEqual(broken, { kills: 1, runs: 0, mayHaveRun: true });
         assert.strictEqual(broken.runs, 1, "the control reruns the command");
       }),
-    60_000
+    testLimit(60_000)
   );
 
   it.live(
@@ -246,7 +247,7 @@ describe("a gated writer across kill -9 (probe 2)", () => {
 
         assert.strictEqual(broken.runs, 2, "the control reruns the command");
       }),
-    60_000
+    testLimit(60_000)
   );
 
   it.live(
@@ -264,6 +265,6 @@ describe("a gated writer across kill -9 (probe 2)", () => {
         assert.strictEqual(broken.kills, 2);
         assert.strictEqual(broken.runs, 2, "the control reruns the command");
       }),
-    60_000
+    testLimit(60_000)
   );
 });

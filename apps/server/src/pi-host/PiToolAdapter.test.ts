@@ -14,6 +14,7 @@ import type {
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Function, Option } from "effect";
 
+import { testLimit } from "../EventuallyTestKit.ts";
 import { PiHost, PI_TOOLS_SECTION } from "./PiHost.ts";
 import {
   brainLayer,
@@ -178,7 +179,7 @@ layer(
     hostLayer(fixture, fixturePolicy(fixture, { scope: "folder" })),
     path.join(fixture.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("the fixture extension through the host", (live) => {
   live.effect("installs each tool with its callers and replay", () =>
     Effect.gen(function* () {

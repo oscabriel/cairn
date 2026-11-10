@@ -18,6 +18,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { slackenedTries } from "../EventuallyTestKit.ts";
 import { Database } from "./Database.ts";
 import type { MigrationRecord } from "./Database.ts";
 import { Shell0001 } from "./migrations/0001Shell.ts";
@@ -55,12 +56,15 @@ const withRollingCopy = (filename: string, copyDir: Option.Option<string>) =>
     Layer.provideMerge(Database.layer({ filename, migrations: shellOnly }))
   );
 
-/** Waits, in real time, up to two seconds for `folder` to hold a daily copy; answers its names. */
+/**
+ * Waits, in real time, up to two seconds times the test slack for `folder` to hold a daily copy;
+ * answers its names.
+ */
 const dailyCopiesIn = (folder: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
 
-    for (let attempt = 0; attempt < 200; attempt += 1) {
+    for (let attempt = 0; attempt < slackenedTries(200); attempt += 1) {
       const names = (yield* fileSystem.exists(folder))
         ? (yield* fileSystem.readDirectory(folder)).filter((name) =>
             /^cairn-daily-.+Z\.sqlite$/u.test(name)
@@ -225,7 +229,7 @@ describe(Database, () => {
         const [copies, tables] = yield* Effect.gen(function* () {
           const made = yield* dailyCopiesIn(path.join(directory, "backups"));
 
-          for (let attempt = 0; attempt < 200; attempt += 1) {
+          for (let attempt = 0; attempt < slackenedTries(200); attempt += 1) {
             if (events.includes("rolling_copy_second_folder_failed")) {
               break;
             }

@@ -30,7 +30,7 @@ import {
 import type { Scope } from "effect";
 
 import { escalateIn, mirrorIdOf } from "../approvals/QuestionRoute.ts";
-import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import {
   ChildDoc,
   EscalationsDoc,
@@ -272,7 +272,7 @@ describe("PiDurableHarness stop", () => {
           assert.strictEqual(terminal.status, "interrupted");
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -334,7 +334,7 @@ describe("PiDurableHarness stop", () => {
           assert.deepStrictEqual(answers, ["one done", "two done"]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -515,7 +515,7 @@ describe("PiDurableHarness stop, cut off between its abort and its cancellation"
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -570,7 +570,7 @@ describe("PiDurableHarness stop, cut off between its abort and its cancellation"
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -624,7 +624,7 @@ describe("PiDurableHarness answer during a stop", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -683,7 +683,7 @@ describe("PiDurableHarness inspect", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -732,7 +732,7 @@ describe("PiDurableHarness inspect", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -858,7 +858,7 @@ describe("PiDurableHarness inspect", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -943,6 +943,6 @@ describe("the boot's approval reads", () => {
           })
         )
       ),
-    60_000
+    testLimit(60_000)
   );
 });

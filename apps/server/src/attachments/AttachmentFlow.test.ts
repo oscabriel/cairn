@@ -35,6 +35,7 @@ import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
+import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { isolatePiSetup } from "../models/PiConfigTestKit.ts";
@@ -202,7 +203,7 @@ const sendAndCapture = (
     });
 
     return yield* Deferred.await(seen).pipe(
-      Effect.timeout(Duration.seconds(20))
+      Effect.timeout(slackened(Duration.seconds(20)))
     );
   });
 
@@ -309,6 +310,6 @@ describe("attachments reach the model", () => {
           ]);
         }).pipe(Effect.provide(stack(dir)));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    60_000
+    testLimit(60_000)
   );
 });

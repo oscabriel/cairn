@@ -1,8 +1,11 @@
 // The test slack: the factor every test deadline scales by (`CAIRN_TEST_SLACK`), so a deadline that
 // holds on a quiet machine still holds when other work shares it. The gate (`check.ts`) sets it
-// from the load when it starts, before its own steps add to that load; `vitest.config.ts` sets it
-// the same way for a run outside the gate and leaves a value already set alone, so a run can name
-// its own. Tests read it through `apps/server/src/EventuallyTestKit.ts`.
+// from the load when it starts, before its own steps add to that load; `vitest.config.ts` reads it
+// again when the test step starts, about 40 s later, and keeps the larger of the value it was
+// handed and the load's then, so load that arrives while the gate formats, lints and typechecks
+// still stretches the run. A caller can name a value to raise the slack, never to lower it below
+// the load's. It is fixed for the rest of the run: load that arrives after the tests start does not
+// stretch it. Tests read it through `apps/server/src/EventuallyTestKit.ts`.
 
 import os from "node:os";
 
@@ -23,13 +26,13 @@ export const slackFromLoad = (): number => {
 };
 
 /**
- * The slack `CAIRN_TEST_SLACK` names, or the load's when it names none (or no number of at least
- * 1). Writes the value back to the process's environment, so every worker Vitest starts reads the
- * same one.
+ * The larger of the slack `CAIRN_TEST_SLACK` names (1 when it names none, or no number of at least
+ * 1) and the load's now. Writes the value back to the process's environment, so every worker Vitest
+ * starts reads the same one.
  */
 export const testSlack = (): number => {
   const named = Number(process.env[SLACK_VARIABLE] ?? "");
-  const slack = named >= 1 ? named : slackFromLoad();
+  const slack = Math.max(1, named || 1, slackFromLoad());
 
   process.env[SLACK_VARIABLE] = String(slack);
 

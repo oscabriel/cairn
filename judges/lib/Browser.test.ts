@@ -13,6 +13,7 @@ import type { Server } from "node:http";
 import { Predicate } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { testLimit } from "../../apps/server/src/EventuallyTestKit.ts";
 import { chromium, IPHONE_15, TimeoutError } from "./Browser.ts";
 import type { Browser, BrowserContext, Page } from "./Browser.ts";
 
@@ -105,7 +106,7 @@ describe("browser driver", () => {
   beforeAll(async () => {
     ({ server, origin } = await startServer());
     browser = await chromium.launch();
-  }, 30_000);
+  }, testLimit(30_000));
 
   afterAll(async () => {
     await browser.close();
@@ -137,7 +138,7 @@ describe("browser driver", () => {
     );
 
     try {
-      await page.locator("button").click({ timeout: 2000 });
+      await page.locator("button").click({ timeout: testLimit(2000) });
 
       return await titleOf(page);
     } catch (error) {
@@ -158,7 +159,7 @@ describe("browser driver", () => {
     });
 
     try {
-      await page.locator("button").click({ timeout: 2000 });
+      await page.locator("button").click({ timeout: testLimit(2000) });
 
       return await titleOf(page);
     } catch (error) {
@@ -175,29 +176,37 @@ describe("browser driver", () => {
       );
     });
 
-    it("broken control: without strictness the same click goes through", async () => {
-      const broken = await chromium.launch({ control: "no-strict" });
+    it(
+      "broken control: without strictness the same click goes through",
+      async () => {
+        const broken = await chromium.launch({ control: "no-strict" });
 
-      try {
-        await expect(clickOneOfTwo(broken)).resolves.toBe("first");
-      } finally {
-        await broken.close();
-      }
-    }, 30_000);
+        try {
+          await expect(clickOneOfTwo(broken)).resolves.toBe("first");
+        } finally {
+          await broken.close();
+        }
+      },
+      testLimit(30_000)
+    );
 
     it("waits for an element that is not there yet", async () => {
       await expect(clickArrivingLater(browser)).resolves.toBe("clicked");
     });
 
-    it("broken control: without auto-waiting the same click gives up", async () => {
-      const broken = await chromium.launch({ control: "no-auto-wait" });
+    it(
+      "broken control: without auto-waiting the same click gives up",
+      async () => {
+        const broken = await chromium.launch({ control: "no-auto-wait" });
 
-      try {
-        await expect(clickArrivingLater(broken)).resolves.toBe("timed out");
-      } finally {
-        await broken.close();
-      }
-    }, 30_000);
+        try {
+          await expect(clickArrivingLater(broken)).resolves.toBe("timed out");
+        } finally {
+          await broken.close();
+        }
+      },
+      testLimit(30_000)
+    );
 
     it("chains, filters and counts as a judge's locators do", async () => {
       const { context, page } = await pageWith(`
@@ -326,10 +335,10 @@ describe("browser driver", () => {
       const paragraph = page.locator("#p");
 
       await expect(
-        paragraph.waitFor({ state: "attached", timeout: 2000 })
+        paragraph.waitFor({ state: "attached", timeout: testLimit(2000) })
       ).resolves.toBeUndefined();
       await expect(
-        paragraph.waitFor({ state: "hidden", timeout: 2000 })
+        paragraph.waitFor({ state: "hidden", timeout: testLimit(2000) })
       ).resolves.toBeUndefined();
       await expect(
         paragraph.waitFor({ state: "visible", timeout: 200 })
@@ -340,7 +349,7 @@ describe("browser driver", () => {
         }, 100);
       });
       await expect(
-        paragraph.waitFor({ state: "detached", timeout: 2000 })
+        paragraph.waitFor({ state: "detached", timeout: testLimit(2000) })
       ).resolves.toBeUndefined();
       await context.close();
     });
@@ -371,7 +380,7 @@ describe("browser driver", () => {
       await page.evaluate(() => {
         document.querySelector("#cover")?.remove();
       });
-      await page.locator("button").click({ timeout: 2000 });
+      await page.locator("button").click({ timeout: testLimit(2000) });
       await expect(titleOf(page)).resolves.toBe("hit");
       await context.close();
     });
@@ -472,7 +481,7 @@ describe("browser driver", () => {
       const moved = await page.waitForFunction(
         () => document.querySelector("#s")?.scrollTop ?? 0,
         undefined,
-        { timeout: 3000 }
+        { timeout: testLimit(3000) }
       );
 
       await expect(moved.jsonValue()).resolves.toBeGreaterThan(0);
@@ -501,7 +510,7 @@ describe("browser driver", () => {
 
       await page.locator("button").tap();
       await page.waitForFunction("globalThis.clicks === 1", undefined, {
-        timeout: 3000,
+        timeout: testLimit(3000),
       });
       await expect(
         page.evaluate(
@@ -545,7 +554,7 @@ describe("browser driver", () => {
       const handle = await page.waitForFunction(
         "globalThis.ready ?? false",
         undefined,
-        { timeout: 2000, polling: 16 }
+        { timeout: testLimit(2000), polling: 16 }
       );
 
       await expect(handle.jsonValue()).resolves.toBe(41);
@@ -555,26 +564,32 @@ describe("browser driver", () => {
       await context.close();
     });
 
-    it("goto waits for the state it was asked for, and fails on a net error", async () => {
-      const context = await browser.newContext();
-      const page = await context.newPage();
+    it(
+      "goto waits for the state it was asked for, and fails on a net error",
+      async () => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
 
-      await page.goto(`${origin}/slow`, { waitUntil: "commit" });
-      await page.locator("#late").waitFor({ state: "attached", timeout: 5000 });
+        await page.goto(`${origin}/slow`, { waitUntil: "commit" });
+        await page
+          .locator("#late")
+          .waitFor({ state: "attached", timeout: testLimit(5000) });
 
-      await page.goto(origin);
-      await page.evaluate(`fetch("/held")`);
+        await page.goto(origin);
+        await page.evaluate(`fetch("/held")`);
 
-      const started = performance.now();
+        const started = performance.now();
 
-      await page.goto(`${origin}/?idle`, { waitUntil: "networkidle" });
-      expect(performance.now() - started).toBeGreaterThanOrEqual(500);
+        await page.goto(`${origin}/?idle`, { waitUntil: "networkidle" });
+        expect(performance.now() - started).toBeGreaterThanOrEqual(500);
 
-      await expect(
-        page.goto("http://127.0.0.1:9/nothing-listens")
-      ).rejects.toThrow(/net::ERR_/u);
-      await context.close();
-    }, 20_000);
+        await expect(
+          page.goto("http://127.0.0.1:9/nothing-listens")
+        ).rejects.toThrow(/net::ERR_/u);
+        await context.close();
+      },
+      testLimit(20_000)
+    );
 
     it("tracks the URL through history, with globs, regexes and tests", async () => {
       const { context, page } = await pageWith("<p>x</p>");
@@ -584,10 +599,10 @@ describe("browser driver", () => {
           history.pushState(null, "", "/t/abc?x=1");
         }, 50);
       });
-      await page.waitForURL("**/t/abc*", { timeout: 2000 });
-      await page.waitForURL(/\/t\//u, { timeout: 2000 });
+      await page.waitForURL("**/t/abc*", { timeout: testLimit(2000) });
+      await page.waitForURL(/\/t\//u, { timeout: testLimit(2000) });
       await page.waitForURL((url) => url.pathname === "/t/abc", {
-        timeout: 2000,
+        timeout: testLimit(2000),
       });
       expect(page.url()).toBe(`${origin}/t/abc?x=1`);
       await expect(

@@ -38,7 +38,10 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import { eventuallyTrue as eventually } from "../EventuallyTestKit.ts";
+import {
+  eventuallyTrue as eventually,
+  testLimit,
+} from "../EventuallyTestKit.ts";
 import {
   budgetPushTask,
   NO_BUDGET_PUSH,
@@ -408,7 +411,7 @@ describe("durable events", () => {
             );
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live("an event exists only when the commit that emitted it does", () =>
@@ -480,7 +483,7 @@ describe("durable events", () => {
           assert.strictEqual(after.reactors[0]?.failuresInARow, 0);
         })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -538,7 +541,7 @@ describe("durable events", () => {
         pushesInto(pushed)
       );
     },
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -638,7 +641,7 @@ describe("durable events", () => {
         pushesInto(pushed)
       );
     },
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -705,7 +708,7 @@ describe("durable events", () => {
           `Dead-lettered event ${String(lines.bad)}`
         );
       }),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -763,7 +766,7 @@ describe("durable events", () => {
             });
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -833,7 +836,7 @@ describe("durable events", () => {
             }
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -895,7 +898,7 @@ describe("durable events", () => {
           });
         })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -977,7 +980,7 @@ describe("durable events", () => {
           seen.after,
         ]);
       }),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -1036,7 +1039,7 @@ describe("durable events", () => {
             assert.deepStrictEqual(seen.handled.reopen, [cut, after]);
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -1094,7 +1097,7 @@ describe("durable events", () => {
           })
       );
     },
-    20_000
+    testLimit(20_000)
   );
 
   it.live("an empty, padded or repeated reactor name makes the layer die", () =>

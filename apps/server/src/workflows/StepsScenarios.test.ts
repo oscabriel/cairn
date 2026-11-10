@@ -31,6 +31,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result } from "effect";
 
 import { projectView, wireProjector } from "../brain/ThreadWire.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import { WorkflowsDoc } from "./WorkflowDocs.ts";
 import type { WorkflowsState } from "./WorkflowDocs.ts";
 import {
@@ -169,7 +170,7 @@ const playSteps = (source: string) =>
       await brain.harness.waitForIdle(context);
 
       // The node watcher may end the row after the thread is idle; wait for it.
-      const until = performance.now() + 5000;
+      const until = performance.now() + testLimit(5000);
 
       while (performance.now() < until) {
         // oxlint-disable-next-line no-await-in-loop

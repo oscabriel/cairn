@@ -26,6 +26,7 @@ import {
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { EventsDoc, eventKind } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import {
   ledgerProblems,
   WorkflowSourcesDoc,
@@ -452,7 +453,7 @@ describe("launch approval and the envelope on pi-durable", () => {
         assert.strictEqual(count("brief.approved"), 6);
         assert.include(outcome.reply, "done");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -481,7 +482,7 @@ describe("launch approval and the envelope on pi-durable", () => {
         assert.deepStrictEqual(starts(outcome.effects), ["a", "b", "c", "d"]);
         assert.include(outcome.reply, '"e":null');
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -503,7 +504,7 @@ describe("launch approval and the envelope on pi-durable", () => {
           "e",
         ]);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -524,7 +525,7 @@ describe("launch approval and the envelope on pi-durable", () => {
           "declined workflow kit-flow: not this one"
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -566,7 +567,7 @@ return { a, args, total: budget.total };`);
         assert.notInclude(outcome.reply, "stale");
         assert.notInclude(outcome.reply, "700000");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -600,7 +601,7 @@ return { a, args, total: budget.total };`);
         });
         assert.deepStrictEqual(left?.nodes, {});
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -647,7 +648,7 @@ return { a, args, total: budget.total };`);
         assert.deepStrictEqual(left?.nodes, {});
         assert.notInclude(outcome.reply, "left over");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -668,7 +669,7 @@ return { a, args, total: budget.total };`);
         );
         assert.deepStrictEqual(starts(outcome.effects), ["first", "second"]);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -688,7 +689,7 @@ return { a, args, total: budget.total };`);
         );
         assert.deepStrictEqual(starts(outcome.effects), ["first", "second"]);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -707,7 +708,7 @@ return { a, args, total: budget.total };`);
         );
         assert.deepStrictEqual(starts(outcome.effects), ["first", "second"]);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -735,7 +736,7 @@ return { a, args, total: budget.total };`);
         assert.strictEqual(row?.state, "finished");
         assert.deepStrictEqual(starts(outcome.effects), ["a"]);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -753,7 +754,7 @@ return { a, args, total: budget.total };`);
         assert.deepStrictEqual(Object.keys(outcome.records), []);
         assert.include(outcome.reply, "no project recipe");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -777,7 +778,7 @@ return { a, args, total: budget.total };`);
           "sent workflow kit-flow back: fewer nodes"
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -806,7 +807,7 @@ return { a, args, total: budget.total };`);
         assert.deepStrictEqual([e?.provider, e?.modelId], ["faux", "kit-alt"]);
         assert.deepStrictEqual(outcome.problems, []);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -836,7 +837,7 @@ return { a, total: budget.total };`),
         assert.strictEqual(row?.budget.maxListMicros, 3_000_000);
         assert.include(outcome.reply, '"total":700000');
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -863,7 +864,7 @@ return { a, total: budget.total };`),
         });
         assert.include(outcome.reply, '"total":900000');
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -901,7 +902,7 @@ return { a, total: budget.total };`),
           "accept_sample"
         );
       }),
-    45_000
+    testLimit(45_000)
   );
 
   it.live(
@@ -914,7 +915,7 @@ return { a, total: budget.total };`),
         assert.deepStrictEqual(Object.keys(outcome.records), []);
         assert.include(outcome.reply, "dispatched no node");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -945,7 +946,7 @@ return { a, total: budget.total };`),
           )
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -976,6 +977,6 @@ return { a, total: budget.total };`),
           )
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 });

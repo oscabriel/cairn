@@ -21,7 +21,7 @@ import { Context, Effect, FileSystem, Layer, Option } from "effect";
 import type { Scope } from "effect";
 import { RpcTest } from "effect/rpc";
 
-import { eventually } from "../EventuallyTestKit.ts";
+import { eventually, testLimit } from "../EventuallyTestKit.ts";
 import { FolderRules } from "../projects/FolderRules.ts";
 import { folderClaimant, ScratchProject } from "../projects/ScratchProject.ts";
 import { ShellHandlers } from "../rpc/ShellHandlers.ts";
@@ -229,7 +229,7 @@ const clearCase = (harness: HarnessName) => {
           }),
         harness
       ),
-    30_000
+    testLimit(30_000)
   );
 };
 

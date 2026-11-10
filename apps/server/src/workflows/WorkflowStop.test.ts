@@ -13,7 +13,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result } from "effect";
 
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
-import { eventuallySome } from "../EventuallyTestKit.ts";
+import { eventuallySome, testLimit } from "../EventuallyTestKit.ts";
 import {
   isWorkflowEnded,
   settledTokens,
@@ -527,7 +527,7 @@ describe("abort polling in the node tools", () => {
         assert.isAtLeast(outcome.tookMs, HOLD_MS - 500);
         assert.strictEqual(nodeNamed(outcome.row, "b")?.state, "stopped");
       }),
-    20_000
+    testLimit(20_000)
   );
 });
 

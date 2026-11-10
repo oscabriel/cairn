@@ -31,6 +31,7 @@ import { Option } from "effect";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
 import type { GoalState, JudgeRunsState } from "./GoalDocs.ts";
 import { goalsExtension } from "./GoalTools.ts";
@@ -214,14 +215,17 @@ export const readRuns = async (
 ): Promise<JudgeRunsState | undefined> =>
   await kit.harness.snapshot(JudgeRunsDoc, conversation.id, context);
 
-/** Waits until every queued judge run has settled, polling every 20 ms up to `limitMs`. */
+/**
+ * Waits until every queued judge run has settled, polling every 20 ms up to `limitMs` scaled by
+ * the test slack.
+ */
 export const waitForJudges = async (
   kit: GoalKit,
   conversation: Conversation,
   limitMs: number,
   context: ChordContext
 ): Promise<boolean> => {
-  const deadline = performance.now() + limitMs;
+  const deadline = performance.now() + testLimit(limitMs);
 
   while (performance.now() < deadline) {
     // oxlint-disable-next-line no-await-in-loop -- polling until the runs settle

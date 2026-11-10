@@ -38,7 +38,7 @@ import {
   Stream,
 } from "effect";
 
-import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { HealthOutcome, ModelHealth } from "../models/ModelHealth.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
@@ -366,7 +366,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -402,7 +402,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -464,7 +464,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -506,7 +506,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             assert.deepStrictEqual(yield* pendingBriefs(events, PARENT), []);
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -572,7 +572,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -627,7 +627,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -670,7 +670,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a budget at its line when the user says Go starts nothing, and the parent is told once",
@@ -731,6 +731,6 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

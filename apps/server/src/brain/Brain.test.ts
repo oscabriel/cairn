@@ -27,7 +27,7 @@ import {
   Stream,
 } from "effect";
 
-import { eventually } from "../EventuallyTestKit.ts";
+import { eventually, testLimit, slackened } from "../EventuallyTestKit.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
@@ -221,7 +221,7 @@ describe("Brain supervisor", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -304,7 +304,7 @@ describe("Brain supervisor", () => {
           assert.isTrue(Option.isSome(ran));
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -426,7 +426,7 @@ describe("Brain supervisor", () => {
             rmSync(dataDir, { recursive: true, force: true });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -502,7 +502,7 @@ describe("Brain supervisor", () => {
             yield* hung.await;
 
             const closed = yield* Scope.close(scope, Exit.void).pipe(
-              Effect.timeoutOption(Duration.seconds(5))
+              Effect.timeoutOption(slackened(Duration.seconds(5)))
             );
 
             assert.isTrue(
@@ -515,6 +515,6 @@ describe("Brain supervisor", () => {
             rmSync(dataDir, { recursive: true, force: true });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

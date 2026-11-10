@@ -26,7 +26,7 @@ import type { Layer } from "effect";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
-import { eventually } from "../EventuallyTestKit.ts";
+import { eventually, testLimit } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
 import { EventSink } from "../shell/EventSink.ts";
@@ -355,7 +355,7 @@ describe("thread commands", () => {
           assert.deepStrictEqual(hooked, Option.some([threadId]));
         })
       ),
-    15_000
+    testLimit(15_000)
   );
 
   it.live(

@@ -10,8 +10,9 @@
 // scripts/run-silent.ts (humanlayer/humanlayer at f16f286), rewritten for Node.
 //
 // The gate sets the test slack (`CAIRN_TEST_SLACK`, `test-slack.ts`) from the load when it starts,
-// before its own steps add to it, unless the caller named one; every test deadline scales by it, and
-// the summary names it when it is above 1.
+// before its own steps add to it, or to the caller's value when that is larger; the test step raises
+// it again if the load has risen by the time it starts. Every test deadline scales by it, and the
+// summary names the gate's value when it is above 1.
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";

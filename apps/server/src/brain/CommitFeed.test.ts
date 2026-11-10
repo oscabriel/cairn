@@ -33,7 +33,11 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
+import {
+  eventuallySome as waitFor,
+  testLimit,
+  slackened,
+} from "../EventuallyTestKit.ts";
 import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
 import { testBrain } from "./BrainTestKit.ts";
@@ -329,7 +333,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -368,7 +372,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -433,7 +437,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -528,7 +532,7 @@ describe("CommitFeed subagent events", () => {
           assert.isBelow(read.indexOf("NOTE child done"), read.indexOf("two"));
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -591,7 +595,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a note queued during a run that is stopped is placed by the stop, ahead of a later note, its follow-up still queued",
@@ -661,7 +665,7 @@ describe("CommitFeed subagent events", () => {
           assert.strictEqual(yield* count("RunStarted"), 1);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a note queued during a run that fails is placed once the run ends, its follow-up still queued",
@@ -717,7 +721,7 @@ describe("CommitFeed subagent events", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -776,7 +780,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -844,7 +848,7 @@ describe("CommitFeed subagent events", () => {
               Effect.map(updates, (found) =>
                 found.length >= count ? Option.some(true) : Option.none()
               )
-            ).pipe(Effect.timeoutOption(Duration.seconds(2)));
+            ).pipe(Effect.timeoutOption(slackened(Duration.seconds(2))));
 
           yield* ask(parentConversation);
           yield* reach(1);
@@ -863,7 +867,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -928,6 +932,6 @@ describe("CommitFeed with a value that fits no event", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

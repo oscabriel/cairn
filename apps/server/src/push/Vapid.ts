@@ -1,10 +1,13 @@
 // Ported from cairn-v1, apps/server/src/Push.ts (`loadVapid`) at 1a5cd4a. Kept: the VAPID key pair is
-// made once into `push.json` beside `cairn.json` (created with `wx` at 0600, so a second process
-// racing the first reads the winner's key), a file found with group or world bits is narrowed to
-// 0600, and the subject is `mailto:admin@gneiss.run`. Changed: an Effect service over `FileSystem`
-// and `ServerConfig.configDir`; the file is decoded with a schema; the private key never reaches a
-// log or an error message; the file is written whole beside it and linked into place, since `wx`
-// creates it empty before the key is written and a racing process could read it in that gap.
+// made once into `push.json` beside `cairn.json` at 0600, and only one process's key is ever kept,
+// so a second process racing the first reads the winner's key; a file found with group or world
+// bits is narrowed to 0600, and the subject is `mailto:admin@gneiss.run`. Changed: an Effect service
+// over `FileSystem` and `ServerConfig.configDir`; the file is decoded with a schema; the private key
+// never reaches a log or an error message; instead of v1's `wx` create, which makes the file empty
+// before the key is written so a racing process could read it in that gap, the file is written
+// whole in a staging folder beside it and linked into place (a link refuses an existing file). A
+// process killed between the staged write and the scope's close leaves that staging folder (0700,
+// its file 0600) behind; nothing removes it, since a racing process's staging folder looks the same.
 
 import path from "node:path";
 

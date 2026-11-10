@@ -25,6 +25,7 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { TestClock } from "effect/testing";
 
 import { Brain } from "../brain/Brain.ts";
 import {
@@ -33,6 +34,7 @@ import {
   ThreadEnsured,
 } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
+import { eventually } from "../EventuallyTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
   createProject,
@@ -392,12 +394,9 @@ const rowThroughSeam = (
       })
     );
 
-    let row = yield* rows.get(CHILD);
-
-    for (let tries = 0; Option.isNone(row) && tries < 50; tries += 1) {
-      yield* Effect.sleep("10 millis");
-      row = yield* rows.get(CHILD);
-    }
+    const row = yield* TestClock.withLive(
+      eventually(rows.get(CHILD), Option.isSome, "the child's row")
+    );
 
     yield* Scope.close(scope, Exit.void);
 
@@ -435,12 +434,9 @@ describe("a scripted subagent's shell row", () => {
         );
 
         // The fiber runs on its own; wait for its one row.
-        let row = yield* rows.get(CHILD);
-
-        for (let tries = 0; Option.isNone(row) && tries < 50; tries += 1) {
-          yield* Effect.sleep("10 millis");
-          row = yield* rows.get(CHILD);
-        }
+        const row = yield* TestClock.withLive(
+          eventually(rows.get(CHILD), Option.isSome, "the child's row")
+        );
 
         yield* Scope.close(scope, Exit.void);
 
@@ -539,26 +535,19 @@ const BRIEF_TEXT =
 const NODE_PROMPT =
   "Read the council question and argue for the cheapest path, with one risk.";
 
-/** `CHILD`'s row title once `check` holds of it, or after a second without. */
+/** `CHILD`'s row title once `check` holds of it. */
 const titleWhen = (check: (title: string) => boolean) =>
   Effect.gen(function* () {
     const rows = yield* ThreadRows;
-    let title = "";
 
-    for (let tries = 0; tries < 100; tries += 1) {
-      title = Option.match(yield* rows.get(CHILD), {
-        onNone: () => "",
-        onSome: (row) => row.shell.title,
-      });
-
-      if (check(title)) {
-        return title;
-      }
-
-      yield* Effect.sleep("10 millis");
-    }
-
-    return title;
+    return yield* eventually(
+      Effect.map(
+        rows.get(CHILD),
+        Option.match({ onNone: () => "", onSome: (row) => row.shell.title })
+      ),
+      check,
+      "the child's title"
+    );
   });
 
 /** Runs the fiber over `CHILD`'s creation and first input, then `body`, then closes it. */
@@ -688,13 +677,11 @@ describe("a subagent's title", () => {
         workflowDocuments(parent, null, null, "Advisor 1 report"),
         NODE_PROMPT,
         Effect.gen(function* () {
-          for (
-            let tries = 0;
-            (yield* Ref.get(script.prompts)).length === 0 && tries < 100;
-            tries += 1
-          ) {
-            yield* Effect.sleep("10 millis");
-          }
+          yield* eventually(
+            Ref.get(script.prompts),
+            (prompts) => prompts.length > 0,
+            "the title model's prompt"
+          );
 
           yield* Effect.sleep("20 millis");
 

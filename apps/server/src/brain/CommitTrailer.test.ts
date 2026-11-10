@@ -26,6 +26,7 @@ import {
   Stream,
 } from "effect";
 
+import { testLimit } from "../EventuallyTestKit.ts";
 import { GIT_DEFAULTS, Git } from "../git/Git.ts";
 import { COMMIT_OPTIONS } from "../threads/ThreadsTestKit.ts";
 import { testBrain } from "./BrainTestKit.ts";
@@ -221,6 +222,6 @@ describe("a thread's bash", () => {
 
         assert.deepStrictEqual(yield* trailersOf(repo, "HEAD"), [THREAD]);
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(harness, Platform))),
-    30_000
+    testLimit(30_000)
   );
 });

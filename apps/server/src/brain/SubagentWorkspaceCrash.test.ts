@@ -42,7 +42,7 @@ import {
   Stream,
 } from "effect";
 
-import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
@@ -392,6 +392,6 @@ describe("a crash between a child's worktree and its creating commit", () => {
             rmSync(dir, { recursive: true, force: true });
           })
       ),
-    60_000
+    testLimit(60_000)
   );
 });

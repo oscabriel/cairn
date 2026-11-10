@@ -28,7 +28,7 @@ import type {
 import { assert, describe, it } from "@effect/vitest";
 import { Context, Effect, Layer, Option, Predicate, Ref, Stream } from "effect";
 
-import { eventuallySome as waitFor } from "../EventuallyTestKit.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
@@ -335,7 +335,7 @@ describe("a subagent task whose phase throws (O-3)", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -357,7 +357,7 @@ describe("a subagent task whose phase throws (O-3)", () => {
           assert.include(transcript, '"started":false');
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -385,7 +385,7 @@ describe("a subagent task whose phase throws (O-3)", () => {
             assert.include(transcript, PLANTED);
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -421,7 +421,7 @@ describe("a subagent task whose phase throws (O-3)", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -461,7 +461,7 @@ describe("a subagent task whose phase throws (O-3)", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -488,6 +488,6 @@ describe("a subagent task whose phase throws (O-3)", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

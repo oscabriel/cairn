@@ -20,6 +20,17 @@ export const TEST_SLACK = Math.max(
 export const slackened = (base: Duration.Input): Duration.Duration =>
   Duration.times(Duration.fromInputUnsafe(base), TEST_SLACK);
 
+/**
+ * `millis`, scaled by the test slack: a test's own Vitest limit (`it(name, test, testLimit(30_000))`)
+ * or a budget in milliseconds that a polling loop of its own spends before it gives up.
+ */
+export const testLimit = (millis: number): number =>
+  Math.ceil(millis * TEST_SLACK);
+
+/** `tries`, scaled by the test slack: how often a polling loop of its own reads before it gives up. */
+export const slackenedTries = (tries: number): number =>
+  Math.ceil(tries * TEST_SLACK);
+
 /** How long `eventually` polls before it gives up: ten seconds on a quiet machine. */
 export const EVENTUALLY_WITHIN = slackened(Duration.seconds(10));
 
@@ -28,8 +39,10 @@ const POLL = Duration.millis(20);
 
 /**
  * Reads `read` until `check` holds of what it gave, and returns that value. Polls every 20 ms on
- * the clock in context (so only in `it.live`), and dies naming `what` once `EVENTUALLY_WITHIN`
- * passes without it holding; a failure of `read` fails at once.
+ * the clock in context (so in `it.live`, or under `TestClock.withLive` in `it.effect`), and dies
+ * naming `what` once `EVENTUALLY_WITHIN` passes without it holding. A failure of `read` fails at
+ * once and is not polled through: a caller whose read can fail for a while (a unit restarting)
+ * maps that failure to a value `check` rejects first.
  */
 export const eventually = Effect.fnUntraced(function* <A, E, R>(
   read: Effect.Effect<A, E, R>,

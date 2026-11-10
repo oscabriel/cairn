@@ -111,6 +111,9 @@ export const SUITE_OPTIONS = {
   mutations: new Set<Mutation>(),
 };
 
+/** The drift goldens' run options: the suite's, with the record taken once every thread settled. */
+export const GOLDEN_OPTIONS = { ...SUITE_OPTIONS, settle: true };
+
 /** The `it.live` of `@effect/vitest`: a test that runs an Effect on the live clock. */
 type LiveTest = (
   name: string,

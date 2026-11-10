@@ -8,7 +8,11 @@
 // client does (a refused frame means a fresh subscription): the scenario's own thread from its
 // ensure, and each subagent from the event that first names it (ThreadAliases). Expectations wait
 // up to a timeout for the log or a client's normalized view to show what the line says, so the
-// suite judges what a client would see, not internal state.
+// suite judges what a client would see, not internal state. For the drift goldens, once the lines
+// have held the run waits for every thread to settle (no run live, and the log and each client
+// agree on the last message and on every approval record and child) before it records the events
+// and views: the lines need not wait for a run's last steps, and on a loaded machine either feed
+// lags the other.
 
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
@@ -24,6 +28,7 @@ import {
   Fiber,
   Match,
   Option,
+  Predicate,
   Ref,
   Result,
   Schema,
@@ -43,11 +48,13 @@ import { FAUX_MODEL } from "../ModelSource.ts";
 import type { Mutation, MutationState } from "./Mutations.ts";
 import { breakSeam, faultsOf } from "./Mutations.ts";
 import {
+  COMMITTED_MESSAGE_KINDS,
   jsonContains,
   jsonEquals,
   normalizeDeviceView,
   normalizeView,
   pendingApprovalIds,
+  statusesIn,
   valueAt,
 } from "./Normalize.ts";
 import { responseScript } from "./ResponseScript.ts";
@@ -107,6 +114,12 @@ export interface RunOptions {
   readonly timeout: Duration.Duration;
   /** Breaks applied to every instance of the harness (the mutation check). */
   readonly mutations: ReadonlySet<Mutation>;
+  /**
+   * Whether the record waits for every thread to settle once the lines have held, and the run
+   * fails when they do not within `timeout`: on for the drift goldens, whose scenarios all end
+   * settled. The suite judges the lines alone, and a tuned scenario may end mid-run.
+   */
+  readonly settle?: boolean;
 }
 
 const encodeEvent = Schema.encodeSync(Schema.toCodecJson(HarnessEvent));
@@ -115,6 +128,25 @@ const decodeApprovalId = Schema.decodeEffect(ApprovalId);
 
 const isModelLine = (line: TranscriptLine): line is ModelLine =>
   line.type === "model";
+
+/** A guard for the harness events tagged `tag`. */
+const isEvent =
+  <K extends HarnessEvent["_tag"]>(tag: K) =>
+  (event: HarnessEvent): event is Extract<HarnessEvent, { readonly _tag: K }> =>
+    Predicate.isTagged(event, tag);
+
+const isRunStarted = isEvent("RunStarted");
+
+const isRunTerminal = isEvent("RunTerminal");
+
+const isMessageCommitted = isEvent("MessageCommitted");
+
+/** Two records-to-status maps hold the same records with the same statuses. */
+const sameStatuses = (
+  a: ReadonlyMap<string, string>,
+  b: ReadonlyMap<string, string>
+) =>
+  a.size === b.size && [...a].every(([key, status]) => b.get(key) === status);
 
 /** A masked event: a JSON object. */
 interface Masked {
@@ -1095,12 +1127,125 @@ export const runScenario = (
           return Result.succeedNone;
         });
 
+      const aliasOf = (threadId: ThreadId) =>
+        Option.getOrElse(aliases.aliasOf(threadId), () => "unknown");
+
+      /**
+       * Where the events and a thread's client disagree, or a run is still live: none once both
+       * show no live run, agree on the thread's last committed message, and agree on the status of
+       * each of its approval records and children. Either feed may lag the other.
+       */
+      const unsettled = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const client = views.get(threadId);
+
+          const state =
+            client === undefined
+              ? Option.none<ThreadViewState>()
+              : yield* Ref.get(client);
+
+          if (Option.isNone(state)) {
+            return Option.some("its client has no snapshot");
+          }
+
+          const { view } = state.value;
+          const own = events.filter((event) => event.threadId === threadId);
+
+          const run = own.findLast(
+            (event) => isRunStarted(event) || isRunTerminal(event)
+          );
+
+          if (run !== undefined && isRunStarted(run)) {
+            return Option.some("its run has not ended in the events");
+          }
+
+          if (
+            Option.exists(
+              valueAt(normalizeView(view), ["running"]),
+              (running) => running === true
+            )
+          ) {
+            return Option.some("its run has not ended in its client's view");
+          }
+
+          const committed = own.findLast(isMessageCommitted)?.entryId;
+
+          const shown = view.entries.findLast((entry) =>
+            COMMITTED_MESSAGE_KINDS.has(entry.kind)
+          )?.id;
+
+          if (committed !== shown) {
+            return Option.some(
+              `its last committed message is entry ${committed ?? "none"} in the events, ${shown ?? "none"} in its client's view`
+            );
+          }
+
+          const approvals = new Map(
+            own
+              .values()
+              .filter(isEvent("RuntimeRequestUpdated"))
+              .map((event) => [event.id, event.status] as const)
+          );
+
+          if (
+            !sameStatuses(approvals, statusesIn(view, "cairn.approvals", "id"))
+          ) {
+            return Option.some(
+              "the events and its client's view disagree on its approval records"
+            );
+          }
+
+          const children = new Map(
+            own
+              .values()
+              .filter(isEvent("SubagentUpdated"))
+              .map((event) => [event.child, event.status] as const)
+          );
+
+          if (
+            !sameStatuses(
+              children,
+              statusesIn(view, "cairn.subagents", "threadId")
+            )
+          ) {
+            return Option.some(
+              "the events and its client's view disagree on its children"
+            );
+          }
+
+          return Option.none<string>();
+        });
+
+      /**
+       * Every thread the scenario met has settled at once. The lines need not wait for a run's last
+       * steps, and on a loaded machine either feed lags the other, so the record waits for this.
+       */
+      const allSettled = Effect.gen(function* () {
+        for (const threadId of aliases.threads()) {
+          const complaint = yield* unsettled(threadId);
+
+          if (Option.isSome(complaint)) {
+            return Result.fail(`${aliasOf(threadId)}: ${complaint.value}`);
+          }
+        }
+
+        return Result.succeedNone;
+      });
+
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* startFeeds;
 
           for (const [index, line] of scenario.lines.entries()) {
             yield* play(describeLine(index, line), line);
+          }
+
+          if (options.settle === true) {
+            yield* eventually(
+              options.timeout,
+              "the run settles before the record",
+              allSettled
+            );
           }
 
           for (const threadId of aliases.threads()) {
@@ -1112,9 +1257,6 @@ export const runScenario = (
           }
         })
       );
-
-      const aliasOf = (threadId: ThreadId) =>
-        Option.getOrElse(aliases.aliasOf(threadId), () => "unknown");
 
       // Each thread's events in the order they came, the scenario's own first, so a golden does
       // not depend on how two threads' work interleaved.

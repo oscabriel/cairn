@@ -271,6 +271,43 @@ export const pendingApprovalIds = (view: ConversationView) => {
     .flatMap((record) => (Predicate.isString(record.id) ? [record.id] : []));
 };
 
+/**
+ * The entry kinds the seam reports as MessageCommitted when committed: user and assistant messages,
+ * as `CommitFeed.ts` lists them.
+ */
+export const COMMITTED_MESSAGE_KINDS: ReadonlySet<string> = new Set([
+  "pi.user",
+  "cairn.user",
+  "pi.assistant",
+]);
+
+/**
+ * The status of each record of a `cairn.*` document with `items` (`cairn.approvals`,
+ * `cairn.subagents`) in a client's view, by the record's `key` field.
+ */
+export const statusesIn = (
+  view: ConversationView,
+  kind: string,
+  key: string
+): ReadonlyMap<string, string> => {
+  const doc = view.docs[kind];
+
+  const records =
+    isRecord(doc) && isRecord(doc.items)
+      ? Object.values(doc.items).filter(isRecord)
+      : [];
+
+  return new Map(
+    records.flatMap((record) => {
+      const id = record[key];
+
+      return Predicate.isString(id) && Predicate.isString(record.status)
+        ? [[id, record.status] as const]
+        : [];
+    })
+  );
+};
+
 /** The value at `path`; negative indices count from the end. None when it does not resolve. */
 export const valueAt = (
   value: Json,

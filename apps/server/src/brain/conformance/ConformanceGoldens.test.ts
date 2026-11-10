@@ -14,11 +14,11 @@ import {
   allScenarios,
   BRIEF_EXPIRY_SCENARIOS,
   CONFORMANCE_DIR,
+  GOLDEN_OPTIONS,
   PENDING,
   scenarios,
   SHORT_BRIEF_TTL_MILLIS,
   SIDES,
-  SUITE_OPTIONS,
   TARGETS,
 } from "./ConformanceSuite.ts";
 import type { Side } from "./ConformanceSuite.ts";
@@ -63,14 +63,15 @@ describe("brief expiry, with a short brief lifetime", () => {
             const outcome = yield* runScenario(
               scenario,
               expiryTargets[side],
-              SUITE_OPTIONS
+              GOLDEN_OPTIONS
             );
 
             for (const failure of Option.toArray(outcome.failure)) {
               failed.push(`${side} ${scenario.name}: ${failure}`);
             }
 
-            if (side !== "pi-durable") {
+            // A failed run's record is never judged or written: it may stop short.
+            if (side !== "pi-durable" || Option.isSome(outcome.failure)) {
               continue;
             }
 
@@ -115,6 +116,7 @@ describe("harness conformance drift", () => {
     () =>
       Effect.gen(function* () {
         const update = process.env.CAIRN_UPDATE_GOLDENS === "1";
+        const failed: Array<string> = [];
         const drifted: Array<string> = [];
 
         for (const scenario of scenarios) {
@@ -127,12 +129,17 @@ describe("harness conformance drift", () => {
           const outcome = yield* runScenario(
             scenario,
             TARGETS[side.value],
-            SUITE_OPTIONS
+            GOLDEN_OPTIONS
           );
 
           const file = goldenFile(scenario);
 
-          if (update) {
+          // A failed run's record is never judged or written: it may stop short.
+          if (Option.isSome(outcome.failure)) {
+            failed.push(
+              `${scenario.name} (${side.value}): ${outcome.failure.value}`
+            );
+          } else if (update) {
             writeFileSync(file, `${JSON.stringify(outcome.record, null, 2)}\n`);
           } else {
             const golden = decodeGolden(readFileSync(file, "utf-8"));
@@ -143,6 +150,11 @@ describe("harness conformance drift", () => {
           }
         }
 
+        assert.deepStrictEqual(
+          failed,
+          [],
+          "these runs failed, so their records were neither judged nor written"
+        );
         assert.deepStrictEqual(
           drifted,
           [],

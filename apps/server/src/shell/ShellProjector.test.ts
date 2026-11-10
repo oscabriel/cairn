@@ -50,6 +50,7 @@ import type {
   LastRunFailure,
   LiveThreadState,
 } from "../brain/HarnessSeam.ts";
+import { RunEnds } from "../brain/RunEnds.ts";
 import { EventSink } from "./EventSink.ts";
 import { EventStore } from "./EventStore.ts";
 import { ProjectorSignals } from "./ProjectorSignals.ts";
@@ -1420,6 +1421,63 @@ describe("the shell projector", () => {
           assert.isTrue(yield* reconciled.has(THREAD, at(3600)));
         })
       )
+  );
+});
+
+/** The run ends a harness kept, and every run the reconcile asked about. */
+const runEndsAsked = Ref.makeUnsafe<ReadonlyArray<string>>([]);
+
+const KeptRunEnds = Layer.succeed(RunEnds, {
+  endOf: (threadId, runId) =>
+    Effect.as(
+      Ref.update(runEndsAsked, (all) => [...all, `${threadId}:${runId}`]),
+      runId === run7 ? Option.some(at(90)) : Option.none()
+    ),
+});
+
+const KeptRunEndsLayer = ShellProjector.layer.pipe(
+  Layer.provideMerge(FakeLayer),
+  Layer.provideMerge(ShellTestLayer),
+  Layer.provide(KeptRunEnds)
+);
+
+describe("the boot reconcile over a harness that keeps run ends", () => {
+  it.effect(
+    "dates an unseen end by the end of the run the row names, and asks for no other",
+    () =>
+      Effect.gen(function* () {
+        yield* seedThreads(2);
+
+        const sink = yield* EventSink;
+        const projector = yield* ShellProjector;
+        const reconciled = yield* ReconciledEnds;
+
+        // Thread 1's run 7 ended unseen; thread 2 is idle and has nothing to date.
+        yield* sink.commitCommand(
+          ThreadActivityUpdate.make({
+            commandId: testCommandId(903),
+            threadId: THREAD,
+            patch: {
+              ...emptyActivityPatch,
+              activity: Option.some("running"),
+              activeRunId: Option.some(Option.some(run7)),
+              latestRunStartedAt: Option.some(Option.some(at(60))),
+            },
+          })
+        );
+
+        yield* TestClock.setTime(DateTime.toEpochMillis(at(3600)));
+        yield* projector.reconcile;
+
+        const ended = yield* shellOf(THREAD);
+
+        assert.strictEqual(ended.activity, "idle");
+        assert.deepStrictEqual(ended.latestRunCompletedAt, Option.some(at(90)));
+        assert.isFalse(yield* reconciled.has(THREAD, at(90)));
+        assert.deepStrictEqual(yield* Ref.get(runEndsAsked), [
+          `${THREAD}:${run7}`,
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(KeptRunEndsLayer))
   );
 });
 

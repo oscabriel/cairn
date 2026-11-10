@@ -116,6 +116,7 @@ import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
 import { PendingApprovals } from "./PendingApprovals.ts";
 import { parentCeiling } from "./Permissions.ts";
 import { piConversationId, piEntryId, piSubmissionId } from "./PiIds.ts";
+import { RunEnds } from "./RunEnds.ts";
 import {
   classifyRecordedRunFailure,
   recordedRunFailureOf,
@@ -1700,6 +1701,48 @@ const layerNoDeps = Layer.effectContext(
       );
     });
 
+    /**
+     * When `threadId`'s run `runId` ended, as RunTerminal would have dated it: the end of the
+     * conversation's newest run task, the one that ended the run (a run hands over from one to the
+     * next), once it is terminal. None while it runs, or when the newest is older than the run.
+     */
+    const runEndOf = (threadId: ThreadId, runId: RunId) =>
+      Effect.gen(function* () {
+        const session = yield* open(Option.some(threadId));
+        const conversationId = yield* conversationIdOf(session, threadId);
+
+        const newest = yield* call(
+          Option.some(threadId),
+          "tasks.scan",
+          async (context) =>
+            await session.storage.scanTasks(
+              { conversationId, kind: RUN_TASK, order: "descending" },
+              1,
+              undefined,
+              context
+            )
+        );
+
+        return Option.flatMap(Option.fromUndefinedOr(newest.items[0]), (task) =>
+          task.id >= runId && task.state.status === "terminal"
+            ? Option.map(Option.fromUndefinedOr(task.endedAt), (millis) =>
+                DateTime.makeUnsafe(millis)
+              )
+            : Option.none()
+        );
+      }).pipe(
+        Effect.catchTag("HarnessError", (unread) =>
+          Effect.logWarning("run end unread").pipe(
+            Effect.annotateLogs({
+              event: "run_end_unread",
+              threadId,
+              error: unread.message,
+            }),
+            Effect.as(Option.none<DateTime.Utc>())
+          )
+        )
+      );
+
     const inspect = Effect.gen(function* () {
       const session = yield* open(Option.none());
 
@@ -1844,15 +1887,16 @@ const layerNoDeps = Layer.effectContext(
       Context.add(
         PendingApprovals,
         PendingApprovals.of({ conversations: pendingConversations })
-      )
+      ),
+      Context.add(RunEnds, { endOf: runEndOf })
     );
   })
 );
 
 /**
- * The seam over pi-durable, and `PendingApprovals` beside it. `layer` puts the brain under it and
- * also exposes `Brain` (boot resumes it after its repairs); it needs the models, the extension set
- * and the brain's directory from the composition root.
+ * The seam over pi-durable, and `PendingApprovals` and `RunEnds` beside it. `layer` puts the brain
+ * under it and also exposes `Brain` (boot resumes it after its repairs); it needs the models, the
+ * extension set and the brain's directory from the composition root.
  */
 export const PiDurableHarness = {
   layerNoDeps,

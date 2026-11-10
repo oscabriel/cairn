@@ -15,15 +15,23 @@
 //   callback, so nothing here may throw.
 // - Restarts: the Harness never ends a task for crashes (`RestartLimit`, ADR 0046); boot's
 //   `crash limit` repair does Cairn's own crash accounting (`CrashLimit.ts`).
-// - Close: on scope close, the supervisor stops first, so a reopen it was making either published
-//   its Session or opened nothing (an open that hangs gives up at `BrainOpenTimeout`); then
-//   `harness.close` with a 5 s timeout. A task that ignores its
-//   signal keeps close pending; past the timeout the process exits anyway and the task counts one
-//   restart.
+// - Reopens: each runs on its own fiber to its end; the supervisor waits for it at most
+//   `BrainOpenTimeout`, or until the brain closes. A reopen it gave up on is cancelled, and what it
+//   opened is closed as it lands: its storage at once if its Harness never opened, else the Harness
+//   (and the storage with it). Close closes the storage of any still opening, so nothing a reopen
+//   opened outlives the brain.
+// - Close: on scope close, the supervisor stops first, so a reopen it was waiting for is given up
+//   unless it already published its Session; then `harness.close` with a 5 s timeout. A task that
+//   ignores its signal keeps close pending; past the timeout the process exits anyway and the task
+//   counts one restart.
 //
 // Open and close follow cairn-v1, apps/server/src/Harnesses.ts at 1a5cd4a; the boot order comes
 // from spikes/3-workflows/brain.ts and spikes/4-approvals/brain.ts in this repo.
 
+import {
+  BACKGROUND_CONTEXT,
+  withAbortSignal,
+} from "@earendil-works/chord/context";
 import type {
   CommitPublication,
   Report,
@@ -36,6 +44,8 @@ import {
   Context,
   Duration,
   Effect,
+  Exit,
+  Fiber,
   Function,
   Layer,
   Option,
@@ -46,12 +56,13 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import type { Scope } from "effect";
+import type { Cause, Scope } from "effect";
 
 import { Arms } from "./Arms.ts";
 import { BrainOpenTimeout } from "./BrainOpenTimeout.ts";
 import { BrainStore } from "./BrainStore.ts";
 import { durable, errorText } from "./Durable.ts";
+import type { DurableCallError } from "./Durable.ts";
 import { Extensions } from "./Extensions.ts";
 import { ModelSource } from "./ModelSource.ts";
 import { RestartLimit } from "./RestartLimit.ts";
@@ -100,6 +111,71 @@ const reopenSchedule = Schedule.min([
   Schedule.exponential(Duration.millis(250)),
   Schedule.spaced(Duration.seconds(8)),
 ]);
+
+/** What one open made, before it is published as a `BrainSession`. */
+interface Opened {
+  readonly storage: Storage;
+  readonly harness: Harness;
+}
+
+/**
+ * One open of a Session in flight. Plain mutable state, changed only in synchronous steps, so an
+ * open landing and its waiter giving up on it never interleave.
+ */
+interface Opening {
+  /** Cancels the Harness's open once its waiter gave up. */
+  readonly cancel: AbortController;
+  /** The storage, once the store opened it. */
+  storage: Option.Option<Storage>;
+  /** What the open made, once it finished and until its waiter takes it. */
+  landed: Option.Option<Opened>;
+  /** Set once nobody waits for the open: what it makes is closed as it lands. */
+  abandoned: boolean;
+}
+
+const newOpening = (): Opening => ({
+  cancel: new AbortController(),
+  storage: Option.none(),
+  landed: Option.none(),
+  abandoned: false,
+});
+
+/** Logs a close that failed or ran past `CLOSE_TIMEOUT`; the process exits without it. */
+const boundedClose = (
+  what: string,
+  close: Effect.Effect<void, DurableCallError>
+) => {
+  const unfinished = (failure: DurableCallError | Cause.TimeoutError) =>
+    Effect.logWarning(`brain ${what} close did not finish`).pipe(
+      Effect.annotateLogs({ error: errorText(failure) })
+    );
+
+  return close.pipe(
+    Effect.timeout(CLOSE_TIMEOUT),
+    Effect.catchTags({
+      DurableCallError: unfinished,
+      TimeoutError: unfinished,
+    })
+  );
+};
+
+/** Closes a Harness, and the storage under it. */
+const closeHarness = (harness: Harness) =>
+  boundedClose(
+    "session",
+    durable("close", async (context) => {
+      await harness.close(context);
+    })
+  );
+
+/** Closes storage no Harness will close; closing pi-durable storage twice closes it once. */
+const closeStorage = (storage: Storage) =>
+  boundedClose(
+    "storage",
+    durable("storage.close", async () => {
+      await storage.close(BACKGROUND_CONTEXT);
+    })
+  );
 
 /** The open Harness, its supervisor and its close. */
 export class Brain extends Context.Service<
@@ -188,32 +264,51 @@ export class Brain extends Context.Service<
 
       let latest: BrainSession | undefined;
 
-      const openSession = Effect.gen(function* () {
-        const storage = yield* store.open;
+      /**
+       * Opens storage and a Harness over it; `opening.cancel` cancels the Harness's open. A failed
+       * open leaves nothing open: pi-durable closes what a failed `Harness.open` made, the storage
+       * with it, and the storage is closed here too for an open that failed before making its
+       * Harness.
+       */
+      const openParts = (opening: Opening) =>
+        Effect.gen(function* () {
+          const storage = yield* store.open;
 
-        const harness = yield* durable(
-          "open",
-          async (context) =>
-            await Harness.open(
-              storage,
-              {
-                models: () => models.models(),
-                settings: () => ({
-                  ...models.settings(),
-                  restartLimit,
-                }),
-                registry,
-                env: arms.env,
-                now,
-                // pi-durable calls this on its own stack; it only enqueues.
-                onReport: (report) => {
-                  Queue.offerUnsafe(reports, report);
+          opening.storage = Option.some(storage);
+
+          // Given up while the store opened: the storage closes now, and the cancelled open fails.
+          if (opening.abandoned) {
+            yield* closeStorage(storage);
+          }
+
+          const harness = yield* durable(
+            "open",
+            async (context) =>
+              await Harness.open(
+                storage,
+                {
+                  models: () => models.models(),
+                  settings: () => ({
+                    ...models.settings(),
+                    restartLimit,
+                  }),
+                  registry,
+                  env: arms.env,
+                  now,
+                  // pi-durable calls this on its own stack; it only enqueues.
+                  onReport: (report) => {
+                    Queue.offerUnsafe(reports, report);
+                  },
                 },
-              },
-              context
-            )
-        );
+                withAbortSignal(opening.cancel.signal, context)
+              )
+          ).pipe(Effect.tapError(() => closeStorage(storage)));
 
+          return { storage, harness } satisfies Opened;
+        });
+
+      /** Makes what an open made the next Session, with every commit listener attached. */
+      const land = Effect.fnUntraced(function* ({ storage, harness }: Opened) {
         const opened = yield* Effect.sync(() => {
           generation += 1;
 
@@ -239,12 +334,46 @@ export class Brain extends Context.Service<
         return opened;
       });
 
-      const first = yield* openSession.pipe(Effect.orDie);
+      const first = yield* openParts(newOpening()).pipe(
+        Effect.flatMap(land),
+        Effect.orDie
+      );
 
       yield* SubscriptionRef.set(current, Option.some(first));
 
-      // Added before the supervisor is forked, so on close the supervisor stops first: a reopen
-      // attempt in flight finishes and publishes, and this closes whatever Session is open.
+      // Every reopen still opening, or closing what it opened after its waiter gave up on it.
+      const opening = new Set<Opening>();
+
+      /** Closes what an open nobody waits for made, and forgets the open. */
+      const closeLanded = (attempt: Opening, opened: Opened) =>
+        closeHarness(opened.harness).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              opening.delete(attempt);
+            })
+          )
+        );
+
+      /**
+       * Gives up on `attempt`: its open is cancelled, and what it made is closed, here if it
+       * already landed, else as it lands. The flag and the read are one synchronous step, so the
+       * landing cannot slip between them.
+       */
+      const abandon = (attempt: Opening) =>
+        Effect.suspend(() => {
+          attempt.abandoned = true;
+          attempt.cancel.abort();
+
+          return Option.match(attempt.landed, {
+            onNone: () => Effect.void,
+            onSome: (landed) => closeLanded(attempt, landed),
+          });
+        });
+
+      // Added before the supervisor is forked, so on close the supervisor stops first: a reopen it
+      // was waiting for is given up, unless it already published its Session. This closes whatever
+      // Session is open, then gives up on every reopen still opening and closes the storage it
+      // opened (its Harness, should one still open, closes as it lands).
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           yield* Ref.set(down, "closing");
@@ -252,30 +381,72 @@ export class Brain extends Context.Service<
           const open = yield* SubscriptionRef.getAndSet(current, Option.none());
 
           if (Option.isSome(open)) {
-            yield* durable("close", async (context) => {
-              await open.value.harness.close(context);
-            }).pipe(
-              Effect.timeout(CLOSE_TIMEOUT),
-              Effect.catch((error) =>
-                Effect.logWarning("brain close did not finish").pipe(
-                  Effect.annotateLogs({ error: errorText(error) })
-                )
-              )
-            );
+            yield* closeHarness(open.value.harness);
           }
+
+          yield* Effect.forEach(
+            [...opening],
+            (attempt) =>
+              Effect.andThen(
+                abandon(attempt),
+                Effect.forEach(Option.toArray(attempt.storage), closeStorage, {
+                  discard: true,
+                })
+              ),
+            { concurrency: "unbounded", discard: true }
+          );
         })
       );
 
       const openTimeout = yield* BrainOpenTimeout;
 
-      // One reopen attempt, whole or not at all: a Session it opens is published before the
-      // supervisor can stop, so the close finalizer closes it. It schedules work only once boot
-      // resumed (its repairs ran); before that, boot's `resume` resumes it. An open that hangs
-      // fails the attempt at `openTimeout`, so it cannot hold a shutdown for good: the timeout
-      // cancels the open's context, and pi-durable closes what a failed open opened.
-      const reopen = Effect.uninterruptible(
+      // One reopen's open, on its own fiber, so giving up on it never drops what it opens: it runs
+      // to its end, then waits for its waiter to take what it made, or closes it if nobody waits.
+      const startOpen = Effect.gen(function* () {
+        const attempt = newOpening();
+
+        opening.add(attempt);
+
+        const fiber = yield* openParts(attempt).pipe(
+          Effect.onExit(
+            Exit.match({
+              onFailure: () =>
+                Effect.sync(() => {
+                  opening.delete(attempt);
+                }),
+              onSuccess: (opened) =>
+                Effect.suspend(() => {
+                  if (attempt.abandoned) {
+                    return closeLanded(attempt, opened);
+                  }
+
+                  attempt.landed = Option.some(opened);
+
+                  return Effect.void;
+                }),
+            })
+          ),
+          Effect.forkDetach({ startImmediately: true })
+        );
+
+        return { attempt, fiber };
+      });
+
+      // One reopen attempt: a Session it opens is published before the supervisor can stop, so the
+      // close finalizer closes it. It schedules work only once boot resumed (its repairs ran);
+      // before that, boot's `resume` resumes it. The wait ends at `openTimeout`, or when the brain
+      // closes; the open is then given up (`abandon`), so an open that hangs holds neither.
+      const reopen = Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const next = yield* openSession.pipe(Effect.timeout(openTimeout));
+          const { attempt, fiber } = yield* startOpen;
+
+          const opened = yield* restore(
+            Fiber.join(fiber).pipe(Effect.timeout(openTimeout))
+          ).pipe(Effect.onError(() => abandon(attempt)));
+
+          opening.delete(attempt);
+
+          const next = yield* land(opened);
 
           yield* SubscriptionRef.set(current, Option.some(next));
 

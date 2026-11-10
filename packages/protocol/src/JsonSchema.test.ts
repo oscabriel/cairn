@@ -86,6 +86,8 @@ describe(rpcJsonSchemas, () => {
       "settings.get",
       "settings.update",
       "shell.dispatch",
+      "shell.earlierThread",
+      "shell.previousThreads",
       "shell.subscribe",
       "skills.list",
       "skills.reload",

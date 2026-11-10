@@ -32,6 +32,7 @@ import { AppRoute } from "../Route.ts";
 import {
   FocusPopoverSearch,
   MoveHeroToDraftUrl,
+  OpenProjectThread,
   PrepareLaunch,
   PrepareSend,
   SaveDrafts,
@@ -50,12 +51,14 @@ import { composerContext } from "./Context.ts";
 import {
   activeDraft,
   DRAFTS_STORAGE_KEY,
+  draftProject,
   readDrafts,
   saveDrafts,
   shownNotice,
 } from "./Drafts.ts";
 import { ComposerInput } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
+import { drawerRoomOf, KeepDrawerRoom } from "./HeroDrawerRoom.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
@@ -279,8 +282,15 @@ describe("composer triggers", () => {
       "the menu lists the picked project's files"
     );
 
+    // A draft whose project is gone falls back to the default project, so only a shell with no
+    // project at all leaves it with none.
     const orphaned = afterAll(
-      pickDraftProject(base, draftId, ProjectId.make("prj_gone")),
+      pickDraftProject(
+        inform(composerOn(target), { ...contextFor(target), projects: [] })
+          .model,
+        draftId,
+        ProjectId.make("prj_gone")
+      ),
       typed
     );
 
@@ -1421,6 +1431,114 @@ describe("composer sends", () => {
     );
   });
 
+  it("opens the project thread with the draft's words and attachments instead of launching while its project has one (ADR 0048)", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b0a";
+    const key = `draft:${draftId}`;
+    const to = `thread:${otherThreadId}`;
+
+    const ref = {
+      id: AttachmentId.make("att_9"),
+      name: "plan.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 12,
+      kind: "pdf" as const,
+      sha256: "0".repeat(64),
+    };
+
+    const base = composerOn(ComposerTarget.Draft({ draftId }));
+
+    const ready: Model = {
+      ...base,
+      context: {
+        ...base.context,
+        projects: [{ ...project, projectThreadId: Option.some(otherThreadId) }],
+      },
+      drafts: {
+        [key]: {
+          ...emptyDraft,
+          text: "and one more thing",
+          attachments: [ref.id],
+        },
+      },
+      attachments: {
+        ...base.attachments,
+        loaded: true,
+        nextLocalId: 2,
+        items: [
+          {
+            localId: "attachment-1",
+            draftKey: key,
+            name: ref.name,
+            mimeType: ref.mimeType,
+            sizeBytes: ref.sizeBytes,
+            isImage: false,
+            file: Option.none(),
+            previewUrl: Option.none(),
+            pastedAt: Option.none(),
+            pasteToRequestMs: Option.none(),
+            attempts: 1,
+            status: AttachmentStatus.Ready({ ref }),
+          },
+        ],
+      },
+    };
+
+    const sent = update(
+      ready,
+      Message.PressedSubmitKey({ intent: "foreground" })
+    );
+
+    const names = (sent.commands ?? []).map(({ name }) => name);
+
+    assert.deepStrictEqual(
+      {
+        launched: names.includes(PrepareLaunch.name),
+        opened: (sent.commands ?? []).find(
+          ({ name }) => name === OpenProjectThread.name
+        )?.args,
+        outMessage: sent.outMessage,
+        heroDraft: sent.model.drafts[key],
+        moved: sent.model.drafts[to]?.text,
+        movedAttachments: sent.model.drafts[to]?.attachments,
+        tray: readyIds(sent.model.attachments, to),
+        heroTray: readyIds(sent.model.attachments, key),
+      },
+      {
+        launched: false,
+        opened: { threadId: otherThreadId },
+        outMessage: undefined,
+        heroDraft: undefined,
+        moved: "and one more thing",
+        movedAttachments: [ref.id],
+        tray: [ref.id],
+        heroTray: [],
+      }
+    );
+
+    // On the project thread's page its composer holds the words, unsent, and says why.
+    const opened = inform(
+      sent.model,
+      contextFor(ComposerTarget.Thread({ threadId: otherThreadId }))
+    ).model;
+
+    assert.strictEqual(activeDraft(opened).text, "and one more thing");
+    assert.match(
+      Option.getOrElse(shownNotice(opened), () => ""),
+      /already has a project thread/u
+    );
+  });
+
+  it("still launches the first thread of a project with no project thread", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b0b";
+
+    const typed = update(
+      composerOn(ComposerTarget.Draft({ draftId })),
+      Message.ChangedDraft({ value: "begin" })
+    ).model;
+
+    assert.isDefined(launchOf(typed));
+  });
+
   it.effect(
     "puts back the text, both ready attachments and the picked model when a launch cannot start",
     () =>
@@ -1607,6 +1725,7 @@ describe("the new-thread hero", () => {
       { update, view },
       Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
       ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
       Scene.expect(Scene.testId("hero-headline")).toContainText(
         "What should we build"
       ),
@@ -1622,6 +1741,72 @@ describe("the new-thread hero", () => {
       Scene.tap((simulation) => {
         assert.lengthOf(simulation.commands, 0);
       })
+    );
+  });
+
+  it("keeps the menu drawer's list within the room above the box, measured on the page (U-21)", () => {
+    // Box 200 px below the scroller's top, unscrolled: 200 px of room.
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 0, boxTop: 256 }),
+      200
+    );
+    // Scrolled 120 px: the room is still counted from the top a scroll reaches.
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 120, boxTop: 136.6 }),
+      200
+    );
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 0, boxTop: 40 }),
+      0
+    );
+
+    Scene.scene(
+      { update, view },
+      Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
+      ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
+      ...typeWithCaret("/"),
+      Scene.expect(menu).toExist(),
+      Scene.expect(Scene.selector("[data-chat-composer-stack]")).toHaveClass(
+        "[&_[data-slot=command-list]]:max-h-[min(18rem,var(--hero-drawer-room,18rem))]"
+      )
+    );
+  });
+
+  it("launches a draft whose project was removed in the hero's default project, not the scratch project", () => {
+    const myr = ProjectShell.make({
+      ...project,
+      id: ProjectId.make("prj_myr"),
+      title: "myr",
+      workspaceRoot: "/home/user/myr",
+    });
+
+    const target = ComposerTarget.Draft({ draftId });
+
+    const picked = pickDraftProject(
+      inform(composerOn(target), {
+        ...contextFor(target),
+        projects: [project, myr],
+      }).model,
+      draftId,
+      myr.id
+    );
+
+    assert.strictEqual(Option.getOrThrow(draftProject(picked)).id, myr.id);
+
+    // myr is removed from its menu: the shell no longer holds it.
+    const removed = inform(picked, {
+      ...contextFor(target),
+      projects: [project],
+    }).model;
+
+    assert.strictEqual(Option.getOrThrow(draftProject(removed)).id, project.id);
+
+    const typed = update(removed, Message.ChangedDraft({ value: "go" })).model;
+
+    assert.deepStrictEqual(
+      launchOf(typed)?.args?.projectId,
+      Option.some(project.id)
     );
   });
 

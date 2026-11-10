@@ -483,7 +483,11 @@ describe("launching threads", () => {
             "Help with the shared work"
           );
 
-          yield* launcher.launch(second, "owner@test");
+          // The second top-level launch in the project is a refresh, so it names the first.
+          yield* launcher.launch(
+            { ...second, replaces: first.threadId },
+            "owner@test"
+          );
           yield* eventually(row(second.threadId), (shell) =>
             Option.isSome(shell.worktreePath)
           );

@@ -21,8 +21,14 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import {
+  defaultProjectOf,
+  folderProjectsByRecent,
+  projectThreadToOpen,
+} from "@cairn/client-logic/ProjectThread";
+import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectShell } from "@cairn/protocol/Shell";
-import { Array, DateTime, Effect, Option, Order, Record, Schema } from "effect";
+import { Array, Effect, Option, Record, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 
 import {
@@ -130,34 +136,36 @@ export const modifyActiveDraft = (
     },
   });
 
-const byRecentUpdate = Order.mapInput(
-  Order.flip(DateTime.Order),
-  (project: ProjectShell) => project.updatedAt
-);
-
 /** The folder projects the hero offers, most recently updated first. */
 export const pickableProjects = (model: Model): ReadonlyArray<ProjectShell> =>
-  Array.sort(
-    Array.filter(
-      model.context.projects,
-      (project) => project.kind === "folder"
-    ),
-    byRecentUpdate
-  );
+  folderProjectsByRecent(model.context.projects);
 
 /**
- * The project a new thread launches in: the one the draft chose, else the most recently updated
- * folder project. None when there is no project (the hero then offers to start without one).
+ * The project a new thread launches in: the one the draft chose while it still exists, else the
+ * hero's default (the most recently updated folder project), so a draft whose project was removed
+ * names and launches in the default rather than quietly in the scratch project. None when there is
+ * no project (the hero then offers to start without one).
  */
 export const draftProject = (model: Model): Option.Option<ProjectShell> => {
   const draft = activeDraft(model);
 
-  return Option.match(draft.projectId, {
-    onNone: () => Array.head(pickableProjects(model)),
-    onSome: (id) =>
-      Array.findFirst(model.context.projects, (project) => project.id === id),
-  });
+  return Option.orElse(
+    Option.flatMap(draft.projectId, (id) =>
+      Array.findFirst(model.context.projects, (project) => project.id === id)
+    ),
+    () => defaultProjectOf(model.context.projects)
+  );
 };
+
+/**
+ * The live project thread a draft's send opens instead of launching (ADR 0048): its project's,
+ * while the composer writes a draft. None outside a draft, in the scratch project, or in a folder
+ * project with no project thread yet, where the send launches the first one.
+ */
+export const draftProjectThread = (model: Model): Option.Option<ThreadId> =>
+  isDraftTarget(model)
+    ? Option.flatMap(draftProject(model), projectThreadToOpen)
+    : Option.none();
 
 /** The project of the composer's target: a draft's project or the open thread's. */
 export const targetProject = (model: Model): Option.Option<ProjectShell> =>

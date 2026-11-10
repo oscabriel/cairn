@@ -1,5 +1,6 @@
 // Launches and the project thread (the user's decisions of 2026-10-29): the first launch in a folder
-// project marks its project thread, a later one refreshes it (the old one stopped and archived), a
+// project marks its project thread, a later one naming it refreshes it (the old one stopped and
+// archived), a later one naming nothing is refused and stops nothing (ADR 0048), a
 // refresh naming a thread that is no longer the project thread makes nothing, a scratch
 // launch never touches a mark, and a thread the project thread manages takes every thread command.
 
@@ -143,24 +144,64 @@ describe("launching the project thread", () => {
         // Stopped as an archive stops a thread: nothing runs on out of the sidebar's sight.
         assert.isFalse(isRunning(yield* liveState(first.threadId)));
 
-        // A launch with nothing named replaces whichever is current.
-        const third = yield* launch(projectId, "third");
-
-        assert.deepStrictEqual(
-          yield* markOf(projectId),
-          Option.some(third.threadId)
-        );
-        assert.isTrue(
-          Option.isSome((yield* shellOf(second.threadId)).archivedAt)
-        );
-
         yield* (yield* ModelGate).open;
 
-        for (const input of [first, second, third]) {
+        for (const input of [first, second]) {
           yield* (yield* ThreadLaunch).settled(input.threadId);
         }
       })
     )
+  );
+
+  it.live(
+    "a launch that names nothing while the project thread is live is refused, and stops nothing (ADR 0048)",
+    () =>
+      withProject((projectId) =>
+        Effect.gen(function* () {
+          const first = yield* launch(projectId, "first");
+
+          yield* eventually(liveState(first.threadId), isRunning);
+
+          const unnamed = yield* launchInput(
+            projectId,
+            rootWorkspace,
+            "unnamed"
+          );
+
+          const refused = yield* Effect.flip(
+            (yield* ThreadLaunch).launch(unnamed, "owner@test")
+          );
+
+          assert.strictEqual(refused._tag, "LaunchError");
+          assert.deepStrictEqual(
+            Predicate.isTagged(refused, "LaunchError")
+              ? refused.field
+              : Option.none(),
+            Option.some("replaces")
+          );
+          assert.include(refused.message, "already has a project thread");
+          assert.isTrue(
+            Option.isNone(yield* (yield* ThreadRows).get(unnamed.threadId))
+          );
+          assert.isTrue(
+            Option.isNone(
+              yield* (yield* LaunchStore).byThread(unnamed.threadId)
+            )
+          );
+          assert.deepStrictEqual(
+            yield* markOf(projectId),
+            Option.some(first.threadId)
+          );
+          assert.isTrue(
+            Option.isNone((yield* shellOf(first.threadId)).archivedAt)
+          );
+          // The project thread's run goes on: the refusal ended nothing.
+          assert.isTrue(isRunning(yield* liveState(first.threadId)));
+
+          yield* (yield* ModelGate).open;
+          yield* (yield* ThreadLaunch).settled(first.threadId);
+        })
+      )
   );
 
   it.live(
@@ -171,7 +212,13 @@ describe("launching the project thread", () => {
           yield* (yield* ModelGate).open;
 
           const first = yield* launch(projectId, "first");
-          const second = yield* launch(projectId, "second");
+
+          const second = yield* launch(
+            projectId,
+            "second",
+            Option.some(first.threadId)
+          );
+
           const stale = yield* launchInput(projectId, rootWorkspace, "stale");
 
           const refused = yield* Effect.flip(

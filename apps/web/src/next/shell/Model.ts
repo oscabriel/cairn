@@ -4,12 +4,18 @@
 // work panel's open state. The rail, the project's sidebar list, the chat header, the scratch
 // overlay and the work panel all draw from it, and so does the goal panel (plan 6H): the open
 // thread's criteria and the user's marks on its own. The rail's + bubble opens the add-project
-// picker, whose folder, once added, the rail selects when the shell shows its project.
+// picker, whose folder, once added, the rail selects when the shell shows its project. The
+// selected project's earlier project threads (its "Previous" fold, ADR 0048), the project and
+// thread menus and the rename and remove dialogs they open are the shell's too.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelDefaults } from "@cairn/protocol/Models";
 import { BrowseResult } from "@cairn/protocol/Projects";
-import { ShellSnapshot } from "@cairn/protocol/Shell";
+import {
+  PreviousThreadsCursor,
+  ShellSnapshot,
+  ThreadShell,
+} from "@cairn/protocol/Shell";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
@@ -27,6 +33,11 @@ export const ShellContext = Schema.Struct({
   nowMs: Schema.Finite,
   /** An Apple platform, where the scratch thread's key hint reads Cmd. */
   isMac: Schema.Boolean,
+  /**
+   * On the hero and a draft's page, the project the draft launches in (`draftProject`), so the rail
+   * and the list show the project the hero names; none on every other page.
+   */
+  draftProjectId: Schema.Option(ProjectId),
 });
 
 export type ShellContext = typeof ShellContext.Type;
@@ -133,6 +144,88 @@ export const initialGoalPanel: GoalPanelState = {
   failure: Option.none(),
 };
 
+/** The rows a page of earlier project threads answered with, and the cursor of the next page. */
+export const PreviousRows = Schema.Struct({
+  threads: Schema.Array(ThreadShell),
+  next: Schema.Option(PreviousThreadsCursor),
+});
+
+export type PreviousRows = typeof PreviousRows.Type;
+
+/**
+ * The sidebar's "Previous" fold (ADR 0048): the selected project's earlier project threads, read
+ * from the brain (archived rows stay out of the shell stream) whenever the project or its project
+ * thread changes. `key` names the project and project thread the rows are for.
+ */
+export const PreviousState = Schema.Struct({
+  key: Schema.Option(Schema.String),
+  projectId: Schema.Option(ProjectId),
+  isOpen: Schema.Boolean,
+  /** None until the first page answers. */
+  rows: Schema.Option(PreviousRows),
+  isLoading: Schema.Boolean,
+  /** The number of the page asked last; an answer to an older one is dropped. */
+  request: Schema.Int,
+  failure: Schema.Option(Schema.String),
+  /**
+   * The earlier project thread opened last, from the fold or as the brain answered for a page
+   * opened on it directly, read only: its header and its page read it (as they read the fold's rows).
+   */
+  opened: Schema.Option(ThreadShell),
+  /**
+   * The thread last asked of the brain (`shell.earlierThread`): one a page was opened on that
+   * neither the shell nor the fold holds. It is asked once per route, and again on a reconnect.
+   */
+  askedAbout: Schema.Option(ThreadId),
+});
+
+export type PreviousState = typeof PreviousState.Type;
+
+/** The fold before anything was read. */
+export const initialPrevious: PreviousState = {
+  key: Option.none(),
+  projectId: Option.none(),
+  isOpen: false,
+  rows: Option.none(),
+  isLoading: false,
+  request: 0,
+  failure: Option.none(),
+  opened: Option.none(),
+  askedAbout: Option.none(),
+};
+
+/** How many earlier project threads one page of the fold reads. */
+export const PREVIOUS_PAGE = 20;
+
+/** Which menu is open: the selected project's, or the open thread's (from the chat header). */
+export const MenuTarget = defineTaggedUnion({
+  Project: { projectId: ProjectId },
+  Thread: { threadId: ThreadId },
+});
+
+export type MenuTarget = typeof MenuTarget.Type;
+
+/** What a menu item asks for: renaming or removing a project, or renaming a thread. */
+export const ManageAction = defineTaggedUnion({
+  RenameProject: { projectId: ProjectId },
+  RemoveProject: { projectId: ProjectId },
+  RenameThread: { threadId: ThreadId },
+});
+
+export type ManageAction = typeof ManageAction.Type;
+
+/** The open rename or remove dialog: its action, the name typed, and its call on its way. */
+export const ManageState = Schema.Struct({
+  action: ManageAction,
+  /** The new name; unused by a remove. */
+  text: Schema.String,
+  isSending: Schema.Boolean,
+  /** Why the last try did not go, drawn on the dialog, which stays open. */
+  failure: Schema.Option(Schema.String),
+});
+
+export type ManageState = typeof ManageState.Type;
+
 /** The add-project picker's folder listing: on its way, shown, or refused. */
 export const FolderListing = defineTaggedUnion({
   Loading: { path: Schema.Option(Schema.String) },
@@ -182,6 +275,9 @@ export const Model = Schema.Struct({
   folderRequests: Schema.Int,
   /** The folder just added: the rail selects its project once the shell shows it. */
   awaitedFolder: Schema.Option(Schema.String),
+  previous: PreviousState,
+  menu: Schema.Option(MenuTarget),
+  manage: Schema.Option(ManageState),
 });
 
 export type Model = typeof Model.Type;
@@ -194,6 +290,7 @@ export const emptyContext: ShellContext = {
   defaults: Option.none(),
   nowMs: 0,
   isMac: false,
+  draftProjectId: Option.none(),
 };
 
 /** A shell with nothing in it yet. */
@@ -217,4 +314,7 @@ export const initial: Model = {
   addProject: Option.none(),
   folderRequests: 0,
   awaitedFolder: Option.none(),
+  previous: initialPrevious,
+  menu: Option.none(),
+  manage: Option.none(),
 };

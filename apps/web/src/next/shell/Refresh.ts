@@ -70,7 +70,7 @@ export const refreshConfirm = (
               h.p(
                 [h.Class(classNames("text-ink-2", TYPE.ui))],
                 [
-                  "A new project thread starts with the message below. This one is archived, and its run and working subagents stop; you can still open it from the archive.",
+                  "A new project thread starts with the message below. This one is archived, and its run and working subagents stop; you can still open it under Previous in the sidebar.",
                 ]
               ),
               h.label(

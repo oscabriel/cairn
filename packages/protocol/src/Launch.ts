@@ -83,10 +83,11 @@ export const ThreadLaunchInput = Schema.Struct({
   initialMessage: TurnInput,
   /**
    * In a folder project, a launch makes the project thread (the user, 2026-10-29): the first one
-   * marks it, and a later one refreshes it, stopping and archiving the one it replaces. Naming the project
-   * thread the client saw makes the refresh refuse (`InvalidInput` on `replaces`) when another
-   * device moved the mark first; absent, it replaces whichever is current. Not allowed in the
-   * scratch project, where every launch is a scratch thread of its own.
+   * marks it, and a later one refreshes it, stopping and archiving the one it replaces. A refresh
+   * names the project thread the client saw (ADR 0048): the launch is refused (`InvalidInput` on
+   * `replaces`) when it names none while the project has a live project thread, or names one that
+   * another device has replaced since, and either refusal stops nothing. Not allowed in the scratch
+   * project, where every launch is a scratch thread of its own.
    */
   replaces: Schema.optionalKey(ThreadId),
 });

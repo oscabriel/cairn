@@ -26,6 +26,9 @@
 //                    then fail (the rest of the fold rule passes there; 1,440 and 1,180 px keep
 //                    room even so, and 390 px folds to icons either way);
 //   trigger-slash    `/` at line start opens the slash-command menu;
+//   trigger-short-390  on a 390 by 520 phone page (its keyboard up), `/` on the hero opens the
+//                    menu without moving the box, its first option inside the page and uncovered
+//                    (the drawer fits the room above the box, U-21);
 //   trigger-literal  `/tmp/x` leaves no menu open;
 //   trigger-at       `@READ` lists README (the time from the keystroke is recorded);
 //   trigger-skill    `$` opens the skill menu;
@@ -36,7 +39,9 @@
 //   drafts-reload    the hero's draft survives a reload of the page's URL (t3code moves the hero to
 //                    `/draft/<id>`, so its reload restores the draft);
 //   drafts-separate  a thread's draft stays with the thread and out of the hero;
-//   hero-launch      20 sends from the hero each land on `/t/<id>` and show the sent words in a
+//   hero-launch      20 sends from the hero, each started without a project (every seeded project
+//                    has a project thread by then, which the hero opens rather than replaces, ADR
+//                    0048), each land on `/t/<id>` and show the sent words in a
 //                    user row, and "This thread does not exist." never appears, not even for one
 //                    mutation (a DOM observer watches the whole time; the seed's flash was short).
 //                    The socket holds each `thread.launch` frame for 500 ms, so the page always
@@ -79,11 +84,22 @@
 //                         Clear deletes it and shows the empty overlay;
 //   shell-refresh-1440    Refresh asks first (Cancel keeps the thread), then starts a new project
 //                         thread with the typed message, opens it and lists it on top;
+//   shell-previous-<w>    after the refresh, cairn's list folds its earlier project thread under
+//                         "Previous (1)" (ADR 0048); the row opens the seeded thread read only: the
+//                         header says "earlier project thread", its transcript shows, its work panel
+//                         toggle reaches its subagents, no composer is drawn, a reload of its page
+//                         keeps it read only, and the bar's button opens the current project thread;
 //   shell-start-1440      myr's bubble opens a draft of myr's own; its first message launches in
 //                         myr and becomes its project thread, and cairn keeps its own;
-//   shell-draft-project-<w>  the hero's project picker chooses oscargabriel-dev: the rail and the
+//   shell-draft-project-1440  the hero's project picker chooses oscargabriel-dev: the rail and the
 //                         list follow it, and the first message launches there (the header
 //                         titles the new project thread with it);
+//   hero-project-thread-<w>  the hero and the rail name the same project before any pick (U-21);
+//                         then, oscargabriel-dev having a project thread, the picker chooses it, the
+//                         rail and list follow, and Enter with words and a pasted image opens that
+//                         project thread rather than replacing it (ADR 0048): the words and the
+//                         chip wait unsent in its composer with the notice saying why, and the list
+//                         still shows the same project thread on top;
 //   shell-add-project-<w> the rail's + bubble, last on the rail and shaped as the project bubbles
 //                         (44 px on the phone), opens the add-project picker; a temporary folder
 //                         under the home folder, browsed to (1,440) or typed (390), becomes a
@@ -752,6 +768,115 @@ const shellChecks = async (browser: Browser, hero: string) => {
       "cancel kept true, new thread shown true, on top true, managed 0"
   );
 
+  // After the refresh: cairn's earlier project thread, the seeded one, is under "Previous" and
+  // opens read only (ADR 0048).
+  for (const width of [1440, 390] as const) {
+    await check(
+      browser,
+      `shell-previous-${width}`,
+      shellContext(width),
+      hero,
+      async (page) => {
+        await openSidebar(page, width);
+
+        const side = sidebarOf(page, width);
+
+        await side
+          .getByRole("button", {
+            name: new RegExp(`^${exported.projectTitle}`, "u"),
+          })
+          .click();
+        await page.waitForURL((url) => url.pathname.startsWith("/t/"), {
+          timeout: 5000,
+        });
+
+        const current = new URL(page.url()).pathname;
+
+        await openSidebar(page, width);
+
+        const toggle = sidebarOf(page, width).getByTestId(
+          "shell-previous-toggle"
+        );
+
+        await toggle.waitFor({ state: "visible", timeout: 10_000 });
+
+        const title = ((await toggle.textContent()) ?? "").trim();
+
+        await toggle.click();
+
+        const rows = sidebarOf(page, width).getByTestId(
+          "shell-previous-thread"
+        );
+
+        await rows.first().waitFor({ state: "visible", timeout: 5000 });
+
+        const listed = await rows.evaluateAll((elements) =>
+          elements.map((element) =>
+            element instanceof HTMLElement ? element.dataset.threadItem : null
+          )
+        );
+
+        await shot(page, "previous", width);
+        await rows.first().click();
+        await page.waitForURL(
+          (url) => url.pathname === new URL(projectThreadUrl).pathname,
+          { timeout: 5000 }
+        );
+
+        const lane = await page
+          .getByTestId("earlier-thread-lane")
+          .waitFor({ state: "visible", timeout: 5000 })
+          .then(
+            () => true,
+            () => false
+          );
+
+        const role = (
+          (await page.getByTestId("next-header-role").textContent()) ?? ""
+        ).trim();
+
+        const transcript = await page
+          .locator("[data-message-role]")
+          .first()
+          .waitFor({ state: "visible", timeout: 10_000 })
+          .then(
+            () => true,
+            () => false
+          );
+
+        const composers = await page.getByTestId("composer-editor").count();
+        const work = await page.getByTestId("work-toggle").count();
+
+        await shot(page, "earlier-thread", width);
+
+        // Reached with no fold click (a reload, as a link or Back would), it is still read only.
+        await page.reload({ waitUntil: "networkidle" });
+
+        const reloaded = await page
+          .getByTestId("earlier-thread-lane")
+          .waitFor({ state: "visible", timeout: 10_000 })
+          .then(
+            () => true,
+            () => false
+          );
+
+        const reloadedComposers = await page
+          .getByTestId("composer-editor")
+          .count();
+
+        await page.getByTestId("earlier-thread-open-project").click();
+        await page.waitForURL((url) => url.pathname === current, {
+          timeout: 5000,
+        });
+
+        return `fold ${title}, row is the seeded thread ${listed.length === 1 && projectThreadUrl.endsWith(listed[0] ?? "-")}, read only ${lane && composers === 0}, after a reload ${reloaded && reloadedComposers === 0}, role ${role}, transcript ${transcript}, work panel ${work > 0}, back to the project thread true`;
+      },
+      (detail) =>
+        detail ===
+        "fold Previous (1), row is the seeded thread true, read only true, after a reload true, role earlier project thread, transcript true, work panel true, back to the project thread true"
+    );
+  }
+
   // After the refresh, which left the seeded project the user was in most recently: starting
   // myr's project thread from the rail launches in myr, and cairn keeps its project thread.
   await check(
@@ -828,8 +953,12 @@ const shellChecks = async (browser: Browser, hero: string) => {
   );
 
   // Last of the shell's checks, since it adds a thread the checks above count: the hero's
-  // project picker.
-  for (const width of [1440, 390] as const) {
+  // project picker launches oscargabriel-dev's first thread, its project thread.
+  // At 1,440 px only: by the phone's turn the project has a project thread, which the hero opens
+  // instead (`hero-project-thread-390` below).
+  const draftWidths: ReadonlyArray<1440 | 390> = [1440];
+
+  for (const width of draftWidths) {
     await check(
       browser,
       `shell-draft-project-${width}`,
@@ -909,6 +1038,102 @@ const shellChecks = async (browser: Browser, hero: string) => {
       (detail) =>
         detail ===
         "chosen oscargabriel-dev, rail oscargabriel-dev, list oscargabriel-dev, shown true, landed in oscargabriel-dev"
+    );
+  }
+
+  // Now oscargabriel-dev has a project thread: the hero opens it rather than replacing it, with
+  // what was typed and attached waiting unsent in its composer (ADR 0048).
+  for (const width of [1440, 390] as const) {
+    await check(
+      browser,
+      `hero-project-thread-${width}`,
+      shellContext(width),
+      hero,
+      async (page) => {
+        const trigger = page.getByTestId("hero-project-trigger");
+
+        await page.waitForURL((url) => url.pathname.startsWith("/new/"), {
+          timeout: 5000,
+        });
+
+        const railName = async () => {
+          await openSidebar(page, width);
+
+          const label = await sidebarOf(page, width)
+            .locator('[data-testid="rail-project"][aria-current="true"]')
+            .getAttribute("aria-label", { timeout: 2000 })
+            .then(
+              (found) => (found ?? "").split(",")[0] ?? "",
+              () => "none"
+            );
+
+          if (width === 390) {
+            await closeSidebar(page);
+          }
+
+          return label;
+        };
+
+        // Before any pick, the rail names the project the hero will launch in (U-21).
+        const heroDefault = ((await trigger.textContent()) ?? "").trim();
+        const railDefault = await railName();
+
+        await trigger.click();
+        await page
+          .getByRole("option", { name: "oscargabriel-dev", exact: true })
+          .click();
+
+        const followed = await railName();
+
+        await openSidebar(page, width);
+
+        const top = await sidebarOf(page, width)
+          .getByTestId("shell-project-thread")
+          .getAttribute("data-thread-item", { timeout: 5000 });
+
+        if (width === 390) {
+          await closeSidebar(page);
+        }
+
+        const words = `for dev's project thread ${Date.now()}`;
+
+        await editor(page).click();
+        await page.keyboard.type(words);
+        await paste(page, { png: true });
+        await chips(page).first().waitFor({ state: "visible", timeout: 5000 });
+        await page.waitForTimeout(800);
+        await editor(page).press("Enter");
+        await page.waitForURL((url) => url.pathname === `/t/${top ?? ""}`, {
+          timeout: 10_000,
+        });
+        await editor(page).waitFor({ state: "visible", timeout: 10_000 });
+        await page.waitForTimeout(1000);
+
+        const typed = await value(page);
+        const kept = typed.includes(words);
+        const attached = await chips(page).count();
+
+        const sent = await page
+          .locator('[data-message-role="user"]', { hasText: words })
+          .count();
+
+        const notice = (
+          (await page.getByTestId("composer-notice").textContent()) ?? ""
+        ).includes("already has a project thread");
+
+        await openSidebar(page, width);
+
+        const still = await sidebarOf(page, width)
+          .getByTestId("shell-project-thread")
+          .getAttribute("data-thread-item", { timeout: 5000 });
+
+        await shot(page, "hero-project-thread", width);
+
+        return `default agrees ${heroDefault === railDefault}, rail ${followed}, opened its project thread true, words kept ${kept}, chips ${attached}, sent ${sent}, notice ${notice}, same project thread ${still === top}`;
+      },
+      (detail) =>
+        detail ===
+        "default agrees true, rail oscargabriel-dev, opened its project thread true, words kept true, chips 1, sent 0, notice true, same project thread true"
     );
   }
 };
@@ -1590,6 +1815,63 @@ try {
     }
   );
 
+  // A phone with its keyboard up leaves the hero a short page: the menu's drawer lies over the
+  // headline, so it must fit the room above the box, or its first rows sit above the page's top
+  // where no scroll reaches (U-21).
+  await check(
+    chromiumBrowser,
+    "trigger-short-390",
+    { ...PHONE, viewport: { width: 390, height: 520 } },
+    hero,
+    async (page) => {
+      const box = page.locator("[data-chat-composer-form]").first();
+
+      await editor(page).click();
+
+      const closed = await box.boundingBox();
+
+      await page.keyboard.type("/");
+      await menu(page, "slash-command").waitFor({ timeout: 3000 });
+
+      const opened = await box.boundingBox();
+      const before = closed?.y ?? Number.NaN;
+      const after = opened?.y ?? Number.NaN;
+
+      const scroller = await page.getByTestId("hero").boundingBox();
+
+      const option = menu(page, "slash-command")
+        .locator('[role="option"]')
+        .first();
+
+      const first = await option.boundingBox();
+
+      const inside =
+        scroller !== null &&
+        first !== null &&
+        first.y >= scroller.y - 0.5 &&
+        first.y + first.height <= scroller.y + scroller.height + 0.5;
+
+      // Nothing covers it: the topmost element at its middle is the option or inside it.
+      const uncovered = await option.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+
+        const top = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2
+        );
+
+        return top !== null && element.contains(top);
+      });
+
+      await shot(page, "hero-menu-short", 390);
+
+      return `first option inside the page ${inside}, uncovered ${uncovered}, box still ${Math.abs(after - before) < 1}`;
+    },
+    (detail) =>
+      detail ===
+      "first option inside the page true, uncovered true, box still true"
+  );
+
   await check(
     chromiumBrowser,
     "trigger-literal",
@@ -1829,6 +2111,13 @@ try {
           await editor(page).waitFor({ state: "visible" });
         }
 
+        // Every seeded project has a project thread by now, which the hero would open rather
+        // than replace (ADR 0048): each send starts a thread of its own without a project.
+        await page.getByTestId("hero-start-without-project").click();
+        await page
+          .getByTestId("hero-headline")
+          .filter({ hasText: "What should we work on?" })
+          .waitFor({ timeout: 5000 });
         await editor(page).click();
         await page.keyboard.type(words);
         await page.keyboard.press("Enter");

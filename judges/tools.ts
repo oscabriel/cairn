@@ -1,9 +1,11 @@
 // The Executor tools judge (plan 3D, at integration): against the deployed brain, through the
 // browser's wire, on a cheap real model (the deployed brain has no faux provider), the model reaches
-// Executor's apps from a code mode script. Three threads in the project of this repo:
+// Executor's apps from a code mode script. Three scratch threads, launched in the scratch project:
+// a top-level launch into a folder project would replace its project thread, which only a named
+// refresh may do (ADR 0048), and the judge must never touch the user's own project threads.
 //
 //   node judges/tools.ts [--base https://code.gneiss.run] [--model <provider>/<modelId>]
-//                        [--repo oscabriel/cairn] [--project ~/Developer/projects/cairn] [--keep]
+//                        [--repo oscabriel/cairn] [--keep]
 //
 // - Two directed turns, one per server: `convex` (a status read) and `github` (a read of this
 //   repo). Each passes when a committed code mode script called
@@ -16,8 +18,6 @@
 // Prints one JSON line: {pass, model, executor, turns: [{name, pass, replyMs, calls, quoted,
 // notes}]}. Prints no credential, and no answer text beyond the quoted value's length. A few cents.
 
-import os from "node:os";
-import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
@@ -26,7 +26,7 @@ import type { ProjectId } from "@cairn/protocol/Ids";
 import { RootWorkspace } from "@cairn/protocol/Launch";
 import type { ModelListing } from "@cairn/protocol/Models";
 import type { ShellSnapshot, ThreadShell } from "@cairn/protocol/Shell";
-import { ProjectCreate, ThreadDelete } from "@cairn/protocol/ShellCommands";
+import { ThreadClear } from "@cairn/protocol/ShellCommands";
 import type { Entry } from "@cairn/protocol/Thread";
 import { NodeRuntime } from "@effect/platform-node";
 import {
@@ -51,10 +51,6 @@ const { values } = parseArgs({
     base: { type: "string", default: "https://code.gneiss.run" },
     model: { type: "string" },
     repo: { type: "string", default: "oscabriel/cairn" },
-    project: {
-      type: "string",
-      default: path.join(os.homedir(), "Developer", "projects", "cairn"),
-    },
     keep: { type: "boolean", default: false },
   },
 });
@@ -371,59 +367,8 @@ const program = Effect.gen(function* () {
     Effect.forkScoped
   );
 
-  const findProject = Ref.get(shell).pipe(
-    Effect.map((state) =>
-      Option.flatMap(state, (snapshot) =>
-        Option.fromUndefinedOr(
-          snapshot.projects.find(
-            (project) =>
-              project.kind === "folder" &&
-              // A project registered before its repository was known matches by its folder.
-              (Option.exists(
-                project.repository,
-                (repository) => repository.toLowerCase() === values.repo
-              ) ||
-                project.workspaceRoot === values.project)
-          )
-        )
-      )
-    )
-  );
-
-  const waitForProject = findProject.pipe(
-    Effect.repeat({
-      schedule: Schedule.spaced("200 millis"),
-      until: Option.isSome,
-    }),
-    Effect.timeoutOption(Duration.seconds(10)),
-    Effect.map(Option.flatten)
-  );
-
-  const existing = yield* waitForProject;
-
-  if (Option.isNone(existing)) {
-    yield* client["shell.dispatch"](
-      ProjectCreate.make({
-        commandId: yield* newCommandId,
-        workspaceRoot: values.project,
-        title: Option.none(),
-      })
-    );
-  }
-
-  const project = Option.isSome(existing) ? existing : yield* waitForProject;
-
-  if (Option.isNone(project)) {
-    return {
-      pass: false,
-      executor: executor.state,
-      model: `${model.provider}/${model.modelId}`,
-      turns: [],
-      notes: [`no project for ${values.repo} at ${values.project}`],
-    };
-  }
-
-  const projectId: ProjectId = project.value.id;
+  // Each turn is a scratch thread; the brain makes the scratch project when it has none.
+  const projectId: ProjectId = (yield* client["projects.ensureScratch"]()).id;
 
   const runTurn = Effect.fn("tools.turn")(function* (turn: Turn) {
     const notes: Array<string> = [];
@@ -525,12 +470,13 @@ const program = Effect.gen(function* () {
     }
 
     if (!values.keep) {
+      // Clearing a scratch thread deletes it and frees its folder.
       yield* client["shell.dispatch"](
-        ThreadDelete.make({ commandId: yield* newCommandId, threadId })
+        ThreadClear.make({ commandId: yield* newCommandId, threadId })
       ).pipe(
         Effect.catch((error) =>
           Effect.sync(() => {
-            notes.push(`delete failed: ${error.message}`);
+            notes.push(`clear failed: ${error.message}`);
           })
         )
       );

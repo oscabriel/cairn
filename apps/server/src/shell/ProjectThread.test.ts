@@ -182,14 +182,20 @@ describe("the project thread", () => {
   );
 
   it.effect(
-    "a refresh with no thread named replaces the current one; a resend changes nothing",
+    "a refresh resent changes nothing: the second commit answers with the first",
     () =>
       withProject((projectId) =>
         Effect.gen(function* () {
           yield* commit(projectThread(projectId, 1));
 
-          const first = yield* commit(projectThread(projectId, 2));
-          const again = yield* commit(projectThread(projectId, 2));
+          const refresh = projectThread(
+            projectId,
+            2,
+            Option.some(testThreadId(1))
+          );
+
+          const first = yield* commit(refresh);
+          const again = yield* commit(refresh);
 
           assert.strictEqual(again.sequence, first.sequence);
           assert.strictEqual(
@@ -203,6 +209,40 @@ describe("the project thread", () => {
           assert.deepStrictEqual(yield* liveTopLevel(projectId), [
             testThreadId(2),
           ]);
+        })
+      )
+  );
+
+  it.effect(
+    "a new top-level thread that names nothing to replace is refused while a project thread is live (ADR 0048)",
+    () =>
+      withProject((projectId) =>
+        Effect.gen(function* () {
+          yield* commit(projectThread(projectId, 1));
+
+          const before = yield* (yield* EventStore).latestSequence;
+
+          const refused = yield* refusal(projectThread(projectId, 2));
+
+          assert.strictEqual(refused._tag, "ShellCommandInvalid");
+          assert.deepStrictEqual(
+            Predicate.isTagged(refused, "ShellCommandInvalid")
+              ? refused.field
+              : Option.none(),
+            Option.some("replaces")
+          );
+          assert.include(refused.message, "already has a project thread");
+          assert.strictEqual(yield* (yield* EventStore).latestSequence, before);
+          assert.isTrue(
+            Option.isNone(yield* (yield* ThreadRows).get(testThreadId(2)))
+          );
+          assert.isTrue(
+            Option.isNone((yield* rowOf(testThreadId(1))).shell.archivedAt)
+          );
+          assert.deepStrictEqual(
+            yield* markOf(projectId),
+            Option.some(testThreadId(1))
+          );
         })
       )
   );
@@ -397,8 +437,10 @@ describe("the project thread", () => {
             ]
           );
 
-          // So the next launch refreshes it instead of making a second one.
-          yield* commit(projectThread(projectId, 2));
+          // So the next launch refreshes it (naming it) instead of making a second one.
+          yield* commit(
+            projectThread(projectId, 2, Option.some(testThreadId(1)))
+          );
           assert.deepStrictEqual(yield* liveTopLevel(projectId), [
             testThreadId(2),
           ]);

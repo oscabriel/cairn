@@ -2,7 +2,8 @@
 // file search, branches, the scratch project), the thread controls that are not turn input (stop,
 // withdraw, configure), and the two that turn a draft into a turn: each mints the ids the brain
 // dedupes on, so a resend after a reconnect lands once. Turn input itself goes through the root's
-// outbox, never straight to the socket.
+// outbox, never straight to the socket. A draft in a project with a live project thread is not
+// launched: it opens that thread (ADR 0048).
 
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
@@ -14,7 +15,7 @@ import { SendInput, TurnInput, WhenBusy } from "@cairn/protocol/Thread";
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
-import { replaceUrl } from "foldkit/navigation";
+import { pushUrl, replaceUrl } from "foldkit/navigation";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { failureMessageOrTag } from "../connection/Failure.ts";
@@ -130,6 +131,19 @@ export const MoveHeroToDraftUrl = Command.define("MoveHeroToDraftUrl", {
         replaceUrl(`${draftRouter({ draftId })}${suffix}`)
       ),
       Effect.as(Message.MovedHeroToDraftUrl())
+    ),
+});
+
+/**
+ * Opens the project thread a draft's send went to instead of launching (ADR 0048), as a launch
+ * opens its new thread: the draft's words and attachments are already in its composer, unsent.
+ */
+export const OpenProjectThread = Command.define("OpenProjectThread", {
+  args: { threadId: ThreadId },
+  messages: [Message.CompletedRequest],
+  execute: ({ threadId }) =>
+    pushUrl(threadRouter({ threadId })).pipe(
+      Effect.as(Message.CompletedRequest())
     ),
 });
 

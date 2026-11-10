@@ -10,22 +10,30 @@
 // The rail's + bubble opens the add-project picker: a folder already a project selects it, any
 // other is made a project and selected once the shell shows it. A project the draft hero's picker
 // chooses is selected on the rail, and a thread a draft launched is followed once its row arrives.
+// The "Previous" fold reads the selected project's earlier project threads whenever the project
+// or its project thread changes, and opens one read only (ADR 0048). The project and thread menus
+// open rename and remove dialogs whose commands go straight to the brain; removing the project
+// the open thread is in goes back to the hero.
 
 import { LINEAGE_PAGE } from "@cairn/client-logic/ThreadLineage";
 import { threadStatus } from "@cairn/client-logic/ThreadState";
+import { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
-import { Array, Equal, Option, Predicate, Record } from "effect";
+import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { settingsRouter, threadRouter } from "../../Route.ts";
+import { heroRouter, settingsRouter, threadRouter } from "../../Route.ts";
 import { ADD_PROJECT_ID } from "./AddProject.ts";
 import {
   BrowseFolders,
   CreateProject,
+  DispatchManage,
+  FetchPreviousThreads,
   FocusField,
   LoadScratch,
+  LookUpEarlierThread,
   PrepareProjectDraft,
   PrepareRefresh,
   PrepareScratchClear,
@@ -39,7 +47,9 @@ import {
 import type { Services } from "./Command.ts";
 import {
   folderOf,
+  openEarlierThreadOf,
   openThreadOf,
+  previousKeyOf,
   projectAtFolder,
   projectThreadFor,
   railProjectsOf,
@@ -47,12 +57,22 @@ import {
   threadRoleOf,
   threadsOf,
 } from "./Derived.ts";
+import { MANAGE_TEXT_ID } from "./Manage.ts";
 import { Message, OutMessage } from "./Message.ts";
-import { FIRST_CHILD_ROWS, FolderListing, stopKeyOf } from "./Model.ts";
+import {
+  FIRST_CHILD_ROWS,
+  FolderListing,
+  initialPrevious,
+  ManageAction,
+  MenuTarget,
+  stopKeyOf,
+} from "./Model.ts";
 import type {
   AddProjectState,
   GoalPanelState,
+  ManageState,
   Model,
+  PreviousState,
   ShellContext,
   WorkState,
 } from "./Model.ts";
@@ -70,6 +90,8 @@ type UpdateReturn = Update.ReturnWithOutMessage<
 >;
 
 type InformReturn = Update.Return<Model, Message, Services>;
+
+const isThreadId = Schema.is(ThreadId);
 
 const routedThreadId = (context: ShellContext): Option.Option<string> =>
   Predicate.isTagged(context.route, "Thread")
@@ -151,10 +173,67 @@ const followRoute = (model: Model, context: ShellContext): Model => {
 
   return modifyFields(next, {
     isSheetOpen: (open) => (turned ? false : open),
+    menu: (menu) => (turned ? Option.none() : menu),
     selectedProjectId: (selected) =>
       moved || arrived ? Option.orElse(followed, () => selected) : selected,
   });
 };
+
+/** The fold reading its first page again for `projectId` under `key`, keeping `isOpen`. */
+const readPrevious = (
+  model: Model,
+  key: string,
+  projectId: ProjectId,
+  isOpen: boolean
+): InformReturn => {
+  const { previous } = model;
+  const request = previous.request + 1;
+  const sameProject = Option.contains(previous.projectId, projectId);
+
+  return {
+    model: modifyFields(model, {
+      previous: () =>
+        modifyFields(previous, {
+          key: () => Option.some(key),
+          projectId: () => Option.some(projectId),
+          isOpen: () => sameProject && isOpen,
+          rows: (rows) => (sameProject ? rows : Option.none()),
+          isLoading: () => true,
+          request: () => request,
+          failure: () => Option.none(),
+        }),
+    }),
+    commands: [
+      FetchPreviousThreads({ request, projectId, after: Option.none() }),
+    ],
+  };
+};
+
+/**
+ * Reads the selected project's earlier project threads when the project or its project thread
+ * changed since the fold last read them (a refresh moves the mark), or when the connection came
+ * back with nothing read yet or after a read that failed. Rows read for the same project stay
+ * shown while the new page loads.
+ */
+const syncPrevious = (model: Model, before: ShellContext): InformReturn =>
+  Option.match(previousKeyOf(model), {
+    onNone: () => ({ model }),
+    onSome: ({ key, projectId }) => {
+      const { previous } = model;
+      const changed = !Option.contains(previous.key, key);
+
+      const reconnected =
+        !before.hasClient &&
+        (Option.isNone(previous.rows) || Option.isSome(previous.failure)) &&
+        !previous.isLoading;
+
+      if (!model.context.hasClient || (!changed && !reconnected)) {
+        return { model };
+      }
+
+      return readPrevious(model, key, projectId, previous.isOpen);
+    },
+  });
 
 /** Once the shell shows the folder just added, the rail selects its project as a click would. */
 const findAwaitedProject = (model: Model): InformReturn =>
@@ -213,14 +292,57 @@ const forgetClearedScratch = (
 };
 
 /**
- * The context told: the rail follows the route, finds a folder just added, and lets go of a scratch
- * thread cleared elsewhere.
+ * Asks the brain about the routed thread when the live shell does not hold it and neither the fold
+ * nor an earlier answer says it is an earlier project thread: a page reloaded or linked on one, from
+ * any project. Asked once per thread, and again when the connection comes back. A launch the shell
+ * has not shown yet is asked about too; the brain answers that it is not one.
  */
-const informContext = (model: Model, context: ShellContext): InformReturn =>
-  forgetClearedScratch(
+const syncEarlier = (model: Model, before: ShellContext): InformReturn => {
+  const { context, previous } = model;
+
+  const unknown = Option.filter(
+    Option.filter(routedThreadId(context), isThreadId),
+    (threadId) =>
+      context.hasClient &&
+      Option.isSome(context.shell) &&
+      !holdsRow(context, threadId) &&
+      Option.isNone(openEarlierThreadOf(model)) &&
+      (!Option.contains(previous.askedAbout, threadId) || !before.hasClient)
+  );
+
+  return Option.match(unknown, {
+    onNone: () => ({ model }),
+    onSome: (threadId) => ({
+      model: modifyFields(model, {
+        previous: (fold) =>
+          modifyFields(fold, { askedAbout: () => Option.some(threadId) }),
+      }),
+      commands: [LookUpEarlierThread({ threadId })],
+    }),
+  });
+};
+
+/**
+ * The context told: the rail follows the route, finds a folder just added, lets go of a scratch
+ * thread cleared elsewhere, reads the "Previous" fold and asks about a routed thread it cannot place.
+ */
+const informContext = (model: Model, context: ShellContext): InformReturn => {
+  const told = forgetClearedScratch(
     model.context,
     findAwaitedProject(followRoute(model, context))
   );
+
+  const read = syncPrevious(told.model, model.context);
+  const asked = syncEarlier(read.model, model.context);
+
+  return {
+    model: asked.model,
+    commands: Array.appendAll(
+      Array.appendAll(told.commands ?? [], read.commands ?? []),
+      asked.commands ?? []
+    ),
+  };
+};
 
 /**
  * Takes what the root knows. When the route opens another thread, the rail follows it to its
@@ -563,6 +685,177 @@ export const restoreScratchTurn =
     commands: launched ? [SaveScratch({ threadId: Option.none() })] : [],
   });
 
+/** Which menu `target` is, so a second click on its button closes it. */
+const menuKeyOf = (target: MenuTarget): string =>
+  MenuTarget.match(target, {
+    Project: ({ projectId }) => `project:${projectId}`,
+    Thread: ({ threadId }) => `thread:${threadId}`,
+  });
+
+/** The "Previous" fold with `change` applied. */
+const setPrevious = (
+  model: Model,
+  change: (previous: PreviousState) => PreviousState
+): UpdateReturn => ({
+  model: modifyFields(model, { previous: change }),
+});
+
+/**
+ * The fold's header: shows or hides the rows. Opening a fold whose last read failed reads it
+ * again, as its failure line says.
+ */
+const openPrevious = (model: Model): UpdateReturn => {
+  const { previous } = model;
+
+  const retry =
+    !previous.isOpen &&
+    Option.isSome(previous.failure) &&
+    !previous.isLoading &&
+    model.context.hasClient;
+
+  return Option.match(
+    Option.filter(
+      Option.all({ key: previous.key, projectId: previous.projectId }),
+      () => retry
+    ),
+    {
+      onNone: () =>
+        setPrevious(model, (current) =>
+          modifyFields(current, { isOpen: (open) => !open })
+        ),
+      onSome: ({ key, projectId }) => readPrevious(model, key, projectId, true),
+    }
+  );
+};
+
+/** Reads the fold's next page, after the rows it shows. */
+const morePrevious = (model: Model): UpdateReturn => {
+  const { previous } = model;
+
+  const after = Option.flatMap(previous.rows, (rows) => rows.next);
+
+  if (previous.isLoading || Option.isNone(after)) {
+    return { model };
+  }
+
+  return Option.match(previous.projectId, {
+    onNone: () => ({ model }),
+    onSome: (projectId) => {
+      const request = previous.request + 1;
+
+      return {
+        model: modifyFields(model, {
+          previous: (current) =>
+            modifyFields(current, {
+              isLoading: () => true,
+              request: () => request,
+              failure: () => Option.none(),
+            }),
+        }),
+        commands: [FetchPreviousThreads({ request, projectId, after })],
+      };
+    },
+  });
+};
+
+/** The name a rename starts from: the project's or the thread's as the shell holds it. */
+const currentNameOf = (model: Model, action: ManageAction): string =>
+  ManageAction.match(action, {
+    RenameProject: ({ projectId }) =>
+      Option.getOrElse(
+        Option.map(
+          Array.findFirst(
+            railProjectsOf(model),
+            (project) => project.id === projectId
+          ),
+          (project) => project.title
+        ),
+        () => ""
+      ),
+    RemoveProject: () => "",
+    RenameThread: ({ threadId }) =>
+      Option.getOrElse(
+        Option.map(
+          Array.findFirst(threadsOf(model), (thread) => thread.id === threadId),
+          (thread) => thread.title
+        ),
+        () => ""
+      ),
+  });
+
+/** The open dialog with `change` applied. */
+const setManage = (
+  model: Model,
+  change: (manage: ManageState) => ManageState
+): UpdateReturn => ({
+  model: modifyFields(model, {
+    manage: (open) => Option.map(open, change),
+  }),
+});
+
+/** Sends the open dialog's rename or remove; an empty name is refused here. */
+const confirmManage = (model: Model): UpdateReturn =>
+  Option.match(
+    Option.filter(model.manage, (manage) => !manage.isSending),
+    {
+      onNone: () => ({ model }),
+      onSome: (manage) => {
+        const text = manage.text.trim();
+        const isRemove = Predicate.isTagged(manage.action, "RemoveProject");
+
+        if (!isRemove && text === "") {
+          return setManage(model, (current) => ({
+            ...current,
+            failure: Option.some("A name cannot be empty."),
+          }));
+        }
+
+        return {
+          model: modifyFields(model, {
+            manage: () =>
+              Option.some({
+                ...manage,
+                isSending: true,
+                failure: Option.none(),
+              }),
+          }),
+          commands: [DispatchManage({ action: manage.action, text })],
+        };
+      },
+    }
+  );
+
+/** Whether the route shows a page of `projectId`: one of its threads, live or earlier. */
+const showsProject = (model: Model, projectId: ProjectId): boolean =>
+  Option.exists(
+    Option.orElse(openThreadOf(model), () => openEarlierThreadOf(model)),
+    (thread) => thread.projectId === projectId
+  );
+
+/** The brain took the change; a removed project's page goes back to the hero. */
+const completeManage = (model: Model, action: ManageAction): UpdateReturn => {
+  const closed = modifyFields(model, { manage: () => Option.none() });
+
+  return ManageAction.match(action, {
+    RenameProject: () => ({ model: closed }),
+    RenameThread: () => ({ model: closed }),
+    RemoveProject: ({ projectId }) => {
+      const left = modifyFields(closed, {
+        selectedProjectId: (selected) =>
+          Option.filter(selected, (id) => id !== projectId),
+        previous: (previous) =>
+          Option.contains(previous.projectId, projectId)
+            ? initialPrevious
+            : previous,
+      });
+
+      return showsProject(model, projectId)
+        ? navigate(left, heroRouter())
+        : { model: left };
+    },
+  });
+};
+
 const closeAddProject = (model: Model): UpdateReturn => ({
   model: modifyFields(model, { addProject: () => Option.none() }),
 });
@@ -704,6 +997,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     PressedScratchShortcut: () => setScratchOpen(model, !model.scratch.isOpen),
     PressedEscape: () => {
+      if (Option.isSome(model.manage)) {
+        return { model: modifyFields(model, { manage: () => Option.none() }) };
+      }
+
+      if (Option.isSome(model.menu)) {
+        return { model: modifyFields(model, { menu: () => Option.none() }) };
+      }
+
       if (Option.isSome(model.addProject)) {
         return closeAddProject(model);
       }
@@ -892,6 +1193,112 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       setWork(model, (work) =>
         modifyFields(work, { failure: () => Option.none() })
       ),
+
+    ClickedPreviousThreads: () => openPrevious(model),
+    ClickedMorePreviousThreads: () => morePrevious(model),
+    ReceivedPreviousThreads: ({ more, page, request }) =>
+      request === model.previous.request
+        ? setPrevious(model, (previous) =>
+            modifyFields(previous, {
+              isLoading: () => false,
+              failure: () => Option.none(),
+              rows: (rows) =>
+                Option.some({
+                  threads: more
+                    ? [
+                        ...Option.match(rows, {
+                          onNone: () => [],
+                          onSome: (shown) => shown.threads,
+                        }),
+                        ...page.threads,
+                      ]
+                    : page.threads,
+                  next: page.next,
+                }),
+            })
+          )
+        : { model },
+    FailedPreviousThreads: ({ message: text, request }) =>
+      request === model.previous.request
+        ? setPrevious(model, (previous) =>
+            modifyFields(previous, {
+              isLoading: () => false,
+              failure: () => Option.some(text),
+            })
+          )
+        : { model },
+    ClickedPreviousThread: ({ thread }) =>
+      navigate(
+        modifyFields(model, {
+          previous: (previous) =>
+            modifyFields(previous, { opened: () => Option.some(thread) }),
+        }),
+        threadRouter({ threadId: thread.id })
+      ),
+    // Its project becomes the selected one, so the fold reads that project's rows.
+    LookedUpEarlierThread: ({ thread, threadId }) =>
+      Option.isSome(thread) && thread.value.id === threadId
+        ? syncPrevious(
+            modifyFields(model, {
+              previous: (previous) =>
+                modifyFields(previous, { opened: () => thread }),
+            }),
+            model.context
+          )
+        : { model },
+    ClickedOpenProjectThread: ({ projectId }) => openProject(model, projectId),
+
+    ClickedMenu: ({ target }) => ({
+      model: modifyFields(model, {
+        menu: (open) =>
+          Option.exists(
+            open,
+            (current) => menuKeyOf(current) === menuKeyOf(target)
+          )
+            ? Option.none()
+            : Option.some(target),
+      }),
+    }),
+    ClickedCloseMenu: () => ({
+      model: modifyFields(model, { menu: () => Option.none() }),
+    }),
+    ClickedManage: ({ action }) => ({
+      model: modifyFields(model, {
+        menu: () => Option.none(),
+        isSheetOpen: () => false,
+        manage: () =>
+          Option.some({
+            action,
+            text: currentNameOf(model, action),
+            isSending: false,
+            failure: Option.none(),
+          }),
+      }),
+      commands: [
+        FocusField({
+          selector: Predicate.isTagged(action, "RemoveProject")
+            ? `#${MANAGE_TEXT_ID}-cancel`
+            : `#${MANAGE_TEXT_ID}`,
+        }),
+      ],
+    }),
+    ChangedManageText: ({ value }) =>
+      setManage(model, (manage) => ({
+        ...manage,
+        text: value,
+        failure: Option.none(),
+      })),
+    ClickedConfirmManage: () => confirmManage(model),
+    ClickedCancelManage: () => ({
+      model: modifyFields(model, { manage: () => Option.none() }),
+    }),
+    CompletedManage: ({ action }) => completeManage(model, action),
+    FailedManage: ({ message: text }) =>
+      setManage(model, (manage) => ({
+        ...manage,
+        isSending: false,
+        failure: Option.some(text),
+      })),
 
     ClickedGoal: () => ({
       model: modifyFields(model, {

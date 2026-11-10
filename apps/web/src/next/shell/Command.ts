@@ -6,13 +6,24 @@
 // and the moved mark land in one shell commit. The scratch thread's first message launches it in
 // the scratch project (made here first, as the composer's projectless launch does); later ones are
 // sends. The add-project picker lists folders on the Beelink (`projects.browse`) and adds one with
-// `shell.dispatch` (`ProjectCreate`), so a refused folder answers in the picker itself.
+// `shell.dispatch` (`ProjectCreate`), so a refused folder answers in the picker itself. The
+// "Previous" fold reads a project's earlier project threads a page at a time
+// (`shell.previousThreads`, ADR 0048), a page opened directly on a thread the shell does not hold
+// asks whether it is one (`shell.earlierThread`), and the menus' renames and removes go straight to
+// `shell.dispatch` too, so a refusal answers in the dialog that asked.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { RootWorkspace, ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { RuntimeMode } from "@cairn/protocol/Policy";
-import { ProjectCreate, ThreadClear } from "@cairn/protocol/ShellCommands";
+import { PreviousThreadsCursor } from "@cairn/protocol/Shell";
+import {
+  ProjectCreate,
+  ProjectDelete,
+  ProjectUpdate,
+  ThreadClear,
+  ThreadRename,
+} from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
 import { Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
@@ -32,6 +43,7 @@ import {
 } from "../../connection/Failure.ts";
 import { OutboxItem } from "../../connection/Outbox.ts";
 import { Message } from "./Message.ts";
+import { ManageAction, PREVIOUS_PAGE } from "./Model.ts";
 
 export type { Services } from "../../Command.ts";
 
@@ -403,6 +415,118 @@ export const MarkCriterion = Command.define("MarkCriterion", {
               cutOff:
                 "The connection dropped before Cairn answered. Mark it again once it is back.",
               fallback: "The mark did not reach Cairn.",
+            }),
+          }),
+      })
+    ),
+});
+
+/** Reads one page of a project's earlier project threads for the "Previous" fold (ADR 0048). */
+export const FetchPreviousThreads = Command.define("FetchPreviousThreads", {
+  args: {
+    request: Schema.Int,
+    projectId: ProjectId,
+    after: Schema.Option(PreviousThreadsCursor),
+  },
+  messages: [Message.ReceivedPreviousThreads, Message.FailedPreviousThreads],
+  execute: ({ after, projectId, request }) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        client["shell.previousThreads"]({
+          projectId,
+          after,
+          limit: PREVIOUS_PAGE,
+        })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: (page) =>
+          Message.ReceivedPreviousThreads({
+            request,
+            page,
+            more: Option.isSome(after),
+          }),
+        onFailure: (failure) =>
+          Message.FailedPreviousThreads({
+            request,
+            message: callFailureText(failure, {
+              reconnecting:
+                "Cairn is reconnecting. Open it again once it is back.",
+              cutOff:
+                "The connection dropped before Cairn answered. Open it again once it is back.",
+              fallback: "The earlier project threads could not be read.",
+            }),
+          }),
+      })
+    ),
+});
+
+/**
+ * Asks the brain whether a thread a page was opened on directly (a reload, a link, Back) is an
+ * earlier project thread (`shell.earlierThread`, ADR 0048). Any failure, its `NotFound` for a
+ * thread that is not one included, answers none: the page then stays as it was.
+ */
+export const LookUpEarlierThread = Command.define("LookUpEarlierThread", {
+  args: { threadId: ThreadId },
+  messages: [Message.LookedUpEarlierThread],
+  execute: ({ threadId }) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        client["shell.earlierThread"]({ threadId })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: (thread) =>
+          Message.LookedUpEarlierThread({
+            threadId,
+            thread: Option.some(thread),
+          }),
+        onFailure: () =>
+          Message.LookedUpEarlierThread({ threadId, thread: Option.none() }),
+      })
+    ),
+});
+
+/**
+ * Sends a menu's rename or remove (`ProjectUpdate`, `ProjectDelete`, `ThreadRename`) straight to the
+ * brain, so the dialog that asked shows a refusal. Removing a project stops its threads' runs and
+ * takes them out of Cairn; its folder and their transcripts stay.
+ */
+export const DispatchManage = Command.define("DispatchManage", {
+  args: { action: ManageAction, text: Schema.String },
+  messages: [Message.CompletedManage, Message.FailedManage],
+  execute: ({ action, text }) =>
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
+        const commandId = yield* mintCommandId;
+
+        return yield* client["shell.dispatch"](
+          ManageAction.match(action, {
+            RenameProject: ({ projectId }) =>
+              ProjectUpdate.make({
+                commandId,
+                projectId,
+                title: Option.some(text),
+                defaultModel: Option.none(),
+              }),
+            RemoveProject: ({ projectId }) =>
+              ProjectDelete.make({ commandId, projectId }),
+            RenameThread: ({ threadId }) =>
+              ThreadRename.make({ commandId, threadId, title: text }),
+          })
+        );
+      })
+    ).pipe(
+      Effect.match({
+        onSuccess: () => Message.CompletedManage({ action }),
+        onFailure: (failure) =>
+          Message.FailedManage({
+            message: callFailureText(failure, {
+              reconnecting: "Cairn is reconnecting. Try again once it is back.",
+              cutOff:
+                "The connection dropped before Cairn answered. Try again once it is back.",
+              fallback: "Cairn did not take the change.",
             }),
           }),
       })

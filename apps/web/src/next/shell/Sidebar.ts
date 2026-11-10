@@ -3,7 +3,10 @@
 // threads it manages (subagents, brief children, workflow nodes), newest first, each with its
 // status mark from the one thread-state function. No Active, Settled, Pinned or Snoozed groups.
 // Every row opens its thread. The project thread's row counts its goal's criteria when it holds one
-// ("2/4 met", from the row's tally; plan 6H). The foot holds Usage and Settings, with no meters.
+// ("2/4 met", from the row's tally; plan 6H). Under them, "Previous (n)" folds the project's earlier
+// project threads, the ones a refresh replaced (ADR 0048), newest first; each opens read only. The
+// project's head carries its menu (rename, remove; U-10). The foot holds Usage and Settings, with no
+// meters.
 
 import {
   goalTallyShort,
@@ -25,10 +28,13 @@ import {
   WEIGHT_MEDIUM,
   WEIGHT_STRONG,
 } from "../ui/Classes.ts";
+import { disclosure } from "../ui/Disclosure.ts";
 import { glyph, statusGlyph } from "../ui/Glyph.ts";
 import { TONE_TEXT } from "../ui/Tone.ts";
 import type { RowStatus } from "./Derived.ts";
+import { manageItem, menuAnchor } from "./Manage.ts";
 import { Message } from "./Message.ts";
+import { ManageAction, MenuTarget } from "./Model.ts";
 
 /** A managed thread as its row shows it. */
 export interface ManagedRow {
@@ -47,11 +53,33 @@ export interface ProjectThreadRow {
   readonly isOpen: boolean;
 }
 
+/** An earlier project thread as its row in the "Previous" fold shows it. */
+export interface PreviousRow {
+  readonly thread: ThreadShell;
+  /** How long ago a refresh replaced it. */
+  readonly age: string;
+  readonly isOpen: boolean;
+}
+
+/** The "Previous" fold: the project's earlier project threads read so far. */
+export interface PreviousContent {
+  readonly isOpen: boolean;
+  readonly rows: ReadonlyArray<PreviousRow>;
+  /** Another page follows the rows shown. */
+  readonly hasMore: boolean;
+  readonly isLoading: boolean;
+  readonly failure: Option.Option<string>;
+}
+
 /** What the sidebar list shows for the selected project. */
 export interface SidebarContent {
   readonly project: Option.Option<ProjectShell>;
   readonly projectThread: Option.Option<ProjectThreadRow>;
   readonly managed: ReadonlyArray<ManagedRow>;
+  /** None until the project's earlier project threads are read, and while it has none. */
+  readonly previous: Option.Option<PreviousContent>;
+  /** The project's menu is open. */
+  readonly isProjectMenuOpen: boolean;
   /** The route is the usage page or the settings page: its foot button shows as current. */
   readonly current: "usage" | "settings" | "none";
 }
@@ -180,34 +208,173 @@ const managedView = (h: HtmlBuilder<Message>, managed: ManagedRow): Html =>
     ]
   );
 
-const head = (h: HtmlBuilder<Message>, project: ProjectShell): Html =>
+const head = (
+  h: HtmlBuilder<Message>,
+  project: ProjectShell,
+  isMenuOpen: boolean
+): Html =>
   h.div(
     [
       h.Class(
-        "flex h-14 shrink-0 flex-col justify-center border-b border-stroke-1 px-(--space-4)"
+        "flex h-14 shrink-0 items-center gap-(--space-2) border-b border-stroke-1 ps-(--space-4) pe-(--space-2)"
       ),
     ],
     [
-      h.h2(
+      h.div(
+        [h.Class("flex min-w-0 flex-1 flex-col justify-center")],
         [
-          h.DataAttribute("testid", "shell-project-title"),
-          h.Class(classNames("truncate text-ink-1", TYPE.body, WEIGHT_STRONG)),
-        ],
-        [project.title]
+          h.h2(
+            [
+              h.DataAttribute("testid", "shell-project-title"),
+              h.Class(
+                classNames("truncate text-ink-1", TYPE.body, WEIGHT_STRONG)
+              ),
+            ],
+            [project.title]
+          ),
+          h.span(
+            [
+              h.Class(
+                classNames(
+                  "truncate font-(family-name:--font-code) text-ink-3",
+                  TYPE.small
+                )
+              ),
+            ],
+            [project.workspaceRoot]
+          ),
+        ]
       ),
-      h.span(
-        [
-          h.Class(
-            classNames(
-              "truncate font-(family-name:--font-code) text-ink-3",
-              TYPE.small
-            )
+      menuAnchor(h, {
+        target: MenuTarget.Project({ projectId: project.id }),
+        label: `${project.title} project actions`,
+        testId: "shell-project-menu",
+        isOpen: isMenuOpen,
+        items: [
+          manageItem(
+            h,
+            "Rename project",
+            ManageAction.RenameProject({ projectId: project.id })
+          ),
+          manageItem(
+            h,
+            "Remove project",
+            ManageAction.RemoveProject({ projectId: project.id })
           ),
         ],
-        [project.workspaceRoot]
+      }),
+    ]
+  );
+
+const previousRowView = (h: HtmlBuilder<Message>, row: PreviousRow): Html =>
+  h.li(
+    [],
+    [
+      h.button(
+        [
+          h.Type("button"),
+          h.DataAttribute("testid", "shell-previous-thread"),
+          h.DataAttribute("thread-item", row.thread.id),
+          ...onlyIf(row.isOpen, h.AriaCurrent("page")),
+          h.OnClick(Message.ClickedPreviousThread({ thread: row.thread })),
+          h.Class(classNames(ROW, "items-center py-(--space-1-5)")),
+        ],
+        [
+          h.span(
+            [
+              h.Class(
+                classNames("min-w-0 flex-1 truncate", TYPE.ui, WEIGHT_MEDIUM)
+              ),
+            ],
+            [row.thread.title]
+          ),
+          h.span(
+            [
+              h.Class(
+                classNames("shrink-0 tabular-nums text-ink-3", TYPE.small)
+              ),
+            ],
+            [row.age]
+          ),
+        ]
       ),
     ]
   );
+
+/** "Previous (n)": the project's earlier project threads, folded; each opens read only. */
+const previousSection = (
+  h: HtmlBuilder<Message>,
+  previous: Option.Option<PreviousContent>,
+  idSuffix: string
+): Html =>
+  Option.match(previous, {
+    onNone: () => h.empty,
+    onSome: (content) =>
+      h.div(
+        [
+          h.DataAttribute("testid", "shell-previous"),
+          h.Class("px-(--space-1-5) pt-(--space-4)"),
+        ],
+        [
+          disclosure(
+            h,
+            {
+              id: `shell-previous${idSuffix}`,
+              isOpen: content.isOpen,
+              onToggle: () => Message.ClickedPreviousThreads(),
+              isDisabled: false,
+              attributes: [h.DataAttribute("testid", "shell-previous-toggle")],
+            },
+            {
+              glyph: Option.none(),
+              title: `Previous (${String(content.rows.length)}${content.hasMore ? "+" : ""})`,
+              tally: Option.none(),
+              body: [
+                h.ul(
+                  [
+                    h.DataAttribute("testid", "shell-previous-list"),
+                    h.AriaLabel("Earlier project threads"),
+                    h.Class("flex flex-col gap-(--space-0-5)"),
+                  ],
+                  content.rows.map((row) => previousRowView(h, row))
+                ),
+                content.hasMore
+                  ? button(
+                      h,
+                      {
+                        ...buttonDefaults<Message>(),
+                        variant: "ghost",
+                        size: "small",
+                        isBusy: content.isLoading,
+                        onClick: Option.some(
+                          Message.ClickedMorePreviousThreads()
+                        ),
+                        attributes: [
+                          h.DataAttribute("testid", "shell-previous-more"),
+                        ],
+                      },
+                      ["Show more"]
+                    )
+                  : h.empty,
+                Option.match(content.failure, {
+                  onNone: () => h.empty,
+                  onSome: (text) =>
+                    h.p(
+                      [
+                        h.Role("status"),
+                        h.Class(
+                          classNames("px-(--space-2) text-ink-2", TYPE.small)
+                        ),
+                      ],
+                      [text]
+                    ),
+                }),
+              ],
+            }
+          ),
+        ]
+      ),
+  });
 
 const noProjectThread = (
   h: HtmlBuilder<Message>,
@@ -338,10 +505,14 @@ export const foot = (
     ]
   );
 
-/** The selected project's list: its head, its project thread, the threads it manages, the foot. */
+/**
+ * The selected project's list: its head, its project thread, the threads it manages, the earlier
+ * ones, the foot. `idSuffix` keeps element ids unique while the phone's sheet draws a second copy.
+ */
 export const sidebarList = (
   h: HtmlBuilder<Message>,
-  content: SidebarContent
+  content: SidebarContent,
+  idSuffix = ""
 ): Html =>
   h.div(
     [
@@ -362,19 +533,22 @@ export const sidebarList = (
           ),
         ],
         onSome: (project) => [
-          head(h, project),
+          head(h, project, content.isProjectMenuOpen),
           h.div(
             [h.Class("min-h-0 flex-1 overflow-y-auto pb-(--space-3)")],
-            Option.match(content.projectThread, {
-              onNone: () => [noProjectThread(h, project.id)],
-              onSome: (top) => [
-                h.div(
-                  [h.Class("px-(--space-1-5) pt-(--space-2)")],
-                  [projectThreadView(h, top)]
-                ),
-                ...managedSection(h, content.managed),
-              ],
-            })
+            [
+              ...Option.match(content.projectThread, {
+                onNone: () => [noProjectThread(h, project.id)],
+                onSome: (top) => [
+                  h.div(
+                    [h.Class("px-(--space-1-5) pt-(--space-2)")],
+                    [projectThreadView(h, top)]
+                  ),
+                  ...managedSection(h, content.managed),
+                ],
+              }),
+              previousSection(h, content.previous, idSuffix),
+            ]
           ),
         ],
       }),

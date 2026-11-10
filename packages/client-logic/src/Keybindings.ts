@@ -105,6 +105,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   always("mod+b", "sidebar.toggle"),
   onlyWhen("mod+d", "diff.toggle", "!terminalFocus"),
   onlyWhen("mod+k", "commandPalette.toggle", "!terminalFocus"),
+  // In a project with a project thread, `chat.new` opens it rather than a draft (ADR 0048).
   onlyWhen("mod+n", "chat.new", "!terminalFocus"),
   onlyWhen("mod+shift+o", "chat.new", "!terminalFocus"),
   onlyWhen("mod+shift+n", "chat.newLocal", "!terminalFocus"),

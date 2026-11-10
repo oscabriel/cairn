@@ -1,15 +1,17 @@
 // The `next` shell's Messages, and the OutMessages it hands the root: an item for the outbox (a
 // refresh's launch, a scratch turn or clear), a path to open, and a new draft in a chosen project.
 // The work panel's Messages are the shell's too: it is drawn beside the chat column, as the goal
-// panel's are. The add-project picker's are the shell's too.
+// panel's are. The add-project picker's are the shell's too, and so are the "Previous" fold's,
+// the project and thread menus' and their rename and remove dialogs'.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { BrowseResult } from "@cairn/protocol/Projects";
+import { PreviousThreadsPage, ThreadShell } from "@cairn/protocol/Shell";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
 import { OutboxItem } from "../../connection/Outbox.ts";
-import { ChildGroup } from "./Model.ts";
+import { ChildGroup, ManageAction, MenuTarget } from "./Model.ts";
 
 /** Everything the shell reacts to. */
 export const Message = defineMessageUnion({
@@ -97,6 +99,44 @@ export const Message = defineMessageUnion({
   StoppedWorkflow: { key: Schema.String },
   FailedStopWorkflow: { key: Schema.String, message: Schema.String },
   ClickedDismissWorkFailure: {},
+
+  /** The "Previous" fold's header: show the project's earlier project threads, or hide them. */
+  ClickedPreviousThreads: {},
+  /** Show more: the next page of earlier project threads. */
+  ClickedMorePreviousThreads: {},
+  /** A page arrived; `more` when it follows the rows already shown. */
+  ReceivedPreviousThreads: {
+    request: Schema.Int,
+    page: PreviousThreadsPage,
+    more: Schema.Boolean,
+  },
+  FailedPreviousThreads: { request: Schema.Int, message: Schema.String },
+  /** An earlier project thread's row: open it, read only. */
+  ClickedPreviousThread: { thread: ThreadShell },
+  /**
+   * The brain's answer about a thread a page was opened on directly: the earlier project thread it
+   * is, or none (not one, or the brain could not be asked).
+   */
+  LookedUpEarlierThread: {
+    threadId: ThreadId,
+    thread: Schema.Option(ThreadShell),
+  },
+  /** The read-only bar of an earlier project thread: open its project's project thread. */
+  ClickedOpenProjectThread: { projectId: ProjectId },
+
+  /** A menu's button: open that menu, or close it when it is open. */
+  ClickedMenu: { target: MenuTarget },
+  /** A click outside the open menu. */
+  ClickedCloseMenu: {},
+  /** A menu item: open its rename or remove dialog. */
+  ClickedManage: { action: ManageAction },
+  ChangedManageText: { value: Schema.String },
+  /** Save or Remove, or Enter in the name field. */
+  ClickedConfirmManage: {},
+  ClickedCancelManage: {},
+  /** The brain took the rename or the remove. */
+  CompletedManage: { action: ManageAction },
+  FailedManage: { message: Schema.String },
 
   /** The header's goal chip: show the goal panel, or hide it. */
   ClickedGoal: {},

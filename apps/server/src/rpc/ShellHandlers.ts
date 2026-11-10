@@ -1,5 +1,6 @@
-// `shell.subscribe` and `shell.dispatch`: thin calls into the shell store that translate its
-// failures into the protocol's public errors, carrying the RPC request id. A `ProjectCreate` first
+// `shell.subscribe`, `shell.dispatch`, `shell.previousThreads` and `shell.earlierThread`: thin calls
+// into the shell store that translate its failures into the protocol's public errors, carrying the
+// RPC request id. A `ProjectCreate` first
 // passes `FolderRules` (the deny list, dot folders, links escaping the home) and is committed with
 // the folder's real path. Deleting or archiving a thread, or deleting a project, first stops the
 // runs it removes (queue cleared, stop hooks run), so a hung thread that is deleted frees its
@@ -271,10 +272,115 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
 );
 
 /**
- * Both shell handlers. Needs `ShellStream`, `EventSink`, `CommandReceipts`, `FolderRules`, `ThreadRows`, `Projects`,
- * `ScratchProject` and `Threads`.
+ * A project's earlier project threads, a page at a time (ADR 0048): its archived top-level rows,
+ * newest archive first. A project that is gone or deleted is `NotFound`.
+ */
+export const ShellPreviousThreadsHandler = CairnRpcs.toLayerHandler(
+  "shell.previousThreads",
+  Effect.gen(function* () {
+    const rows = yield* ThreadRows;
+    const projects = yield* Projects;
+
+    return (input, { requestId }) =>
+      Effect.gen(function* () {
+        const project = yield* projects.get(input.projectId);
+
+        if (Option.isNone(project) || Option.isSome(project.value.deletedAt)) {
+          return yield* new NotFound({
+            message: `Project ${input.projectId} does not exist. Pick another project.`,
+            resource: "project",
+            id: input.projectId,
+            requestId: Option.some(String(requestId)),
+          });
+        }
+
+        // One row past the page says whether another page follows.
+        const found = yield* rows.listPrevious(
+          input.projectId,
+          input.after,
+          input.limit + 1
+        );
+
+        const threads = found.slice(0, input.limit).map((row) => row.shell);
+        const last = threads.at(-1);
+
+        return {
+          threads,
+          next:
+            found.length > input.limit && last !== undefined
+              ? Option.flatMap(last.archivedAt, (archivedAt) =>
+                  Option.some({ archivedAt, threadId: last.id })
+                )
+              : Option.none(),
+        };
+      }).pipe(
+        Effect.catchTag("ShellStoreError", (failure) =>
+          Effect.fail(unavailable(String(requestId))(failure))
+        )
+      );
+  })
+);
+
+/**
+ * One earlier project thread by its id (ADR 0048), for a page opened on it directly: an archived
+ * top-level row, not deleted, of a folder project that is not deleted. Any other thread, live ones
+ * included, is `NotFound`, so a client asking about a thread it has not seen yet learns nothing
+ * wrong.
+ */
+export const ShellEarlierThreadHandler = CairnRpcs.toLayerHandler(
+  "shell.earlierThread",
+  Effect.gen(function* () {
+    const rows = yield* ThreadRows;
+    const projects = yield* Projects;
+
+    return (input, { requestId }) =>
+      Effect.gen(function* () {
+        const row = yield* rows.get(input.threadId);
+
+        const project = yield* Option.match(row, {
+          onNone: () => Effect.succeedNone,
+          onSome: (found) => projects.get(found.shell.projectId),
+        });
+
+        const isEarlier =
+          Option.exists(
+            row,
+            (found) =>
+              Option.isNone(found.deletedAt) &&
+              Option.isSome(found.shell.archivedAt) &&
+              Option.isNone(found.shell.lineage)
+          ) &&
+          Option.exists(
+            project,
+            (found) =>
+              Option.isNone(found.deletedAt) && found.shell.kind === "folder"
+          );
+
+        if (!isEarlier || Option.isNone(row)) {
+          return yield* new NotFound({
+            message: `Thread ${input.threadId} is not an earlier project thread.`,
+            resource: "thread",
+            id: input.threadId,
+            requestId: Option.some(String(requestId)),
+          });
+        }
+
+        return row.value.shell;
+      }).pipe(
+        Effect.catchTag("ShellStoreError", (failure) =>
+          Effect.fail(unavailable(String(requestId))(failure))
+        )
+      );
+  })
+);
+
+/**
+ * The shell handlers. Needs `ShellStream`, `EventSink`, `CommandReceipts`, `FolderRules`,
+ * `ThreadRows`, `Projects`, `ScratchProject` and `Threads`.
  */
 export const ShellHandlers = Layer.mergeAll(
   ShellSubscribeHandler,
-  ShellDispatchHandler
+  ShellDispatchHandler,
+  ShellPreviousThreadsHandler,
+  ShellEarlierThreadHandler
 );

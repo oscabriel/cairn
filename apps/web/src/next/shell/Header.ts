@@ -2,12 +2,14 @@
 // project's name for its project thread), a quiet word for what the thread is (project thread,
 // managed by the project thread, scratch), its status as mark and word from the one thread-state
 // function, then the thread page's own controls (the diff toggle), then the shell's actions: Refresh
-// on the project thread, and the scratch thread's button. It keeps the `data-chat-header` hook the
-// judges read.
+// on the project thread, the open thread's menu (Rename thread; U-10), and the scratch thread's
+// button. An earlier project thread (ADR 0048) reads "earlier project thread" and offers neither
+// Refresh nor the menu. It keeps the `data-chat-header` hook the judges read.
 //
 // The band is drawn by its caller around three parts: the lead and the actions here (the shell's
 // Messages) and the page's controls between them, which keep their own Messages.
 
+import type { ThreadId } from "@cairn/protocol/Ids";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { Menu, MessageSquareDashed, RotateCw } from "lucide";
@@ -19,7 +21,9 @@ import { glyph, statusGlyph } from "../ui/Glyph.ts";
 import { iconButton } from "../ui/IconButton.ts";
 import { TONE_TEXT } from "../ui/Tone.ts";
 import type { RowStatus } from "./Derived.ts";
+import { manageItem, menuAnchor } from "./Manage.ts";
 import { Message } from "./Message.ts";
+import { ManageAction, MenuTarget } from "./Model.ts";
 
 /** What the header says about the open page. */
 export interface HeaderContent {
@@ -29,6 +33,11 @@ export interface HeaderContent {
   readonly status: Option.Option<RowStatus>;
   /** The open thread is its project's project thread, so Refresh is offered. */
   readonly canRefresh: boolean;
+  /** The open thread's menu, for a thread the shell holds: its id and whether it is open. */
+  readonly menu: Option.Option<{
+    readonly threadId: ThreadId;
+    readonly isOpen: boolean;
+  }>;
   /** The scratch shortcut's hint: Cmd on an Apple platform, Ctrl elsewhere. */
   readonly scratchHint: string;
 }
@@ -128,7 +137,7 @@ export const headerLead = (
     ]
   );
 
-/** The header's actions: Refresh on the project thread, and the scratch thread's button. */
+/** The header's actions: Refresh on the project thread, the thread's menu, and the scratch button. */
 export const headerActions = (
   h: HtmlBuilder<Message>,
   content: HeaderContent
@@ -149,6 +158,23 @@ export const headerActions = (
             glyph(h, RotateCw, "rotate-cw", "regular")
           )
         : h.empty,
+      Option.match(content.menu, {
+        onNone: () => h.empty,
+        onSome: ({ isOpen, threadId }) =>
+          menuAnchor(h, {
+            target: MenuTarget.Thread({ threadId }),
+            label: "Thread actions",
+            testId: "thread-menu",
+            isOpen,
+            items: [
+              manageItem(
+                h,
+                "Rename thread",
+                ManageAction.RenameThread({ threadId })
+              ),
+            ],
+          }),
+      }),
       iconButton(
         h,
         {

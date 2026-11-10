@@ -1,5 +1,6 @@
 // `shell.dispatch` stops the runs a delete or an archive removes before it commits (T4 of the full
-// review): a hung thread that is deleted must free its run, its queue and its Claude Code child.
+// review): a hung thread that is deleted must free its run, its queue and its Claude Code child,
+// and its working subagents too (ADR 0028, amended 2026-11-09): nothing is left to stop them from.
 // Clearing a scratch thread stops its run and its subagents' first and releases its folder after
 // the commit; a clear refused for a folder project's thread stops and releases nothing.
 // `shell.previousThreads` pages a project's earlier project threads, and `shell.earlierThread`
@@ -115,7 +116,7 @@ const seed = Effect.gen(function* () {
 
 describe("shell.dispatch stops the runs it removes", () => {
   it.effect(
-    "stops a deleted thread's run, queue cleared, before the delete commits",
+    "stops a deleted thread's run, queue cleared, and its working subagents before the delete commits",
     () =>
       run(
         Effect.gen(function* () {
@@ -129,11 +130,12 @@ describe("shell.dispatch stops the runs it removes", () => {
           );
 
           assert.deepStrictEqual(stops, [[testThreadId(1), true]]);
+          assert.deepStrictEqual(policies, ["stop"]);
         })
       )
   );
 
-  it.effect("stops an archived thread's run", () =>
+  it.effect("stops an archived thread's run and its working subagents", () =>
     run(
       Effect.gen(function* () {
         const { client } = yield* seed;
@@ -146,6 +148,7 @@ describe("shell.dispatch stops the runs it removes", () => {
         );
 
         assert.deepStrictEqual(stops, [[testThreadId(2), true]]);
+        assert.deepStrictEqual(policies, ["stop"]);
       })
     )
   );
@@ -168,6 +171,7 @@ describe("shell.dispatch stops the runs it removes", () => {
               [testThreadId(2), true],
             ]
           );
+          assert.deepStrictEqual(policies, ["stop", "stop"]);
           assert.isAbove(result.sequence, 0);
         })
       )

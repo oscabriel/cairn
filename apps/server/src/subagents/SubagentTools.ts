@@ -310,7 +310,7 @@ export const subagentToolSet = (
       }),
       brief: Type.String({
         description:
-          "What to do, why, and how the result will be judged. The child sees only this.",
+          "What to do and why. The child sees only this, and done_when.",
       }),
       why: Type.Optional(Type.String()),
       isolation: Type.Optional(
@@ -336,6 +336,12 @@ export const subagentToolSet = (
         Type.String({
           description:
             "The model the child runs on, provider/modelId[:level]; call models to see what is available. Leave it out to run the child on your own model and level; name another only when the user asks.",
+        })
+      ),
+      done_when: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            'The command, as an argv list run without a shell in the child\'s workspace, that exits 0 once the work is done, e.g. ["npm", "test"]. The user sees it on the brief before Go and the child is told to run it; Cairn does not run it yet, so you still judge the result. Leave it out when no command can tell.',
         })
       ),
     }),
@@ -365,6 +371,7 @@ export const subagentToolSet = (
           resultSchema: Option.fromUndefinedOr(args.result_schema),
           wake: textOf(args.wake),
           model: textOf(args.model),
+          doneWhen: Option.fromUndefinedOr(args.done_when),
         },
         permissions.mode
       );

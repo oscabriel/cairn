@@ -64,7 +64,7 @@ import {
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { durable } from "../brain/Durable.ts";
+import { durable, errorText } from "../brain/Durable.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import {
   EscalationWhy,
@@ -412,8 +412,39 @@ const untilCut = async (signal: AbortSignal): Promise<RaceEnd> => {
   return await promise;
 };
 
-/** Resolves with `end` once `token` on `conversationId` passes `pick`; `cut` when `signal` ends it. */
-const watchFor = async <T extends JsonObject>(
+/**
+ * What a side of the race does when its wait throws. An abort (`signal` ended: the race is decided,
+ * or the call ended) is `cut` at once. Any other throw is a failure, a storage error under the
+ * watch say: it is logged, and the side waits in `untilCut`, so a failed side never wins the race
+ * and leaves the question neither answered nor escalated.
+ */
+const sideFailed = async (
+  side: string,
+  why: string,
+  signal: AbortSignal
+): Promise<RaceEnd> => {
+  if (signal.aborted) {
+    return "cut";
+  }
+
+  Effect.runFork(
+    Effect.logWarning("question route side failed").pipe(
+      Effect.annotateLogs({
+        event: "question_route_side_failed",
+        side,
+        cause: why,
+      })
+    )
+  );
+
+  return await untilCut(signal);
+};
+
+/**
+ * Resolves with `end` once `token` on `conversationId` passes `pick`; `cut` when `signal` ends it. A
+ * watch that fails waits for `signal` (`sideFailed`). Exported for its test.
+ */
+export const watchFor = async <T extends JsonObject>(
   observer: DocumentObserver,
   token: ConversationDocToken<T>,
   conversationId: PiConversationId,
@@ -421,33 +452,38 @@ const watchFor = async <T extends JsonObject>(
   end: RaceEnd,
   signal: AbortSignal
 ): Promise<RaceEnd> => {
+  let found: Option.Option<boolean>;
+
   try {
-    const found = await Effect.runPromise(
+    found = await Effect.runPromise(
       awaitDoc(observer, token, conversationId, (value) =>
         pick(value) ? Option.some(true) : Option.none()
       ),
       { signal }
     );
-
-    return Option.isSome(found) ? end : await untilCut(signal);
-  } catch {
-    // Cut off once the race is decided, or with the call: this side lost.
-    return "cut";
+  } catch (error) {
+    return await sideFailed(`watch ${end}`, errorText(error), signal);
   }
+
+  return Option.isSome(found) ? end : await untilCut(signal);
 };
 
-/** `end` once `promise` resolves; `cut` when it rejects (the call ended). */
+/**
+ * `end` once `promise` resolves. A rejection is `cut` when `signal` ended (the call ended), and a
+ * failure that waits for `signal` otherwise (`sideFailed`).
+ */
 const endsAs = async (
   promise: Promise<unknown>,
-  end: RaceEnd
+  end: RaceEnd,
+  signal: AbortSignal
 ): Promise<RaceEnd> => {
   try {
     await promise;
-
-    return end;
-  } catch {
-    return "cut";
+  } catch (error) {
+    return await sideFailed(end, errorText(error), signal);
   }
+
+  return end;
 };
 
 /**
@@ -475,23 +511,25 @@ const windowPassed = async (
     return "cut";
   }
 
+  let placed: boolean;
+
   try {
     const status = await submission.status(context);
 
     // Withdrawn or ended before a model saw it: the other sides decide.
-    if (status.status !== "placed" && status.status !== "done") {
-      return await untilCut(signal);
+    placed = status.status === "placed" || status.status === "done";
+
+    if (placed) {
+      const placedAt = await io.placedAt(route.approvalId, io.now());
+      const wait = Math.max(0, placedAt + route.windowMillis - io.now());
+
+      await sleep(wait, undefined, { signal });
     }
-
-    const placedAt = await io.placedAt(route.approvalId, io.now());
-    const wait = Math.max(0, placedAt + route.windowMillis - io.now());
-
-    await sleep(wait, undefined, { signal });
-
-    return "window";
-  } catch {
-    return "cut";
+  } catch (error) {
+    return await sideFailed("window", errorText(error), signal);
   }
+
+  return placed ? "window" : await untilCut(signal);
 };
 
 /**
@@ -580,10 +618,10 @@ export const routeQuestion = async (
     [context.abortSignal, race.signal].filter(Predicate.isNotUndefined)
   );
 
-  const answered = endsAs(route.settled, "answered");
+  const answered = endsAs(route.settled, "answered", signal);
 
-  // The run that placed the question ends; a rejected wait is the call ending.
-  const ended = endsAs(submission.wait(context), "ended");
+  // The run that placed the question ends; a wait rejected by the call ending is `cut`.
+  const ended = endsAs(submission.wait(context), "ended", signal);
 
   // A parent whose run failed or stopped keeps the question queued (`afterFailedRun: "keep"`),
   // where no run places it.

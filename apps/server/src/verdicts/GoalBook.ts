@@ -4,10 +4,12 @@
 // verdict writer (`Verdicts.ts`) in one host commit on the thread's conversation.
 //
 // The rules the model's `goal_criteria` keeps hold here too: a subagent's thread has no goal (its
-// brief's done-when judges it), `verification` judges wait for phase 4, and a `model` judge must be
-// able to run now: a model it names must be ready, and neither it nor the thread's own model, which
-// a judge naming none runs on (ADR 0043), may be the Claude bridge (`ModelJudge.ts`). The user
-// would otherwise only learn it when the judge refused to run.
+// parent accepts its result, ADR 0055), `verification`
+// judges wait for phase 4, and a `model` judge must be able to run now: a model it names must be
+// ready and not the Claude bridge, and one that names none, which would run on the thread's own
+// model and grade its own work, is refused (`ModelJudge.ts`). The user may name the thread's own
+// model for a judge here: that is the user's pick. The user would otherwise only learn it when the
+// judge refused to run.
 //
 // The rules live once, over a goal host: pi-durable's store (the deployed brain), or the scripted
 // harness's goals (`ScriptedGoals`), so a judge over the scripted brain binds, refuses and marks as
@@ -137,7 +139,7 @@ const bookOver = <Key>(host: GoalHost<Key>): GoalBook["Service"] => {
       return yield* failure(
         threadId,
         "invalid_input",
-        `Thread ${threadId} is a subagent: its brief's done-when criteria judge it, so it has no goal of its own. Give the goal to the thread that owns it.`
+        `Thread ${threadId} is a subagent: its parent accepts its result, so it has no goal of its own. Give the goal to the thread that owns it.`
       );
     }
 
@@ -187,7 +189,12 @@ const bookOver = <Key>(host: GoalHost<Key>): GoalBook["Service"] => {
       return yield* failure(threadId, "invalid_input", resolved.failure, field);
     }
 
-    const refusal = judgeModelRefusal(resolved.success, Option.isSome(named));
+    // The user sets these criteria, so a model they name is their pick, the thread's own included.
+    const refusal = judgeModelRefusal(
+      resolved.success,
+      Option.isSome(named) ? "user" : "none",
+      model
+    );
 
     if (Option.isSome(refusal)) {
       return yield* failure(threadId, "invalid_input", refusal.value, field);

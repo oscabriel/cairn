@@ -109,6 +109,62 @@ export const criterionText = (criterion: CriterionProposal): string =>
   `${criterion.text} (judged by ${judgeText(criterion.judge)})`;
 
 /**
+ * The brief card's words for how a child's result is judged (V-9, ADR 0055). A brief's `doneWhen`
+ * holds the command its parent named (`done_when`), frozen and shown before Go, which Cairn does
+ * not run yet, and otherwise the parent or the workflow script accepting the result, which is no
+ * outside judge. The card says so rather than "judged by you".
+ */
+export const BriefJudgeText = {
+  doneWhenLabel: "Done when",
+  judgedByLabel: "Judged by",
+  /** A command the parent named for the child's result. */
+  command: (argv: ReadonlyArray<string>, expectExit: number) =>
+    `\`${argv.join(" ")}\` exits ${String(expectExit)} (the child is told to run it; Cairn does not run it yet)`,
+  /** Who accepts the result when nothing outside the work judges it. */
+  noOutsideJudge: (accepts: string) => `No outside judge; ${accepts}`,
+  /** Who accepts a result when the brief names nobody. */
+  parentAccepts: "the parent accepts the result",
+} as const;
+
+/** "The parent accepts the result." as the card's clause: "the parent accepts the result". */
+const acceptsClause = (text: string): string => {
+  const trimmed = text.trim().replace(/\.$/u, "");
+
+  return `${trimmed.slice(0, 1).toLowerCase()}${trimmed.slice(1)}`;
+};
+
+/** A brief's "Done when" and "Judged by" lines. */
+const judgedLines = (brief: Brief): ReadonlyArray<CardLine> => {
+  const commands = brief.doneWhen.flatMap((criterion) =>
+    criterion.judge.kind === "command"
+      ? [
+          BriefJudgeText.command(
+            criterion.judge.argv,
+            criterion.judge.expectExit
+          ),
+        ]
+      : []
+  );
+
+  const accepts = brief.doneWhen.find(
+    (criterion) => criterion.judge.kind !== "command"
+  );
+
+  const judged: CardLine = [
+    BriefJudgeText.judgedByLabel,
+    BriefJudgeText.noOutsideJudge(
+      accepts === undefined
+        ? BriefJudgeText.parentAccepts
+        : acceptsClause(accepts.text)
+    ),
+  ];
+
+  return commands.length === 0
+    ? [judged]
+    : [[BriefJudgeText.doneWhenLabel, commands.join("; ")], judged];
+};
+
+/**
  * Who runs a brief: the model it names, else its parent's model, which a role recorded before
  * ADR 0043 runs on too.
  */
@@ -132,7 +188,7 @@ const whereText = (brief: Brief): string => {
 
 /**
  * A brief's fields in reading order (the briefs note's card): Do, Why, Avoid (when it has any),
- * Judged by, Where, Who, Budget.
+ * Done when (when its parent named a command), Judged by, Where, Who, Budget.
  */
 export const briefLines = (brief: Brief): ReadonlyArray<CardLine> => {
   const lines: Array<CardLine> = [
@@ -145,7 +201,7 @@ export const briefLines = (brief: Brief): ReadonlyArray<CardLine> => {
   }
 
   lines.push(
-    ["Judged by", brief.doneWhen.map(criterionText).join("; ")],
+    ...judgedLines(brief),
     ["Where", whereText(brief)],
     ["Who", `${whoText(brief)}, ${runtimeModePresentation[brief.mode].label}`],
     ["Budget", budgetText(brief.budget)]

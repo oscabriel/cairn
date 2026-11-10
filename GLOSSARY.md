@@ -134,7 +134,7 @@ _Avoid_: using it for a thread's settle state, which is **Settle**
 
 _Avoid_: task, epic, project (for the goal)
 
-**Workflow**: A durable script that fans work out across subagents and stones. Every node returns a typed result, writers get verified, and integration is an explicit step.
+**Workflow**: A durable script that fans work out across subagents and stones. Every node returns a typed result its script reads; a writer is verified only where the script calls `verify`, and integration is an explicit step that phase 3 adds.
 
 _Avoid_: pipeline, DAG, job
 
@@ -326,7 +326,7 @@ _Avoid_: plugin
 
 _Avoid_: permission request, prompt (for the record)
 
-**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. It is an approval, and nothing delegated starts until the user answers it with Go or it fits its workflow's envelope.
+**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. A subagent's brief may name a command that exits 0 once the work is done (`done_when`), shown on the card before Go and given to the child, which Cairn does not run yet; otherwise no outside judge checks the result, and the parent (or the workflow script) accepts it (ADR 0055). It is an approval, and nothing delegated starts until the user answers it with Go or it fits its workflow's envelope.
 
 _Avoid_: task, spec, ticket
 
@@ -424,7 +424,7 @@ _Avoid_: e2e, test suite (for the recipe)
 
 **Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens (`judges/fixtures/parity/Landmarks.ts`). _Avoid_: anchor (that word is the subagent anchor's).
 
-**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user.
+**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user. A goal's model judge on the thread's own model is refused unless the user names that model for it (ADR 0055), and a subagent's parent accepting its result is not one.
 
 **Browser driver**: `judges/lib/Browser.ts`, what every browser judge drives system Chromium with over the DevTools protocol (ADR 0044). Chained locators with auto-waiting and strict single-match behaviour, real key events, touch, routes, screenshots, and nothing no judge calls.
 

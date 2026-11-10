@@ -120,6 +120,8 @@ import {
 } from "../subagents/Delivery.ts";
 import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import { nodeChildTools } from "../subagents/Subagents.ts";
+import { failsVisibly } from "../subagents/TaskFailures.ts";
+import type { FailedPhase } from "../subagents/TaskFailures.ts";
 import {
   AgentCall,
   ApproveCall,
@@ -197,6 +199,13 @@ export const WORKFLOWS_EXTENSION = "cairn.workflows";
 
 /** The watcher task's name. */
 export const WATCH_TASK = "cairn.workflow-watch";
+
+/** What a watcher watches: a node's task, or with no node the workflow's script call. */
+interface WatchInput {
+  workflowId: string;
+  nodeId: string | null;
+  target: number;
+}
 
 /** The node tool a script's `agent()` calls. */
 export const AGENT_TOOL = "agent";
@@ -1102,17 +1111,50 @@ export const workflowExtension = (
     return made;
   };
 
+  /**
+   * A watcher whose phase threw (O-3, `TaskFailures.ts`): its node ends `failed`, or its workflow
+   * ends as a script that faulted, so no row stays `running` for a task that ended.
+   */
+  const watchFailed = async (
+    tx: Tx,
+    failed: FailedPhase<WatchInput, { phase: "wait" }>
+  ): Promise<NextTaskState<{ phase: "wait" }, null>> => {
+    const { workflowId, nodeId } = failed.input;
+    const ledger = await tx.doc(WorkflowsDoc, failed.conversationId);
+    const approvals = await tx.doc(Approvals, failed.conversationId);
+    const row = ledger.items[workflowId];
+    const node = nodeId === null ? undefined : row?.nodes[nodeId];
+
+    if (node !== undefined && !isNodeEnded(node.state)) {
+      node.state = "failed";
+      node.endedAt = failed.at;
+    }
+
+    if (row !== undefined && nodeId === null) {
+      await endWorkflow(
+        tx,
+        row,
+        { status: "faulted", isError: true, text: failed.why },
+        failed.at,
+        approvals.items
+      );
+      slots.delete(workflowId);
+      meters.delete(workflowId);
+    }
+
+    return {
+      status: "terminal",
+      outcome: { status: "completed", result: null },
+    };
+  };
+
   /** Records how a node's task or a script call ended, once that task is terminal. */
-  const Watch = defineTask<
-    { workflowId: string; nodeId: string | null; target: number },
-    { phase: "wait" },
-    null
-  >({
+  const Watch = defineTask<WatchInput, { phase: "wait" }, null>({
     name: WATCH_TASK,
     version: 1,
     initial: () => ({ phase: "wait" }),
     phases: {
-      wait: async (task, runtime, context) => {
+      wait: failsVisibly(watchFailed)(async (task, runtime, context) => {
         const { workflowId, nodeId, target } = task.input;
         const settled = await runtime.waitForTask(taskOf(target), context);
         const { outcome } = settled.state;
@@ -1171,7 +1213,7 @@ export const workflowExtension = (
           slots.delete(workflowId);
           meters.delete(workflowId);
         }
-      },
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(

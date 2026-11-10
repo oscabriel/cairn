@@ -154,6 +154,7 @@ import {
   renderQuestion,
   renderSettlement,
   renderWake,
+  reporterFailedText,
   SubagentRequestIds,
   TYPED_RESULT_SUMMARY,
 } from "../brain/SubagentText.ts";
@@ -200,6 +201,8 @@ import type {
   SubagentItemState,
   SubagentsState,
 } from "./SubagentDocs.ts";
+import { failsVisibly } from "./TaskFailures.ts";
+import type { FailedPhase } from "./TaskFailures.ts";
 import { awaitDoc, runWait } from "./Waits.ts";
 
 /** The anchor task's name. */
@@ -1071,12 +1074,13 @@ interface StartState {
 /**
  * Why an accepted brief started nothing: the model it names is not ready (`role`), the model
  * catalog could not be read however long it was retried (`roles`), the brain already had its most
- * children live (`room`), or no workspace could be made (`workspace`). The literals are kept from
- * before ADR 0043 because start and tell tasks persist them.
+ * children live (`room`), no workspace could be made (`workspace`), or the start task threw
+ * (`fault`, O-3). The literals are kept from before ADR 0043 because start and tell tasks persist
+ * them.
  */
 export interface StartFailure {
   [key: string]: JsonValue;
-  at: "budget" | "role" | "roles" | "room" | "workspace";
+  at: "budget" | "fault" | "role" | "roles" | "room" | "workspace";
   why: string;
   /** For `room`: how many children the brain had live. */
   live?: number;
@@ -1116,6 +1120,7 @@ const answerOf = (
       room: { kind: "noRoom", live: failure.live ?? 0 },
       budget: { kind: "noBudget", why: failure.why },
       workspace: { kind: "noWorkspace", why: failure.why },
+      fault: { kind: "startFailed", why: failure.why },
     };
 
     return unstarted[failure.at];
@@ -1129,6 +1134,44 @@ const answerOf = (
     kind: record.status === "revised" ? "revised" : "declined",
     reason: Option.fromNullOr(record.reason),
   };
+};
+
+/**
+ * A tell whose phase threw (O-3): what it had to say lands as a note under the answer's request id,
+ * which wakes no one but reaches the parent's model on its next turn, and the brief's card shows it
+ * ended. A record that holds no brief tells nothing.
+ */
+const tellFailed = async (
+  tx: Tx,
+  failed: FailedPhase<BriefTellInput, BriefTellState>
+): Promise<NextTaskState<BriefTellState, null>> => {
+  const { conversationId, input, at } = failed;
+  const approvals = await tx.doc(Approvals, conversationId);
+  const record = approvals.items[input.approvalId];
+  const brief = briefOfPayload(record?.payload ?? null);
+
+  if (record !== undefined && Option.isSome(brief)) {
+    await admitNote(
+      tx,
+      conversationId,
+      SubagentRequestIds.briefAnswer(input.approvalId),
+      noteEntry({
+        kind: BRIEF_ANSWER_ENTRY,
+        data: {
+          briefId: input.approvalId,
+          decision: record.status,
+          started: false,
+        },
+        text: renderBriefAnswer(
+          brief.value.title,
+          answerOf(record, input.failure)
+        ),
+        at,
+      })
+    );
+  }
+
+  return completed();
 };
 
 /** A cwd to configure; none for the empty one a parent with no cwd gives a shared child. */
@@ -2283,12 +2326,105 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     );
   };
 
+  /**
+   * A reporter whose phase threw (O-3). Once its run settled (`report`, `wake`), the settlement's
+   * note is made sure of and marked delivered: a throw can lose the wake, never the result. Before
+   * that, the input settles `failed` in one commit, its note saying the child's result was not read,
+   * so the parent sees the failure, the child's row leaves `working`, and the parent can send the
+   * work again. An input a settlement already names settles nothing more.
+   */
+  const reporterFailed = async (
+    tx: Tx,
+    failed: FailedPhase<ReporterInput, ReporterState>
+  ): Promise<NextTaskState<ReporterState, null>> => {
+    const { conversationId: parent, input, checkpoint, why, at } = failed;
+    const child = conversationOf(input.child);
+
+    const decided =
+      checkpoint.phase === "report" || checkpoint.phase === "wake"
+        ? Option.some(checkpoint.settlement)
+        : Option.none<SettlementState>();
+
+    // Table reads first.
+    const registry = await tx.doc(SubagentsDoc, parent);
+    const item = registry.items[input.key];
+
+    const ahead =
+      item !== undefined && (await workAhead(tx, child, item, input.requestId));
+
+    const settled =
+      item?.settlements.some((mark) => mark.inputs.includes(input.requestId)) ??
+      true;
+
+    const seq = Option.match(decided, {
+      onNone: () => (item?.settlements.length ?? 0) + 1,
+      onSome: (found) => found.seq,
+    });
+
+    const note = SubagentRequestIds.note(input.childThreadId, seq);
+    const reads = await readNote(tx, parent, note);
+
+    if (item === undefined || (Option.isNone(decided) && settled)) {
+      return completed();
+    }
+
+    const settlement: SettlementState = Option.getOrElse(decided, () => ({
+      subagent: input.childThreadId,
+      seq,
+      outcome: "failed" as const,
+      summary: "",
+      divergence: "not reported",
+      payload: null,
+      commit: null,
+      branch: null,
+      turns: { thisRun: 0, total: 0 },
+      error: reporterFailedText(why),
+      usageLimit: false,
+    }));
+
+    if (Option.isNone(decided)) {
+      item.settlements.push({
+        seq,
+        outcome: "failed",
+        answerEntry: null,
+        reportedAt: at,
+        inputs: [input.requestId],
+      });
+      // Nothing follows the child's run now, so its row leaves `working` whether or not it runs.
+      settleUnlessWorking(item, false, ahead);
+    }
+
+    await applyNote(
+      tx,
+      parent,
+      note,
+      reads,
+      noteEntry({
+        kind: SUBAGENT_RESULT_ENTRY,
+        data: settlement,
+        text: renderSettlement(item.description, settlementOf(settlement)),
+        at,
+      })
+    );
+
+    item.delivered = Math.max(item.delivered, seq);
+
+    return completed();
+  };
+
+  const reporterPhase = failsVisibly<
+    ReporterInput,
+    ReporterState,
+    null,
+    object
+  >(reporterFailed);
+
   const Reporter = defineTask<ReporterInput, ReporterState, null>({
     name: REPORTER_TASK,
     version: 1,
     initial: () => ({ phase: "deliver" }),
     phases: {
-      deliver: async (task, runtime, context) => {
+      deliver: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
 
         const child = await runtime.conversation(
@@ -2352,8 +2488,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           Option.none()
         );
-      },
-      nudge: async (task, runtime, context) => {
+      }),
+      nudge: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { seq } = task.state.checkpoint;
         const nudge = SubagentRequestIds.nudge(input.childThreadId, seq);
@@ -2391,10 +2527,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           Option.some(seq)
         );
-      },
+      }),
       // A question the child's final answer became: routed to the parent (ADR 0027), then the
       // answer goes to the child, or the run's own answer settles when none came.
-      ask: async (task, runtime, context) => {
+      ask: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
 
         const { seq, approvalId, question, settlement, answerEntry, quiet } =
@@ -2497,9 +2633,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           },
           context
         );
-      },
+      }),
       // The answer to the child's question, as the run's next input, settled as a nudge's is.
-      answer: async (task, runtime, context) => {
+      answer: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { seq, text } = task.state.checkpoint;
         const requestId = SubagentRequestIds.answer(input.childThreadId, seq);
@@ -2537,8 +2673,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           Option.some(seq)
         );
-      },
-      report: async (task, runtime, context) => {
+      }),
+      report: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { settlement, quiet } = task.state.checkpoint;
         const parent = runtime.conversationId;
@@ -2633,8 +2769,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           },
           context
         );
-      },
-      wake: async (task, runtime, context) => {
+      }),
+      wake: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { settlement, wakes } = task.state.checkpoint;
         const parent = runtime.conversationId;
@@ -2712,7 +2848,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
           return completed();
         }, context);
-      },
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(
@@ -2939,8 +3075,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     version: 1,
     initial: () => ({ phase: "tell" }),
     phases: {
-      tell: async (task, runtime, context) => {
+      tell: failsVisibly(tellFailed)(async (task, runtime, context) => {
         const { approvalId, halted, failure } = task.input;
+
+        briefFaults.at("tell");
 
         await tellParent(
           runtime,
@@ -2950,7 +3088,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           wakeDelayMillis
         );
-      },
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(
@@ -3150,6 +3288,29 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   };
 
   /**
+   * A start whose phase threw (O-3): an accepted brief that started no child ends as a refused start
+   * does, with the tell that names the throw, so the parent hears and the card shows it ended. A
+   * worktree made before the throw is removed by the boot's child workspace repair.
+   */
+  const startFailed = async (
+    tx: Tx,
+    failed: FailedPhase<BriefInput, StartState>
+  ): Promise<NextTaskState<StartState, null>> => {
+    const { conversationId, input, why } = failed;
+    const approvals = await tx.doc(Approvals, conversationId);
+    const record = approvals.items[input.approvalId];
+
+    if (record?.status === "accepted" && record.started === null) {
+      await newTell(tx, conversationId, input.approvalId, {
+        at: "fault",
+        why,
+      });
+    }
+
+    return completed();
+  };
+
+  /**
    * Go's start of a child (ADR 0030): created by the answering commit, so it exists exactly when
    * the brief is accepted. A record that is not accepted, or already started a child, ends it with
    * nothing done, so a second start (a race, a rerun) changes nothing.
@@ -3159,7 +3320,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     version: 1,
     initial: () => ({ phase: "start" }),
     phases: {
-      start: async (task, runtime, context) => {
+      start: failsVisibly(startFailed)(async (task, runtime, context) => {
         briefFaults.at("start");
 
         const approvals = await runtime.snapshot(
@@ -3181,7 +3342,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         }
 
         await start(runtime, record, task.state.checkpoint, context);
-      },
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(

@@ -5,14 +5,16 @@
 // - `goal_criteria` writes a `criteria` approval (`call-<task id>`, so a rerun finds it) and returns
 //   at once: the user binds the criteria by accepting it, in the answering commit
 //   (`Verdicts.criteriaAnswered`), never the model. It refuses a model judge that cannot run: a
-//   named model that is not ready, or the Claude bridge, named or as the thread's own model, which
-//   a judge naming none runs on (ADR 0043). It always asks, whatever the thread's mode.
+//   named model that is not ready, or the Claude bridge, and a judge on the thread's own model,
+//   named or by naming none, which only the user may pick (ADR 0055). It always asks, whatever the
+//   thread's mode.
 // - `goal_check {criterion}` creates the judge run in one commit that also indexes it under the
 //   tool's task in `cairn.judge-runs`, so a rerun of the tool finds its run, and a criterion whose
 //   run is still going is not queued again. It returns "queued", never a verdict. Without a
 //   criterion it lists the goal. A `user` judge is the user's to mark; nothing is queued.
 //
-// A subagent's work is judged by its brief's `doneWhen`, so both tools refuse in a child: goals
+// A subagent's result goes to its parent, which accepts it (its brief's `done_when` command is shown
+// and given to the child, not run, ADR 0055), so both tools refuse in a child: goals
 // live on the threads the user talks to, the project thread first among them (2026-10-29).
 
 import type { ModelRef } from "@cairn/protocol/Models";
@@ -59,7 +61,7 @@ const text = (value: string, isError = false) => ({
 });
 
 const IN_A_CHILD =
-  "Goals live on the threads the user talks to. A subagent's result is judged by its brief's done-when criteria; report your result instead.";
+  "Goals live on the threads the user talks to. A subagent's result goes to its parent, which accepts it; report your result instead.";
 
 const checkParameters = Type.Object({
   criterion: Type.Optional(
@@ -174,12 +176,14 @@ export const goalsExtension = (
 
   /**
    * Why a model judge cannot run on a thread on `threadModel`; none when it can. A named model must
-   * be ready; one naming none (or a role, recorded before ADR 0043) runs on the thread's own model.
-   * Neither may be the Claude bridge.
+   * be ready and may not be the Claude bridge; one naming none (or a role, recorded before ADR
+   * 0043) would run on the thread's own and is refused (ADR 0055). `by` says who named the model:
+   * the thread's model may not propose itself, while a bound criterion's model is the user's pick.
    */
   const judgeCannotRun = async (
     spec: string | null,
-    threadModel: Option.Option<ModelRef>
+    threadModel: Option.Option<ModelRef>,
+    by: "proposed" | "user"
   ): Promise<Option.Option<string>> => {
     const named = judgeSpecOf(spec);
 
@@ -199,7 +203,12 @@ export const goalsExtension = (
 
     return Result.match(resolved, {
       onFailure: (why) => Option.some(why),
-      onSuccess: (model) => judgeModelRefusal(model, Option.isSome(named)),
+      onSuccess: (model) =>
+        judgeModelRefusal(
+          model,
+          Option.isSome(named) ? by : "none",
+          threadModel
+        ),
     });
   };
 
@@ -254,7 +263,8 @@ export const goalsExtension = (
 
         const refusal = await judgeCannotRun(
           criterion.judge.spec,
-          Option.fromUndefinedOr(agent.model)
+          Option.fromUndefinedOr(agent.model),
+          "user"
         );
 
         if (Option.isSome(refusal)) {
@@ -357,7 +367,8 @@ export const goalsExtension = (
         // oxlint-disable-next-line no-await-in-loop -- one judge at a time, refusing at the first
         const refusal = await judgeCannotRun(
           proposal.judge.spec,
-          Option.fromUndefinedOr(agent.model)
+          Option.fromUndefinedOr(agent.model),
+          "proposed"
         );
 
         if (Option.isSome(refusal)) {

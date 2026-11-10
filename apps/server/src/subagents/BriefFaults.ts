@@ -11,6 +11,8 @@
 // - `prepared`: after the child's workspace was made and before the commit that creates the child.
 // - `created`: after the creating commit, before the brief's reporter submits the first input.
 // - `submitted`: after the reporter submitted the brief's first input to the child.
+// - `tell`: at the top of the tell task of a brief that started nothing (declined, sent back,
+//   expired or refused), before it reads the parent.
 
 import { Context, Function, Schema } from "effect";
 
@@ -21,6 +23,7 @@ export const BriefFaultPoint = Schema.Literals([
   "prepared",
   "created",
   "submitted",
+  "tell",
 ]);
 
 export type BriefFaultPoint = typeof BriefFaultPoint.Type;

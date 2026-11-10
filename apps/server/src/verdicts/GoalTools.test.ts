@@ -448,7 +448,7 @@ describe("the goal tools under a Harness", () => {
   );
 
   it.live(
-    "a model judge runs on the thread's own model when it names none, of any family when named, never on the bridge",
+    "a model judge names its model: of any family, the thread's own when the user named it, never none or the bridge (ADR 0055)",
     () =>
       Effect.gen(function* () {
         const cwd = yield* scratch;
@@ -465,13 +465,14 @@ describe("the goal tools under a Harness", () => {
             callTool("goal_check", { criterion: "c2" }, "t2"),
             callTool("goal_check", { criterion: "c3" }, "t3"),
             callTool("goal_check", { criterion: "c4" }, "t4"),
+            callTool("goal_check", { criterion: "c5" }, "t5"),
           ],
           judges,
           faults: NO_JUDGE_FAULTS,
         });
 
         const conversation = yield* thread(kit, cwd, [
-          // Names no model: the thread's own judges (ADR 0043).
+          // Names no model: the thread's own would judge its own work, so it is refused (ADR 0055).
           { text: "Tests pass", judge: modelJudge(null) },
           // The thread's family, named: no longer refused.
           {
@@ -483,6 +484,11 @@ describe("the goal tools under a Harness", () => {
           {
             text: "Tests pass, judged on the bridge",
             judge: modelJudge("claude-bridge/claude-haiku-5-5"),
+          },
+          // The thread's own model, named in criteria the user bound: the user's pick.
+          {
+            text: "Tests pass, judged by the thread's model",
+            judge: modelJudge("anthropic/claude-test"),
           },
         ]);
 
@@ -503,7 +509,7 @@ describe("the goal tools under a Harness", () => {
         );
 
         assert.include(results.get("t4") ?? "", "Claude bridge");
-        assert.strictEqual(judges.prompts.length, 3);
+        assert.strictEqual(judges.prompts.length, 2);
         assert.include(
           judges.prompts[0] ?? "",
           "Rubric: A test run with no failures"
@@ -520,15 +526,22 @@ describe("the goal tools under a Harness", () => {
             criterion.verdict?.evidence.model ?? null,
           ]),
           [
-            ["met", "anthropic/claude-test"],
-            ["met", "opencode-go/claude-haiku-5-5"],
-            ["met", "anthropic/claude-test"],
             ["open", null],
+            ["met", "opencode-go/claude-haiku-5-5"],
+            ["open", null],
+            ["open", null],
+            ["met", "anthropic/claude-test"],
           ]
         );
         assert.include(
-          goal?.criteria[0]?.verdict?.evidence.note ?? "",
+          goal?.criteria[1]?.verdict?.evidence.note ?? "",
           "12 passed"
+        );
+
+        // The refusal reaches the thread's model as goal_check's answer, in words the user reads.
+        assert.include(
+          results.get("t1") ?? "",
+          "is this thread's own model, so a judge on it would grade its own work"
         );
       }).pipe(Effect.scoped)
   );
@@ -569,7 +582,7 @@ describe("the goal tools under a Harness", () => {
         async () => await toolResults(conversation, context)
       );
 
-      assert.include(results.get("t1") ?? "", "brief's done-when criteria");
+      assert.include(results.get("t1") ?? "", "its parent, which accepts it");
     }).pipe(Effect.scoped)
   );
 

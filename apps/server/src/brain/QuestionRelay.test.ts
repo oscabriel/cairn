@@ -21,7 +21,7 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Option, Result } from "effect";
 
-import { testLimit } from "../EventuallyTestKit.ts";
+import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
 import { runScenario } from "./conformance/HarnessConformance.ts";
@@ -50,7 +50,7 @@ const RESTART_TIMEOUT = Duration.millis(3000);
 const passes = (
   name: string,
   tuning: Partial<SubagentToolOptions>,
-  timeout = Duration.seconds(5)
+  timeout = slackened(Duration.seconds(5))
 ) =>
   Effect.gen(function* () {
     const scenario = Result.getOrThrow(

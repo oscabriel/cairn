@@ -356,10 +356,16 @@ const program = Effect.gen(function* () {
   const launchId = launchApprovalIdOf(WF);
 
   if (ledger?.items[WF] === undefined) {
+    // The nodes name no model, so they run on this thread's, and the launch grants that one
+    // (ADR 0043), not the kit's root model this brain does not run.
     yield* plant(
       kit,
       source,
-      { ...plantDefaults(WF), status: "pending" },
+      {
+        ...plantDefaults(WF),
+        status: "pending",
+        threadModel: { model: FAUX_MODEL, thinkingLevel: Option.none() },
+      },
       context
     );
     say("planted");

@@ -469,7 +469,7 @@ describe("subagents over a pi-durable brain", () => {
           assert.lengthOf(item?.settlements ?? [], 1);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(

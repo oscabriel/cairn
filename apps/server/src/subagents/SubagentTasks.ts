@@ -1100,6 +1100,18 @@ export interface StartFailure {
   live?: number;
 }
 
+/**
+ * A start failure as a lifecycle line says it: the stored `role` and `roles` (kept by ADR 0052's
+ * shim) in the words used since roles were retired, the rest as stored.
+ */
+const failureWord = (at: StartFailure["at"]): string => {
+  if (at === "role") {
+    return "model";
+  }
+
+  return at === "roles" ? "models" : at;
+};
+
 /** How long a start waits before it reads a model catalog it could not read again. */
 export const MODEL_REREAD_MILLIS = 30_000;
 
@@ -3243,7 +3255,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           taskId: runtime.taskId,
           approvalId,
           halted,
-          failure: failure?.at ?? null,
+          failure: failure === null ? null : failureWord(failure.at),
         });
       }),
     },

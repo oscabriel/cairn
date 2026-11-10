@@ -8,7 +8,8 @@
 //   record names;
 // - a named model that is not ready is refused at the ask with its reason, and a role name
 //   (`@worker`) is refused as no model;
-// - a model that was ready at the ask but not at Go starts nothing, and the parent is told once;
+// - a model that was ready at the ask but not at Go starts nothing, and the parent is told once,
+//   with a lifecycle line whose failure says `model` (the stored literal `role` is ADR 0052's shim);
 // - the brain-wide cap (`maxLivePerBrain`, 32 in production, 2 here) counts every thread's
 //   children: a second thread's spawn past it is refused, while its own cap of 8 is far off;
 // - a budget covering the parent at its line when the user says Go starts nothing (ADR 0036, the
@@ -39,8 +40,10 @@ import {
   Duration,
   Effect,
   Layer,
+  Logger,
   Option,
   Predicate,
+  References,
   Ref,
   Schema,
   Stream,
@@ -374,6 +377,22 @@ const dispatchOf = (parent: ConversationId, child: ConversationId) =>
     };
   });
 
+/** The annotations of every logged line, as the app's JSON logger would write them. */
+type Annotations = ReturnType<
+  typeof References.CurrentLogAnnotations.defaultValue
+>;
+
+/** A logger that keeps the annotations of every line in `lines`. */
+const keeping = (lines: Array<Annotations>) =>
+  Logger.layer(
+    [
+      Logger.make((options) => {
+        lines.push(options.fiber.getRef(References.CurrentLogAnnotations));
+      }),
+    ],
+    { mergeWithExisting: false }
+  );
+
 const go = (threadId: ThreadId, approvalId: string) =>
   Effect.flatMap(HarnessSeam, (seam) =>
     seam.respond(threadId, ApprovalId.make(approvalId), {
@@ -618,8 +637,10 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
 
   it.live(
     "a model ready at the ask but not at Go starts nothing, and the parent is told once",
-    () =>
-      withBrain(
+    () => {
+      const lines: Array<Annotations> = [];
+
+      return withBrain(
         DEFAULT_TOOL_OPTIONS,
         [
           fauxAssistantMessage(
@@ -677,8 +698,17 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
                   Option.isNone(event.parent)
               )
             );
+
+            // The journal says why in today's words, not the retired `role`.
+            assert.deepStrictEqual(
+              lines.flatMap((line) =>
+                line.event === "subagent_brief_told" ? [line.failure] : []
+              ),
+              ["model"]
+            );
           })
-      ),
+      ).pipe(Effect.provide(keeping(lines)));
+    },
     testLimit(30_000)
   );
 

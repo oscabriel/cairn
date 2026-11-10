@@ -15,7 +15,10 @@ import { TestClock } from "effect/testing";
 
 import { RuntimeRequestUpdated } from "../brain/HarnessSeam.ts";
 import { FREE_KEY, SpendScript, usageOf } from "../brain/SpendTestKit.ts";
-import { eventuallyTrue as eventually } from "../EventuallyTestKit.ts";
+import {
+  eventuallyTrue as eventually,
+  slackenedTries,
+} from "../EventuallyTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import type { BudgetMode } from "./BudgetBook.ts";
 import { BudgetGuard } from "./BudgetGuard.ts";
@@ -60,10 +63,13 @@ const spend = (conversation: number, thread: typeof ROOT, tokens: number) =>
     yield* settle;
   });
 
-/** Moves the test clock in 20 ms steps, up to two seconds, until `check` holds. */
+/**
+ * Moves the test clock in 20 ms steps, up to two seconds scaled by the test slack, until `check`
+ * holds.
+ */
 const eventuallyOnClock = <R>(check: Effect.Effect<boolean, never, R>) =>
   Effect.gen(function* () {
-    for (let tries = 0; tries < 100; tries += 1) {
+    for (let tries = 0; tries < slackenedTries(100); tries += 1) {
       if (yield* check) {
         return true;
       }

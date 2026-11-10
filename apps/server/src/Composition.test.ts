@@ -24,6 +24,7 @@ import { HarnessSeam } from "./brain/HarnessSeam.ts";
 import { ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
+import { testLimit } from "./EventuallyTestKit.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
 import { MainLayer } from "./MainLayer.ts";
@@ -178,6 +179,6 @@ describe("the deployed composition", () => {
         assert.deepStrictEqual(twice, [], "services built more than once");
         assert.isAbove(built.size, 100, "the composition was recorded");
       }).pipe(Effect.scoped),
-    60_000
+    testLimit(60_000)
   );
 });

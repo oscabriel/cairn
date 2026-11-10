@@ -236,7 +236,24 @@ const LenientRecord = Schema.Struct({
 
 const decodeLenient = Schema.decodeUnknownOption(LenientRecord);
 
-const decodeNode = Schema.decodeUnknownOption(NodeRecord);
+/**
+ * A node of the ledger with the model it asked for left unchecked. That model is the one leaf
+ * written unchecked (the launching thread's when the script names none, and a catalog refreshed
+ * from a provider can hold an id the spec pattern does not take), and the panel reads it only
+ * before the node resolved a model, so a node whose asked model is no spec is read with none rather
+ * than left out.
+ */
+const NodeLeaves = Schema.Struct({ ...NodeRecord.fields, model: Schema.Json });
+
+const decodeNodeLeaves = Schema.decodeUnknownOption(NodeLeaves);
+
+const isAskedModel = Schema.is(NodeRecord.fields.model);
+
+const decodeNode = (raw: Schema.Json): Option.Option<NodeRecord> =>
+  Option.map(decodeNodeLeaves(raw), (node) => ({
+    ...node,
+    model: isAskedModel(node.model) ? node.model : null,
+  }));
 
 /**
  * The workflows of a `cairn.workflows` document as a client holds it (plain JSON). A workflow or

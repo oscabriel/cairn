@@ -1,5 +1,5 @@
 // The `next` shell's Messages, and the OutMessages it hands the root: an item for the outbox (a
-// refresh's launch, a scratch turn or clear), a visit for the outbox, a path to open, and a new
+// refresh's launch, a scratch clear), a visit for the outbox, a path to open, and a new
 // draft in a chosen project. The clock, the platform, the visits, the favicon badge and the key
 // bindings are the shell's (ADR 0050).
 // The work panel's Messages are the shell's too: it is drawn beside the chat column, as the goal
@@ -80,27 +80,25 @@ export const Message = defineMessageUnion({
 
   /** Cmd+J or Ctrl+J: show the scratch thread, or hide it. */
   PressedScratchShortcut: {},
-  /** Escape while the overlay or the refresh confirm is open. */
+  /** Escape while a menu is open (an overlay's dialog takes its own Escape). */
   PressedEscape: {},
   ClickedScratchButton: {},
+  /** Hide, Escape or a tap on the scrim of the scratch overlay. */
   ClickedCloseScratch: {},
-  ChangedScratchDraft: { value: Schema.String },
-  /** Enter without Shift in the scratch field: send. */
-  PressedScratchEnter: {},
-  ClickedSendScratch: {},
-  /** The scratch turn is minted: a launch for the first message, a send after it. */
-  PreparedScratchTurn: { item: OutboxItem, threadId: ThreadId },
   ClickedClearScratch: {},
   /** The clear is minted; the scratch thread is forgotten here and deleted by the brain. */
   PreparedScratchClear: { item: OutboxItem },
   /** The scratch thread this device held when it last saved, read at start. */
   LoadedScratch: { threadId: Schema.Option(ThreadId) },
   CompletedSaveScratch: {},
-  /** A scratch turn could not be prepared. */
-  FailedPrepare: { message: Schema.String },
-  ClickedDismissFailure: {},
-  /** A field the overlay or the confirm opened with took focus, or was gone. */
-  CompletedFocus: {},
+
+  /**
+   * An overlay's dialog took the page or gave it back (focus, the trap, the scroll lock); whether
+   * the overlay is open stays the shell's, so nothing changes.
+   */
+  SettledOverlay: {},
+  /** The window crossed `lg`: the work and goal panels become columns, or sheets again. */
+  ChangedWidth: { isWide: Schema.Boolean },
 
   /** The header's work button: show the work panel, or hide it. */
   ClickedWork: {},

@@ -24,6 +24,10 @@ import {
 export const LANE_CLASS =
   "chat-composer-lane relative z-20 w-full shrink-0 px-(--space-2) pt-(--space-2) pb-[calc(env(safe-area-inset-bottom)+var(--space-3))] sm:px-(--space-5) sm:pb-[calc(env(safe-area-inset-bottom)+var(--space-4))]";
 
+/** The composer's lane at the scratch overlay's foot, inset like the overlay's transcript. */
+export const SCRATCH_LANE_CLASS =
+  "relative z-10 w-full shrink-0 px-(--space-3) pt-(--space-2) pb-(--space-3) max-md:px-(--space-2) max-md:pb-(--space-2)";
+
 /** The stack the box and its drawers sit in, one lane wide. */
 export const STACK_CLASS =
   "group/composer-stack relative z-10 mx-auto w-full max-w-(--chat-content-max-width)";

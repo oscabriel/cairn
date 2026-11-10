@@ -1,8 +1,10 @@
 // The `next` shell's update. The rail picks a project and opens its project thread, or a new draft
 // in that project when it has none; a row opens its thread; the foot opens the usage and settings pages; the phone's sheet closes on any navigation.
 // A refresh asks first, then launches the new project thread with `replaces` and opens it. The
-// scratch overlay shows and hides on Cmd+J or Ctrl+J without losing its thread; its first message
-// launches the scratch thread, later ones are sends, and Clear deletes it. The work panel shows and
+// scratch overlay shows and hides on Cmd+J or Ctrl+J without losing its thread; its turns are the
+// composer's (U-16), which hands back the thread its first message launched, and Clear deletes it.
+// Every overlay is a dialog (`next/ui/Sheet.ts`) that moves focus in and out and takes its own
+// Escape; the shell keeps only whether each is open. The work panel shows and
 // hides from the header, keeps its state across threads but starts each thread's child groups at
 // their first page, and stops one child at a time; a child shows Stopping until its row is at rest.
 // The goal panel shows and hides from the header's goal chip (one side panel at a time: opening it
@@ -39,7 +41,6 @@ import {
   CreateProject,
   DispatchManage,
   FetchPreviousThreads,
-  FocusField,
   DetectPlatform,
   LoadScratch,
   LookUpEarlierThread,
@@ -47,7 +48,6 @@ import {
   PrepareProjectDraft,
   PrepareRefresh,
   PrepareScratchClear,
-  PrepareScratchTurn,
   MarkCriterion,
   ReadClock,
   SaveScratch,
@@ -64,7 +64,6 @@ import {
   projectAtFolder,
   projectThreadFor,
   railProjectsOf,
-  scratchRowOf,
   selectedProjectOf,
   threadRoleOf,
   threadsOf,
@@ -73,15 +72,12 @@ import { drawnRowsOf } from "./Keys.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { ShortcutCommand } from "./Message.ts";
 import {
-  ADD_PROJECT_ID,
   FIRST_CHILD_ROWS,
   FolderListing,
   initialManagedList,
   initialPrevious,
-  MANAGE_TEXT_ID,
   ManageAction,
   MenuTarget,
-  REFRESH_TEXT_ID,
   stopKeyOf,
 } from "./Model.ts";
 import type {
@@ -94,7 +90,6 @@ import type {
   ShellContext,
   WorkState,
 } from "./Model.ts";
-import { SCRATCH_EDITOR_ID } from "./Scratch.ts";
 import { routedThreadIdOf, syncVisits } from "./Visits.ts";
 
 /** The usage page's path. */
@@ -461,73 +456,15 @@ const confirmRefresh = (model: Model): UpdateReturn =>
     }
   );
 
-const sendScratch = (model: Model): UpdateReturn => {
-  const text = model.scratch.draft.trim();
-
-  if (text === "" || model.scratch.isBusy) {
-    return { model };
-  }
-
-  // A later turn keeps the thread's own model; the first takes the server's defaults.
-  const choice = Option.orElse(
-    Option.map(scratchRowOf(model), (row) => ({
-      model: { provider: row.provider, modelId: row.modelId },
-      thinkingLevel: row.thinkingLevel,
-    })),
-    () => model.context.defaults
-  );
-
-  return Option.match(choice, {
-    onNone: () => ({
-      model: modifyFields(model, {
-        failure: () =>
-          Option.some("Cairn is still connecting. Send again in a moment."),
-      }),
-    }),
-    onSome: (picked) => ({
-      model: modifyFields(model, {
-        scratch: (scratch) =>
-          modifyFields(scratch, {
-            isBusy: () => true,
-            sentDraft: () => Option.some(scratch.draft),
-          }),
-        failure: () => Option.none(),
-      }),
-      commands: [
-        PrepareScratchTurn({
-          threadId: model.scratch.threadId,
-          model: picked.model,
-          thinkingLevel: picked.thinkingLevel,
-          text,
-        }),
-      ],
-    }),
-  });
-};
-
 /**
- * The scratch field once its turn is minted: the words sent leave it, and whatever was typed after
- * them stays. A draft rewritten meanwhile is kept whole.
+ * Shows or hides the scratch overlay. Shown, it is a dialog that takes the keyboard (its composer's
+ * editor) and gives it back when hidden; the phone's sidebar sheet closes under it.
  */
-const draftAfterSend = (
-  draft: string,
-  sentDraft: Option.Option<string>
-): string =>
-  Option.match(
-    Option.filter(sentDraft, (sent) => draft.startsWith(sent)),
-    {
-      onNone: () => draft,
-      onSome: (sent) => draft.slice(sent.length).trimStart(),
-    }
-  );
-
-/** Shows or hides the scratch overlay; shown, its field takes focus from whatever held it. */
 const setScratchOpen = (model: Model, isOpen: boolean): UpdateReturn => ({
   model: modifyFields(model, {
     scratch: (scratch) => modifyFields(scratch, { isOpen: () => isOpen }),
     isSheetOpen: (open) => (isOpen ? false : open),
   }),
-  commands: isOpen ? [FocusField({ selector: `#${SCRATCH_EDITOR_ID}` })] : [],
 });
 
 /** Opens the project's first draft: a new one is minted, then the root gives it the project. */
@@ -688,8 +625,8 @@ const submitAddProject = (model: Model): UpdateReturn =>
 
 /**
  * Opens the add-project picker at the home folder: the rail's + bubble, or the hero's Add project
- * through the root. The picker takes focus, not its field, so a phone's keyboard stays down while
- * the user browses.
+ * through the root. Its dialog takes focus on its first control, not its field, so a phone's
+ * keyboard stays down while the user browses.
  */
 export const openAddProject = (model: Model): InformReturn => {
   const request = model.folderRequests + 1;
@@ -709,10 +646,7 @@ export const openAddProject = (model: Model): InformReturn => {
           failure: Option.none(),
         }),
     }),
-    commands: [
-      BrowseFolders({ request, path: Option.none() }),
-      FocusField({ selector: `#${ADD_PROJECT_ID}` }),
-    ],
+    commands: [BrowseFolders({ request, path: Option.none() })],
   };
 };
 
@@ -726,23 +660,44 @@ export const followDraftProject =
   });
 
 /**
- * A scratch turn the brain refused, or a scratch launch that failed, back in the scratch field
- * ahead of nothing or after what is typed there now. A launch that did not start leaves no thread,
- * so the next turn launches a new one.
+ * The thread the scratch overlay's composer just launched is the overlay's: held, saved on this
+ * device, and counted on the favicon (U-16).
  */
-export const restoreScratchTurn =
-  (text: string, launched: boolean) =>
-  (model: Model): InformReturn => ({
-    model: modifyFields(model, {
+export const adoptScratchThread =
+  (threadId: ThreadId) =>
+  (model: Model): InformReturn => {
+    if (Option.contains(model.scratch.threadId, threadId)) {
+      return { model };
+    }
+
+    const adopted = modifyFields(model, {
       scratch: (scratch) =>
-        modifyFields(scratch, {
-          draft: (draft) =>
-            draft.trim() === "" ? text : `${draft}\n\n${text}`,
-          threadId: (threadId) => (launched ? Option.none() : threadId),
-        }),
-    }),
-    commands: launched ? [SaveScratch({ threadId: Option.none() })] : [],
-  });
+        modifyFields(scratch, { threadId: () => Option.some(threadId) }),
+    });
+
+    return withVisits(adopted, [
+      SaveScratch({ threadId: Option.some(threadId) }),
+    ]);
+  };
+
+/**
+ * A scratch launch that did not start leaves no thread: the overlay lets `threadId` go, so the next
+ * turn launches a new one. Its words are back in the composer's scratch draft.
+ */
+export const forgetScratchLaunch =
+  (threadId: ThreadId) =>
+  (model: Model): InformReturn => {
+    if (!Option.contains(model.scratch.threadId, threadId)) {
+      return { model };
+    }
+
+    const forgotten = modifyFields(model, {
+      scratch: (scratch) =>
+        modifyFields(scratch, { threadId: () => Option.none() }),
+    });
+
+    return withVisits(forgotten, [SaveScratch({ threadId: Option.none() })]);
+  };
 
 /** Which menu `target` is, so a second click on its button closes it. */
 const menuKeyOf = (target: MenuTarget): string =>
@@ -1119,9 +1074,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
                 isSending: false,
                 failure: Option.none(),
               }),
-            failure: () => Option.none(),
           }),
-          commands: [FocusField({ selector: `#${REFRESH_TEXT_ID}` })],
         }),
       }),
     ChangedRefreshText: ({ value }) => ({
@@ -1145,65 +1098,15 @@ const step = (model: Model, message: Message): UpdateReturn =>
     }),
 
     PressedScratchShortcut: () => setScratchOpen(model, !model.scratch.isOpen),
-    PressedEscape: () => {
-      if (Option.isSome(model.manage)) {
-        return { model: modifyFields(model, { manage: () => Option.none() }) };
-      }
-
-      if (Option.isSome(model.menu)) {
-        return { model: modifyFields(model, { menu: () => Option.none() }) };
-      }
-
-      if (Option.isSome(model.addProject)) {
-        return closeAddProject(model);
-      }
-
-      if (Option.isSome(model.refresh)) {
-        return {
-          model: modifyFields(model, { refresh: () => Option.none() }),
-        };
-      }
-
-      return model.scratch.isOpen ? setScratchOpen(model, false) : { model };
-    },
+    // An open overlay is a dialog, which takes its own Escape (`next/ui/Sheet.ts`).
+    PressedEscape: () => ({
+      model: modifyFields(model, { menu: () => Option.none() }),
+    }),
     ClickedScratchButton: () => setScratchOpen(model, true),
     ClickedCloseScratch: () => setScratchOpen(model, false),
-    ChangedScratchDraft: ({ value }) => ({
-      model: modifyFields(model, {
-        scratch: (scratch) => modifyFields(scratch, { draft: () => value }),
-      }),
-    }),
-    PressedScratchEnter: () => sendScratch(model),
-    ClickedSendScratch: () => sendScratch(model),
-    PreparedScratchTurn: ({ item, threadId }) => {
-      const isNew = !Option.contains(model.scratch.threadId, threadId);
-
-      return {
-        model: modifyFields(model, {
-          scratch: (scratch) =>
-            modifyFields(scratch, {
-              threadId: () => Option.some(threadId),
-              draft: (draft) => draftAfterSend(draft, scratch.sentDraft),
-              isBusy: () => false,
-              sentDraft: () => Option.none(),
-            }),
-        }),
-        commands: isNew
-          ? [SaveScratch({ threadId: Option.some(threadId) })]
-          : [],
-        outMessage: OutMessage.RequestedOutbox({
-          item,
-          navigateTo: Option.none(),
-        }),
-      };
-    },
     ClickedClearScratch: () =>
       Option.match(model.scratch.threadId, {
-        onNone: () => ({
-          model: modifyFields(model, {
-            scratch: (scratch) => modifyFields(scratch, { draft: () => "" }),
-          }),
-        }),
+        onNone: () => ({ model }),
         onSome: (threadId) =>
           model.scratch.isBusy
             ? { model }
@@ -1220,7 +1123,6 @@ const step = (model: Model, message: Message): UpdateReturn =>
         scratch: (scratch) =>
           modifyFields(scratch, {
             threadId: () => Option.none(),
-            draft: () => "",
             isBusy: () => false,
           }),
       }),
@@ -1239,20 +1141,10 @@ const step = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     CompletedSaveScratch: () => ({ model }),
-    FailedPrepare: ({ message: text }) => ({
-      model: modifyFields(model, {
-        failure: () => Option.some(text),
-        scratch: (scratch) =>
-          modifyFields(scratch, {
-            isBusy: () => false,
-            sentDraft: () => Option.none(),
-          }),
-      }),
+    SettledOverlay: () => ({ model }),
+    ChangedWidth: ({ isWide }) => ({
+      model: modifyFields(model, { isWide: () => isWide }),
     }),
-    ClickedDismissFailure: () => ({
-      model: modifyFields(model, { failure: () => Option.none() }),
-    }),
-    CompletedFocus: () => ({ model }),
 
     ClickedWork: () => ({
       model: modifyFields(model, {
@@ -1468,13 +1360,6 @@ const step = (model: Model, message: Message): UpdateReturn =>
             failure: Option.none(),
           }),
       }),
-      commands: [
-        FocusField({
-          selector: Predicate.isTagged(action, "RemoveProject")
-            ? `#${MANAGE_TEXT_ID}-cancel`
-            : `#${MANAGE_TEXT_ID}`,
-        }),
-      ],
     }),
     ChangedManageText: ({ value }) =>
       setManage(model, (manage) => ({

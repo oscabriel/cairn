@@ -1,14 +1,11 @@
-// Scene tests for progress, meters, dividers, key hints and the empty state: progress reads as a
-// percent or as working; a meter takes the waiting tone past its warning share and the failed tone
-// at its limit, and an unknown reading reads Unknown, never zero; dividers are separators; a
-// shortcut hides on a coarse pointer; an empty state shows only the parts it has.
+// Scene tests for progress, meters and key hints: progress reads as a percent or as working; a
+// meter takes the waiting tone past its warning share and the failed tone at its limit, and an
+// unknown reading reads Unknown, never zero; a shortcut hides on a coarse pointer.
 
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 import * as Scene from "foldkit/scene";
 
-import { divider, labelledDivider } from "./Divider.ts";
-import { emptyState } from "./EmptyState.ts";
 import { shortcut } from "./Kbd.ts";
 import { meter, meterTone, progress, UNKNOWN_READING } from "./Meter.ts";
 import type { MeterReading } from "./Meter.ts";
@@ -30,19 +27,7 @@ const app = appOf((h) => [
   meter(h, "Spend", reading(Option.none()), [
     h.DataAttribute("testid", "unread"),
   ]),
-  divider(h, "vertical"),
-  labelledDivider(h, "Previous agents"),
   shortcut(h, ["Ctrl", "K"]),
-  emptyState(
-    h,
-    {
-      glyph: Option.none(),
-      title: "No subagents yet",
-      body: Option.none(),
-      action: Option.none(),
-    },
-    [h.DataAttribute("testid", "empty")]
-  ),
 ]);
 
 describe("progress and meter", () => {
@@ -121,22 +106,15 @@ describe("progress and meter", () => {
   });
 });
 
-describe("dividers, key hints and the empty state", () => {
-  it("draws separators, a shortcut hidden on a coarse pointer, and only the empty state's parts", () => {
+describe("key hints", () => {
+  it("draws a shortcut hidden on a coarse pointer", () => {
     Scene.scene(
       app,
       given,
-      Scene.expect(
-        Scene.role("separator", { name: "Previous agents" })
-      ).toExist(),
-      Scene.expect(Scene.selector('[aria-orientation="vertical"]')).toHaveClass(
-        "w-px"
-      ),
       Scene.expect(Scene.selector('[data-slot="shortcut"]')).toHaveClass(
         "pointer-coarse:hidden"
       ),
       Scene.expectAll(Scene.all.selector('[data-slot="kbd"]')).toHaveCount(2),
-      Scene.expect(Scene.testId("empty")).toHaveText("No subagents yet"),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

@@ -319,9 +319,3 @@ export const projectOfThread = (
   Option.flatMap(model.context.shell, (shell) =>
     Array.findFirst(shell.projects, (each) => each.id === thread.projectId)
   );
-
-/** The scratch thread's row, when the overlay holds one the shell still has. */
-export const scratchRowOf = (model: Model): Option.Option<ThreadShell> =>
-  Option.flatMap(model.scratch.threadId, (threadId) =>
-    Array.findFirst(threadsOf(model), (thread) => thread.id === threadId)
-  );

@@ -16,14 +16,16 @@ import { Message } from "../../Message.ts";
 import type { Model } from "../../Model.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { chunkModule } from "../page/Chunks.ts";
+import * as Pages from "../page/Regions.ts";
 import * as Thread from "../page/Thread.ts";
 import { FONT_UI } from "../ui/Classes.ts";
+import { modalSheet } from "../ui/Sheet.ts";
 import { connectionMark } from "./ConnectionMark.ts";
 import { goalChipView, goalInputsOf } from "./Goal.ts";
 import { chatHeaderBand } from "./Header.ts";
 import * as Hold from "./Hold.ts";
-import type { Message as ShellMessage } from "./Message.ts";
-import { scratchBody, scratchPanel } from "./Scratch.ts";
+import { Message as ShellMessage } from "./Message.ts";
+import { SCRATCH_FOCUS, scratchBody, scratchSheet } from "./Scratch.ts";
 import * as Shell from "./View.ts";
 import { workInputsOf, workToggleView } from "./Work.ts";
 
@@ -103,8 +105,9 @@ const routeBody = (
   regions: ShellRegions
 ): ReadonlyArray<Html> => {
   if (Predicate.isTagged(model.route, "Thread")) {
-    const work = { inputs: workInputsOf(model) };
-    const goal = { inputs: goalInputsOf(model) };
+    const { isWide } = model.nextShell;
+    const work = { inputs: workInputsOf(model), isWide };
+    const goal = { inputs: goalInputsOf(model), isWide };
 
     return [
       h.div(
@@ -178,6 +181,10 @@ const routeBody = (
   return [header(h, model, []), regions.page()];
 };
 
+/**
+ * The scratch overlay while it is shown: a dialog on the `next` sheet holding the scratch thread's
+ * transcript and, at its foot, the one composer, which serves the overlay meanwhile (U-16).
+ */
 const scratch = (h: H, model: Model): Html => {
   const { isOpen, threadId } = model.nextShell.scratch;
 
@@ -185,49 +192,44 @@ const scratch = (h: H, model: Model): Html => {
     return h.empty;
   }
 
-  return h.div(
-    [h.DataAttribute("slot", "scratch"), h.Class("contents")],
-    [
-      h.submodel({
-        slotId: "scratch-scrim",
-        model: model.nextShell,
-        view: Shell.scratchScrimView,
-        viewInputs: { placement: "viewport" },
-        toParentMessage: toShell,
-      }),
-      scratchPanel(h, "viewport", [
+  return modalSheet(
+    h,
+    {
+      ...scratchSheet(h, [
         h.submodel({
           slotId: "scratch-head",
           model: model.nextShell,
           view: Shell.scratchHeadView,
           toParentMessage: toShell,
         }),
-        scratchBody(
-          h,
-          Option.map(threadId, () =>
-            h.submodel({
-              slotId: "scratch-thread",
-              model: model.scratchThread,
-              view: Thread.view,
-              viewInputs: {
-                workspaceRoot: Option.none(),
-                launchFailure: Option.none(),
-                // The scratch thread has no subagent rows: it spawns none worth a row (plan 6C).
-                subagents: Option.none(),
-              },
-              toParentMessage: (message) =>
-                Message.GotScratchThreadMessage({ message }),
-            })
-          )
-        ),
-        h.submodel({
-          slotId: "scratch-foot",
-          model: model.nextShell,
-          view: Shell.scratchFootView,
-          toParentMessage: toShell,
-        }),
       ]),
-    ]
+      role: "dialog",
+      focusSelector: Option.some(SCRATCH_FOCUS),
+      onClose: toShell(ShellMessage.ClickedCloseScratch()),
+      onSettled: toShell(ShellMessage.SettledOverlay()),
+    },
+    [
+      scratchBody(
+        h,
+        Option.map(threadId, () =>
+          h.submodel({
+            slotId: "scratch-thread",
+            model: model.scratchThread,
+            view: Thread.view,
+            viewInputs: {
+              workspaceRoot: Option.none(),
+              launchFailure: Option.none(),
+              // The scratch thread has no subagent rows: it spawns none worth a row (plan 6C).
+              subagents: Option.none(),
+            },
+            toParentMessage: (message) =>
+              Message.GotScratchThreadMessage({ message }),
+          })
+        )
+      ),
+      Pages.scratchComposer(model, h),
+    ],
+    []
   );
 };
 

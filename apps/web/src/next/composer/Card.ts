@@ -184,6 +184,16 @@ export const cardView = (
         Option.isSome(contextStrip),
         h.DataAttribute("with-context", "true")
       ),
+      // An open menu closes on Escape from anywhere in the box: its trigger keeps the focus, so
+      // the menu's own handler would not hear it, and the scratch overlay's dialog would close.
+      ...onlyIf(
+        Option.isSome(model.popover),
+        h.OnKeyDownPreventDefault((key) =>
+          key === "Escape"
+            ? Option.some(Message.ClosedPopover())
+            : Option.none()
+        )
+      ),
       h.Class("relative"),
     ],
     [

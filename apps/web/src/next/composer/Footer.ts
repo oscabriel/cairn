@@ -16,7 +16,6 @@ import { shouldUseCompactComposerFooter } from "@cairn/client-logic/FooterLayout
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { runtimeModePresentation } from "@cairn/client-logic/RuntimeMode";
 import type { RuntimeModeIcon } from "@cairn/client-logic/RuntimeMode";
-import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {
@@ -31,7 +30,7 @@ import {
 
 import { hasAttachments } from "../../attachments/Update.ts";
 import { ATTACH_ACCEPT, pickedFiles } from "../../attachments/View.ts";
-import { activeDraft, draftKey, isDraftTarget } from "../../composer/Drafts.ts";
+import { activeDraft, draftKey, runtimeModeOf } from "../../composer/Drafts.ts";
 import { MeasureFooter } from "../../composer/Footer.ts";
 import { icon } from "../../composer/Icon.ts";
 import type { IconNode } from "../../composer/Icon.ts";
@@ -67,14 +66,6 @@ const RUNTIME_ICONS: Readonly<Record<RuntimeModeIcon, IconNode>> = {
 
 const isOpen = (model: Model, tag: Popover["_tag"]): boolean =>
   Option.exists(model.popover, (popover) => popover._tag === tag);
-
-const runtimeModeOf = (model: Model): RuntimeMode =>
-  isDraftTarget(model)
-    ? activeDraft(model).runtimeMode
-    : Option.match(model.context.thread, {
-        onNone: () => "full-access",
-        onSome: (thread) => thread.runtimeMode,
-      });
 
 const controlIcon = (
   h: HtmlBuilder<Message>,

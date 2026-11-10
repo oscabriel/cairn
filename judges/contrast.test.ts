@@ -19,8 +19,11 @@
 // `drop-shadow-blue-400`; the palettes are read from the installed Tailwind's theme.css), no
 // arbitrary colour (`bg-[#fff]`, `bg-[red]`), no colour literal (hex, `rgb()`, `hsl()`,
 // `oklch()`...) and no named colour in a colour property (`{ color: "white" }`, `fill: red`) in
-// `next/` outside tokens.css. The token forms `text-(--ink-2)` and `text-[color:var(--ink-2)]`
-// pass. Comments and tests are skipped.
+// `next/` outside tokens.css or in any file a `next` view imports. The token forms `text-(--ink-2)` and `text-[color:var(--ink-2)]`
+// pass. Comments and tests are skipped. The same files hold no classic colour name (styles.css's
+// `text-muted-foreground`, `bg-accent/60`, `border-border`: names outside the tokens, which the
+// pairs above do not judge) and no glass utility (`dropdown-glass`, a backdrop blur), but those an
+// exact, reasoned list keeps.
 //
 // The look candidates and their `data-look` switch are gone (L2b): a rule naming any selector but
 // the next frame's, `data-look` among them, fails the scope check.
@@ -566,6 +569,51 @@ const withoutComments = (text: string): string =>
 /** A look switch: a `data-look` attribute or selector, or a view writing one. */
 const LOOK_SWITCH = /data-look(?![\w-])|DataAttribute\(\s*["']look["']/u;
 
+const webSource = path.join(root, "apps/web/src");
+
+/** A relative import or re-export in a module: `from "./x.ts"`, `import "./x.css"`, `import("./x.ts")`. */
+const RELATIVE_IMPORT =
+  /(?:\bfrom\s+|\bimport\s*\(?\s*)["'](?<specifier>\.{1,2}\/[^"']+)["']/gu;
+
+/**
+ * Every source file a `next` view reaches through relative imports, `next/` itself included: the
+ * classic regions a `next` view still draws (the composer's editor and popovers, the transcript's
+ * rows) are held to the lint too, so none escapes it (U-13). Within `apps/web/src`, tests and
+ * tokens.css left out.
+ */
+const nextReach = (): ReadonlyArray<string> => {
+  const seen = new Set<string>();
+  const pending = [...nextFiles(nextDirectory)];
+
+  for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+    if (!seen.has(file)) {
+      seen.add(file);
+
+      if (file.endsWith(".ts")) {
+        const text = withoutComments(readFileSync(file, "utf-8"));
+
+        for (const match of text.matchAll(RELATIVE_IMPORT)) {
+          const target = path.resolve(
+            path.dirname(file),
+            match.groups?.specifier ?? ""
+          );
+
+          if (
+            target.startsWith(`${webSource}${path.sep}`) &&
+            SCANNED.test(target) &&
+            !target.endsWith(".test.ts") &&
+            target !== tokensPath
+          ) {
+            pending.push(target);
+          }
+        }
+      }
+    }
+  }
+
+  return [...seen].toSorted();
+};
+
 const tokensText = readFileSync(tokensPath, "utf-8");
 
 const tokens = readTokens(tokensText);
@@ -682,6 +730,70 @@ describe("contrast of the next tokens", () => {
     }
 
     assert.deepStrictEqual(found, []);
+  });
+
+  it("judges the pairs of the classic regions redrawn on the tokens (U-13)", () => {
+    // Each region's text over the grounds it is drawn on: these must be among the judged pairs,
+    // so a region's colours change only with a token the judge already reads.
+    const REGION_PAIRS: ReadonlyArray<{
+      readonly region: string;
+      readonly text: string;
+      readonly ground: ReadonlyArray<string>;
+    }> = [
+      // The composer's placeholder (`composer/Editor.ts`) on its raised box, and on the box's
+      // ground while a thread's context is dragged over it.
+      { region: "placeholder", text: "--ink-3", ground: ["--surface-raised"] },
+      {
+        region: "placeholder",
+        text: "--ink-3",
+        ground: ["--surface-raised", "--select-2"],
+      },
+      // The model picker (`composer/Popovers.ts`) and the hero's project picker (`ui/Combobox.ts`):
+      // the panel, highlighted and selected rows, the provider rail and the thinking band.
+      ...["--ink-1", "--ink-2", "--ink-3"].map((text) => ({
+        region: "picker",
+        text,
+        ground: ["--surface-overlay"],
+      })),
+      ...["--select-1", "--select-2", "--select-3", "--select-4"].flatMap(
+        (step) =>
+          ["--ink-1", "--ink-2", "--ink-3"].map((text) => ({
+            region: "picker",
+            text,
+            ground: ["--surface-overlay", step],
+          }))
+      ),
+    ];
+
+    const report: Array<string> = [];
+
+    for (const theme of THEMES) {
+      const judged = judge(tokens, theme);
+
+      for (const pair of REGION_PAIRS) {
+        const found = judged.find(
+          (each) =>
+            each.text === pair.text &&
+            each.ground.join(" + ") === pair.ground.join(" + ")
+        );
+
+        assert.isDefined(
+          found,
+          `${theme}: ${pair.region}'s ${pair.text} on ${pair.ground.join(" + ")} is not judged`
+        );
+
+        if (found !== undefined) {
+          assert.isAtLeast(found.ratio, TEXT_RATIO, `${theme}: ${pair.region}`);
+          report.push(
+            `${theme}: ${pair.region} ${pair.text} on ${pair.ground.join(" + ")} ${found.ratio.toFixed(2)}`
+          );
+        }
+      }
+    }
+
+    if (process.env.CONTRAST_REPORT === "1") {
+      console.log(report.join("\n"));
+    }
   });
 
   it("fails a planted 40 percent ink, a missing token and an unreadable value", () => {
@@ -812,6 +924,249 @@ const coloursIn = (text: string): ReadonlyArray<string> => {
   );
 };
 
+const stylesText = readFileSync(
+  path.join(root, "apps/web/src/styles.css"),
+  "utf-8"
+);
+
+/**
+ * The classic colour names: every Tailwind colour styles.css declares (`--color-<name>`) that is
+ * not a `next` token (`muted-foreground`, `accent`, `popover`, `border`, `placeholder`...). Inside
+ * the frame tokens.css's bridge points them at token values, but the contrast judge reads only the
+ * tokens' pairs, so a class drawn with one (the placeholder at `text-placeholder/75`, 3.95:1)
+ * escapes it. Read from styles.css, so a classic name added there is linted too.
+ */
+const CLASSIC_NAMES: ReadonlyArray<string> = [
+  ...new Set(
+    [...stylesText.matchAll(/--color-(?<name>[a-z][\w-]*):/gu)].flatMap(
+      (match) => {
+        const name = match.groups?.name ?? "";
+
+        // A palette shade (`zinc-25`) is the palette lint's.
+        return COLOUR_TOKEN.test(`--${name}`) || /-\d+$/u.test(name)
+          ? []
+          : [name];
+      }
+    )
+  ),
+].toSorted((a, b) => b.length - a.length);
+
+/**
+ * The glass utilities: styles.css's translucent, blurred grounds (`dropdown-glass`...) and
+ * Tailwind's backdrop blur. A `next` ground is opaque: --surface-overlay under a popover.
+ */
+const GLASS_UTILITIES: ReadonlyArray<string> = [
+  ...[...stylesText.matchAll(/@utility\s+(?<name>[\w-]*glass[\w-]*)/gu)].map(
+    (match) => match.groups?.name ?? ""
+  ),
+  "backdrop-blur(?:-[\\w]+)?",
+];
+
+const CLASSIC: ReadonlyArray<RegExp> = [
+  new RegExp(
+    `(?<![\\w-])(?:${UTILITY})-(?:${CLASSIC_NAMES.join("|")})(?![\\w-])`,
+    "gu"
+  ),
+  new RegExp(`(?<![\\w-])(?:${GLASS_UTILITIES.join("|")})(?![\\w-])`, "gu"),
+];
+
+/** The classic colour names and glass utilities in a file's code. */
+const classicIn = (text: string): ReadonlyArray<string> => {
+  const code = withoutComments(text);
+
+  return CLASSIC.flatMap((pattern) =>
+    [...code.matchAll(pattern)].map((match) => match[0])
+  );
+};
+
+/**
+ * The colours the lint lets stand in a file a `next` view reaches, each for its reason, exactly: a
+ * new colour in one of these files fails as anywhere else, and so does one of these gone, so the
+ * list cannot outlive what it excuses.
+ */
+const ALLOWED = {
+  // A canvas fill that flattens a transparent JPEG onto white before upload; nothing on screen.
+  "apps/web/src/attachments/FitImage.ts": ["#ffffff"],
+  // The attachment thumbnails' remove and overlay controls sit on the user's own picture, whatever
+  // the theme. No token pair holds on an arbitrary image: --scrim is 32% black in light (too thin
+  // under a light glyph) and every ink flips with the theme. Missing: an on-image ground and ink.
+  "apps/web/src/attachments/View.ts": [
+    "bg-black",
+    "text-white",
+    "ring-white",
+    "bg-black",
+    "ring-white",
+    "bg-black",
+    "text-white",
+    "bg-black",
+  ],
+  // Claude's own mark, in its brand orange, as t3code draws it.
+  "apps/web/src/composer/ProviderMark.ts": ["#d97757"],
+  // The favicon's badge, drawn on a canvas for the browser's tab, outside the frame.
+  "apps/web/src/shell/Notifications.ts": ["#e5484d"],
+  // The markdown alerts' palette classes, whose hues next/timeline/timeline.css overrides with the
+  // tone tokens inside the frame.
+  "apps/web/src/timeline/markdown/View.ts": [
+    "border-blue-500",
+    "text-blue-500",
+    "border-emerald-500",
+    "text-emerald-500",
+    "border-violet-500",
+    "text-violet-500",
+    "border-amber-500",
+    "text-amber-500",
+    "border-red-500",
+    "text-red-500",
+  ],
+} satisfies Readonly<Record<string, ReadonlyArray<string>>>;
+
+/**
+ * The classic colour names a file a `next` view reaches still draws with, exactly, each file for
+ * its reason. A new one fails as anywhere else, and so does one of these gone, so the list cannot
+ * outlive what it excuses. The regions U-13 redrew (the composer's placeholder and popovers, the
+ * hero's project picker) are not here and cannot be.
+ */
+const ALLOWED_CLASSIC = {
+  // Two classic regions the frame still draws that U-13 did not name, each waiting for its own
+  // redraw on the tokens (nothing is missing for it): the composer's attachment chips and the
+  // transcript's markdown. Their names resolve to token values through tokens.css's bridge, but
+  // their pairs are not judged.
+  "apps/web/src/attachments/View.ts": [
+    "ring-ring",
+    "ring-offset-background",
+    "text-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-foreground",
+    "bg-accent",
+    "bg-accent",
+    "ring-ring",
+    "text-secondary-label",
+    "bg-background",
+    "border-border",
+    "bg-background",
+    "text-foreground",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-secondary-label",
+    "text-muted-foreground",
+    "text-destructive-foreground",
+  ],
+  "apps/web/src/timeline/markdown/View.ts": [
+    "text-foreground",
+    "decoration-muted-foreground",
+    "decoration-foreground",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "bg-accent",
+    "text-foreground",
+    "border-border",
+    "bg-secondary",
+    "bg-input",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+  ],
+  // Reached but never drawn in the frame: the classic diff panel, off behind
+  // next/diff/Panel.ts's DIFF_PANEL_ENABLED (its view is only the panel's lazy import and its
+  // placeholder is drawn only while the panel is on), the classic changed-files card (a type
+  // import), and the classic button and header classes only those draw.
+  "apps/web/src/diff/Card.ts": [
+    "bg-accent",
+    "ring-ring",
+    "ring-offset-background",
+    "text-diff-addition",
+    "text-diff-deletion",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+    "text-foreground",
+    "bg-secondary",
+    "bg-input",
+    "bg-secondary",
+    "bg-background",
+    "from-input",
+    "to-input",
+    "text-foreground",
+    "text-muted-foreground",
+  ],
+  "apps/web/src/diff/View.ts": [
+    "bg-diff-addition",
+    "bg-diff-deletion",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "bg-muted",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "border-ring",
+    "border-border",
+    "bg-secondary",
+    "text-foreground",
+    "text-muted-foreground",
+    "bg-card",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "text-muted-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-foreground",
+    "text-foreground",
+    "bg-accent",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-destructive-foreground",
+    "text-muted-foreground",
+    "bg-background",
+    "bg-accent",
+    "text-foreground",
+    "text-muted-foreground",
+    "text-foreground",
+  ],
+  "apps/web/src/page/thread/DiffPanel.ts": [
+    "bg-background",
+    "text-muted-foreground",
+  ],
+  "apps/web/src/ui/Button.ts": [
+    "ring-ring",
+    "ring-offset-background",
+    "border-primary",
+    "bg-primary",
+    "text-primary-foreground",
+    "shadow-primary",
+    "bg-primary",
+    "border-input",
+    "bg-popover",
+    "text-foreground",
+    "bg-input",
+    "bg-accent",
+    "bg-input",
+    "text-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-muted-foreground",
+    "bg-accent",
+    "bg-accent",
+    "text-foreground",
+    "bg-secondary",
+    "text-secondary-foreground",
+    "bg-secondary",
+    "bg-secondary",
+  ],
+  "apps/web/src/ui/ChatHeader.ts": [
+    "bg-accent",
+    "ring-ring",
+    "ring-offset-background",
+    "text-foreground",
+    "bg-accent",
+    "text-accent-foreground",
+    "text-muted-foreground",
+  ],
+} satisfies Readonly<Record<string, ReadonlyArray<string>>>;
+
 describe("colours in next", () => {
   it("finds palette utilities and literals in code, not in comments or token names", () => {
     assert.deepStrictEqual(
@@ -870,8 +1225,20 @@ describe("colours in next", () => {
     assert.sameMembers([...TAILWIND_COLOURS.bare], ["black", "white"]);
   });
 
-  it("finds none in next outside tokens.css", () => {
-    const files = nextFiles(nextDirectory);
+  it("finds none in next outside tokens.css, nor in any file a next view imports", () => {
+    const files = nextReach();
+
+    // The reach goes past next/: the classic regions a next view still draws are in it (U-13).
+    for (const classic of [
+      "apps/web/src/composer/Editor.ts",
+      "apps/web/src/composer/Popovers.ts",
+      "apps/web/src/composer/Classes.ts",
+    ]) {
+      assert.include(
+        files.map((file) => path.relative(root, file)),
+        classic
+      );
+    }
 
     const found = Object.fromEntries(
       files.flatMap((file) => {
@@ -884,6 +1251,60 @@ describe("colours in next", () => {
     );
 
     assert.isAbove(files.length, 0);
-    assert.deepStrictEqual(found, {});
+    assert.deepStrictEqual(found, ALLOWED);
+  });
+
+  it("finds classic colour names and glass, with or without an alpha, not tokens", () => {
+    assert.deepStrictEqual(
+      classicIn(
+        'h.Class("text-placeholder/75 text-muted-foreground/55 bg-muted/40 hover:bg-accent data-selected:bg-foreground/[0.08] border-border/70 focus-within:border-ring ring-offset-background shadow-primary/24 placeholder:text-muted-foreground/72 dropdown-glass")'
+      ),
+      [
+        "text-placeholder",
+        "text-muted-foreground",
+        "bg-muted",
+        "bg-accent",
+        "bg-foreground",
+        "border-border",
+        "border-ring",
+        "ring-offset-background",
+        "shadow-primary",
+        "text-muted-foreground",
+        "dropdown-glass",
+      ]
+    );
+    assert.deepStrictEqual(
+      classicIn(
+        '// was text-muted-foreground\nh.Class("text-ink-3 bg-select-2 bg-surface-overlay border-stroke-2 focus-within:border-stroke-focus bg-accent-fill text-accent-ink text-accent-text bg-accent-wash text-tone-done bg-tone-done-wash bg-scrim shadow-(--elevation-3)")'
+      ),
+      []
+    );
+  });
+
+  it("finds no classic colour name or glass in any file a next view reaches, but those listed", () => {
+    const files = nextReach().map((file) => path.relative(root, file));
+
+    // The regions U-13 redrew on the tokens are in the reach and hold none: the composer's
+    // placeholder, its popovers and the hero's project picker.
+    for (const redrawn of [
+      "apps/web/src/composer/Editor.ts",
+      "apps/web/src/composer/Popovers.ts",
+      "apps/web/src/composer/Classes.ts",
+      "apps/web/src/composer/Footer.ts",
+      "apps/web/src/ui/Combobox.ts",
+    ]) {
+      assert.include(files, redrawn);
+      assert.notProperty(ALLOWED_CLASSIC, redrawn);
+    }
+
+    const found = Object.fromEntries(
+      files.flatMap((file) => {
+        const names = classicIn(readFileSync(path.join(root, file), "utf-8"));
+
+        return names.length === 0 ? [] : [[file, names]];
+      })
+    );
+
+    assert.deepStrictEqual(found, ALLOWED_CLASSIC);
   });
 });

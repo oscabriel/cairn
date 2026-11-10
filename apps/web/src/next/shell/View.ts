@@ -1,8 +1,8 @@
 // The `next` shell's views (plan look track L6), each a Submodel view over the shell's Model: the
 // project rail with the selected project's list (a column on a desktop, a sheet on a phone), the
 // chat header's lead and actions, the refresh confirm, the add-project picker, the rename and remove
-// dialog, the read-only bar under an earlier project thread, and the scratch overlay's scrim, head
-// and foot. `Layout.ts` places them around the page's own parts, which keep their own Messages; the
+// dialog, the read-only bar under an earlier project thread, and the scratch overlay's head.
+// `Layout.ts` places them around the page's own parts, which keep their own Messages; the
 // look catalogue draws them over a fixture.
 
 import { managedGroupsOf } from "@cairn/client-logic/Sidebar";
@@ -17,6 +17,7 @@ import { classNames } from "../../ui/ClassNames.ts";
 import { chunkModule } from "../page/Chunks.ts";
 import { buttonDefaults, button } from "../ui/Button.ts";
 import { TYPE } from "../ui/Classes.ts";
+import type { SheetPlacement } from "../ui/Sheet.ts";
 import {
   managedMetaOf,
   managedThreadsFor,
@@ -40,8 +41,7 @@ import { ManageAction, MenuTarget } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { projectFaviconUrl, rail } from "./Rail.ts";
 import type { RailBubble, RailDirection } from "./Rail.ts";
-import { scratchFoot, scratchHead, scratchScrim } from "./Scratch.ts";
-import type { Placement } from "./Scratch.ts";
+import { scratchHeadExtras } from "./Scratch.ts";
 import { sidebarList } from "./Sidebar.ts";
 import type {
   ManagedContent,
@@ -387,9 +387,9 @@ export const headerActionsView = Submodel.defineView<Model, Message>(
   (model, h) => headerActions(h, headerContentOf(model))
 );
 
-/** Where an overlay view sits. */
+/** Where an overlay view sits: over the page as a dialog, or in a catalogue specimen's box. */
 export interface PlacementInput {
-  readonly placement: Placement;
+  readonly placement: SheetPlacement;
 }
 
 /** The refresh confirm, while a refresh is being asked and its chunk is in. */
@@ -423,21 +423,9 @@ export const addProjectView = Submodel.defineView<
   })
 );
 
-/** The scratch overlay's scrim. */
-export const scratchScrimView = Submodel.defineView<
-  Model,
-  Message,
-  PlacementInput
->((_model, { placement }, h) => scratchScrim(h, placement));
-
-/** The scratch overlay's head. */
+/** The scratch overlay's head, beside its title: what it is, the shortcut, and Clear. */
 export const scratchHeadView = Submodel.defineView<Model, Message>((model, h) =>
-  scratchHead(h, model.scratch, scratchKeysOf(model))
-);
-
-/** The scratch overlay's foot. */
-export const scratchFootView = Submodel.defineView<Model, Message>((model, h) =>
-  scratchFoot(h, model.scratch, model.failure)
+  scratchHeadExtras(h, model.scratch, scratchKeysOf(model))
 );
 
 /** A project's name and folder, for the dialog. */

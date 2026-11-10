@@ -1,6 +1,8 @@
 // The rename and remove dialog of the basic management actions (U-10; the menus are `Manage.ts`):
 // Rename project and Rename thread edit the name; Remove project confirms, saying what happens to
-// the project's threads. Its own chunk (`next/page/Chunks.ts`): a cold load never draws it.
+// the project's threads. It is the `next` sheet in its dialog shape (an alert dialog for a remove,
+// which nothing undoes), and its own chunk (`next/page/Chunks.ts`): a cold load never draws it. The
+// name field takes focus when it opens, Cancel on a remove.
 
 import { Option, Predicate } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -13,15 +15,15 @@ import {
   FOCUS_WITHIN_RING,
   TYPE,
   WEIGHT_MEDIUM,
-  WEIGHT_STRONG,
 } from "../ui/Classes.ts";
+import { placedSheet, sheetDefaults } from "../ui/Sheet.ts";
+import type { SheetPlacement } from "../ui/Sheet.ts";
 import { Message } from "./Message.ts";
 import { MANAGE_TEXT_ID, ManageAction } from "./Model.ts";
 import type { ManageState } from "./Model.ts";
-import type { Placement } from "./Scratch.ts";
-import { positionOf } from "./Scratch.ts";
 
-const TITLE_ID = "manage-title";
+/** The dialog's id; its dialog's and its title's ids derive from it. */
+const MANAGE_ID = "manage-dialog";
 
 /** What the dialog says about its target: the project's or the thread's name and root. */
 export interface ManageNames {
@@ -43,7 +45,10 @@ const nameField = (h: HtmlBuilder<Message>, manage: ManageState): Html =>
     [h.Class("flex flex-col gap-(--space-1-5)")],
     [
       h.label(
-        [h.For(MANAGE_TEXT_ID), h.Class(classNames(TYPE.ui, WEIGHT_MEDIUM))],
+        [
+          h.For(MANAGE_TEXT_ID),
+          h.Class(classNames("text-ink-1", TYPE.ui, WEIGHT_MEDIUM)),
+        ],
         ["Name"]
       ),
       h.div(
@@ -84,109 +89,102 @@ const nameField = (h: HtmlBuilder<Message>, manage: ManageState): Html =>
 const removeWords = (names: ManageNames): string =>
   `Its project thread, its earlier project threads and the threads they manage leave Cairn, and any of them still working stops. The folder ${names.folder} and everything in it stays on the Beelink, and you can add it again as a project.`;
 
-/** The rename or remove dialog and its scrim, while one is open; nothing otherwise. */
+const body = (
+  h: HtmlBuilder<Message>,
+  open: ManageState,
+  names: ManageNames,
+  isRemove: boolean
+): Html =>
+  h.div(
+    [h.Class("flex flex-col gap-(--space-3)")],
+    [
+      isRemove
+        ? h.p(
+            [
+              h.DataAttribute("testid", "manage-remove-words"),
+              h.Class(classNames("text-ink-2", TYPE.ui)),
+            ],
+            [removeWords(names)]
+          )
+        : nameField(h, open),
+      Option.match(open.failure, {
+        onNone: () => h.empty,
+        onSome: (text) =>
+          banner(
+            h,
+            {
+              tone: "failed",
+              mark: Option.none(),
+              title: isRemove ? "Not removed." : "Not renamed.",
+              detail: Option.some(text),
+              actions: [],
+            },
+            [h.DataAttribute("testid", "manage-failure")]
+          ),
+      }),
+    ]
+  );
+
+const actions = (
+  h: HtmlBuilder<Message>,
+  open: ManageState,
+  isRemove: boolean
+): ReadonlyArray<Html> => [
+  button(
+    h,
+    {
+      ...buttonDefaults<Message>(),
+      variant: "ghost",
+      onClick: Option.some(Message.ClickedCancelManage()),
+      attributes: [
+        h.Id(`${MANAGE_TEXT_ID}-cancel`),
+        h.DataAttribute("testid", "manage-cancel"),
+      ],
+    },
+    ["Cancel"]
+  ),
+  button(
+    h,
+    {
+      ...buttonDefaults<Message>(),
+      variant: isRemove ? "danger" : "primary",
+      onClick: Option.some(Message.ClickedConfirmManage()),
+      isDisabled: !isRemove && open.text.trim() === "",
+      isBusy: open.isSending,
+      attributes: [h.DataAttribute("testid", "manage-confirm")],
+    },
+    [isRemove ? "Remove project" : "Save"]
+  ),
+];
+
+/** The rename or remove dialog, while one is open; nothing otherwise. */
 export const manageDialog = (
   h: HtmlBuilder<Message>,
   manage: Option.Option<ManageState>,
   names: ManageNames,
-  placement: Placement
+  placement: SheetPlacement
 ): Html =>
   Option.match(manage, {
     onNone: () => h.empty,
     onSome: (open) => {
-      const position = positionOf(placement);
       const isRemove = Predicate.isTagged(open.action, "RemoveProject");
 
-      return h.div(
-        [h.DataAttribute("slot", "manage"), h.Class("contents")],
-        [
-          h.div([
-            h.AriaHidden(true),
-            h.OnClick(Message.ClickedCancelManage()),
-            h.Class(classNames(position, "inset-0 z-(--layer-scrim) bg-scrim")),
-          ]),
-          h.section(
-            [
-              h.DataAttribute("testid", "manage-dialog"),
-              h.Role(isRemove ? "alertdialog" : "dialog"),
-              h.AriaModal(true),
-              h.AriaLabelledBy(TITLE_ID),
-              h.Class(
-                classNames(
-                  position,
-                  "inset-x-(--space-3) top-24 z-(--layer-sheet) mx-auto flex max-w-lg flex-col gap-(--space-3) rounded-(--radius-large) border border-stroke-2 bg-surface-overlay p-(--space-4) text-ink-1 shadow-(--elevation-3)"
-                )
-              ),
-            ],
-            [
-              h.h2(
-                [
-                  h.Id(TITLE_ID),
-                  h.Class(classNames(TYPE.title, WEIGHT_STRONG)),
-                ],
-                [titleOf(open.action, names)]
-              ),
-              isRemove
-                ? h.p(
-                    [
-                      h.DataAttribute("testid", "manage-remove-words"),
-                      h.Class(classNames("text-ink-2", TYPE.ui)),
-                    ],
-                    [removeWords(names)]
-                  )
-                : nameField(h, open),
-              Option.match(open.failure, {
-                onNone: () => h.empty,
-                onSome: (text) =>
-                  banner(
-                    h,
-                    {
-                      tone: "failed",
-                      mark: Option.none(),
-                      title: isRemove ? "Not removed." : "Not renamed.",
-                      detail: Option.some(text),
-                      actions: [],
-                    },
-                    [h.DataAttribute("testid", "manage-failure")]
-                  ),
-              }),
-              h.div(
-                [
-                  h.Class(
-                    "flex flex-wrap items-center justify-end gap-(--space-2)"
-                  ),
-                ],
-                [
-                  button(
-                    h,
-                    {
-                      ...buttonDefaults<Message>(),
-                      variant: "ghost",
-                      onClick: Option.some(Message.ClickedCancelManage()),
-                      attributes: [
-                        h.Id(`${MANAGE_TEXT_ID}-cancel`),
-                        h.DataAttribute("testid", "manage-cancel"),
-                      ],
-                    },
-                    ["Cancel"]
-                  ),
-                  button(
-                    h,
-                    {
-                      ...buttonDefaults<Message>(),
-                      variant: isRemove ? "danger" : "primary",
-                      onClick: Option.some(Message.ClickedConfirmManage()),
-                      isDisabled: !isRemove && open.text.trim() === "",
-                      isBusy: open.isSending,
-                      attributes: [h.DataAttribute("testid", "manage-confirm")],
-                    },
-                    [isRemove ? "Remove project" : "Save"]
-                  ),
-                ]
-              ),
-            ]
+      return placedSheet(
+        h,
+        placement,
+        {
+          ...sheetDefaults<Message>(MANAGE_ID, titleOf(open.action, names)),
+          kind: "dialog",
+          role: isRemove ? "alertdialog" : "dialog",
+          focusSelector: Option.some(
+            isRemove ? `#${MANAGE_TEXT_ID}-cancel` : `#${MANAGE_TEXT_ID}`
           ),
-        ]
+          onClose: Message.ClickedCancelManage(),
+          onSettled: Message.SettledOverlay(),
+          attributes: [h.DataAttribute("testid", "manage-dialog")],
+        },
+        [body(h, open, names, isRemove)],
+        actions(h, open, isRemove)
       );
     },
   });

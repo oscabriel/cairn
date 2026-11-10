@@ -1,6 +1,7 @@
 // How the root derives the composer's context from its own state. Kept here so the root's wiring is
-// one call: the route names the target, the shell gives the projects and the thread's row, the
-// thread page gives its view, and `session.hello` the server's defaults. Arrays and rows are passed
+// one call: the route names the target (the scratch overlay names it while shown), the shell gives
+// the projects and the thread's row, the thread page gives its view, and `session.hello` the
+// server's defaults. Arrays and rows are passed
 // through untouched, so `contextChanged` can compare them by identity. Of the thread's view the
 // composer keeps only the `pi.inbox` document and the user's prompts, which a streamed token does
 // not change.
@@ -36,6 +37,14 @@ export interface ComposerContextInput {
   readonly threadView: Option.Option<ConversationView>;
   readonly defaults: Option.Option<ModelDefaults>;
   readonly usage: Option.Option<UsageSnapshot>;
+  /** The scratch overlay, while it is shown: the composer serves it instead of the route. */
+  readonly scratch: Option.Option<ScratchInput>;
+}
+
+/** The shown scratch overlay: its thread once launched, and that thread's view. */
+export interface ScratchInput {
+  readonly threadId: Option.Option<ThreadId>;
+  readonly threadView: Option.Option<ConversationView>;
 }
 
 const HistoryMessage = Schema.Struct({
@@ -129,14 +138,31 @@ export const composerTarget = (
     NotFound: () => ComposerTarget.None(),
   });
 
-/** The composer's context from the root's state. */
+/**
+ * The composer's context from the root's state: the routed page's, or the scratch overlay's while
+ * it is shown (its thread's row, queue and prompts).
+ */
 export const composerContext = (
   input: ComposerContextInput
 ): ComposerContext => {
-  const view = Option.isSome(input.threadId) ? input.threadView : Option.none();
+  const threadId = Option.match(input.scratch, {
+    onNone: () => input.threadId,
+    onSome: (scratch) => scratch.threadId,
+  });
+
+  const threadView = Option.match(input.scratch, {
+    onNone: () => input.threadView,
+    onSome: (scratch) => scratch.threadView,
+  });
+
+  const view = Option.isSome(threadId) ? threadView : Option.none();
 
   return {
-    target: composerTarget(input.route, input.threadId),
+    target: Option.match(input.scratch, {
+      onNone: () => composerTarget(input.route, input.threadId),
+      onSome: (scratch) =>
+        ComposerTarget.Scratch({ threadId: scratch.threadId }),
+    }),
     epoch: input.epoch,
     hasClient: input.hasClient,
     live: input.live,
@@ -144,7 +170,7 @@ export const composerContext = (
       onNone: () => NO_PROJECTS,
       onSome: (shell) => shell.projects,
     }),
-    thread: Option.flatMap(input.threadId, (id) =>
+    thread: Option.flatMap(threadId, (id) =>
       Option.flatMap(input.shell, (shell) =>
         Array.findFirst(shell.threads, (thread) => thread.id === id)
       )

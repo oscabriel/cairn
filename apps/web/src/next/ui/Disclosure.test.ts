@@ -1,8 +1,6 @@
-// Scene tests for the `next` disclosure, tally and stepper: a disclosure's header says whether it is
-// open and which body it controls, toggles from a click, Enter or Space, sends nothing while
-// disabled, and holds its body only while open; a tally reads its counts with their words in
-// tabular figures and leaves out empty parts after the first; a stepper says each step's state in
-// words and marks the working one, and its pill sums the steps.
+// Scene tests for the `next` disclosure: its header says whether it is open and which body it
+// controls, toggles from a click, Enter or Space, sends nothing while disabled, and holds its body
+// only while open.
 
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
@@ -11,24 +9,6 @@ import * as Scene from "foldkit/scene";
 import { disclosure } from "./Disclosure.ts";
 import { appOf, expectSent, given, sent } from "./SceneFixture.ts";
 import type { Message } from "./SceneFixture.ts";
-import type { Step } from "./Stepper.ts";
-import { stepper, stepsPill, stepsTone, stepWord } from "./Stepper.ts";
-import { tally, tallyText } from "./Tally.ts";
-import type { TallyPart } from "./Tally.ts";
-
-const PARTS: ReadonlyArray<TallyPart> = [
-  { count: 4, word: "agents", tone: "neutral" },
-  { count: 2, word: "working", tone: "working" },
-  { count: 0, word: "failed", tone: "failed" },
-  { count: 1, word: "done", tone: "done" },
-];
-
-const STEPS: ReadonlyArray<Step> = [
-  { title: "Read the note", state: "done", meta: Option.some("1m") },
-  { title: "Port the tests", state: "done", meta: Option.none() },
-  { title: "Port the panel", state: "working", meta: Option.none() },
-  { title: "Run the judge", state: "todo", meta: Option.none() },
-];
 
 const toggled =
   (id: string) =>
@@ -48,7 +28,9 @@ const app = appOf((h) => [
     {
       glyph: Option.none(),
       title: "Worked for 4m",
-      tally: Option.some(tally(h, PARTS, [h.DataAttribute("testid", "tally")])),
+      tally: Option.some(
+        h.span([h.DataAttribute("testid", "tally")], ["4 agents"])
+      ),
       body: [h.p([], ["Folded body"])],
     }
   ),
@@ -64,8 +46,10 @@ const app = appOf((h) => [
     {
       glyph: Option.none(),
       title: "Build",
-      tally: Option.some(stepsPill(h, STEPS, Option.none())),
-      body: [stepper(h, "Build steps", STEPS)],
+      tally: Option.none(),
+      body: [
+        h.ul([h.AriaLabel("Build steps")], [h.li([], ["Port the panel"])]),
+      ],
     }
   ),
   disclosure(
@@ -84,9 +68,6 @@ const app = appOf((h) => [
       body: [],
     }
   ),
-  stepsPill(h, STEPS, Option.some(sent("steps")), [
-    h.DataAttribute("testid", "pill"),
-  ]),
 ]);
 
 describe("the next disclosure", () => {
@@ -150,112 +131,6 @@ describe("the next disclosure", () => {
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
-    );
-  });
-});
-
-describe("the next tally", () => {
-  it("reads its counts with their words, leaving out empty parts after the first", () => {
-    Scene.scene(
-      app,
-      given,
-      Scene.expect(Scene.testId("tally")).toHaveText(
-        "4 agents·2 working·1 done"
-      ),
-      Scene.inside(
-        Scene.testId("tally"),
-        Scene.expect(Scene.selector('[data-tally-part="failed"]')).not.toExist()
-      ),
-      Scene.inside(
-        Scene.testId("tally"),
-        Scene.expect(Scene.selector('[data-tally-part="working"]')).toHaveClass(
-          "text-tone-working"
-        )
-      ),
-      Scene.inside(
-        Scene.testId("tally"),
-        Scene.expectAll(Scene.all.selector(".tabular-nums")).toHaveCount(3)
-      ),
-      Scene.tap(({ commands }) => {
-        assert.lengthOf(commands, 0);
-      })
-    );
-  });
-
-  it("keeps the first part even at zero", () => {
-    assert.strictEqual(tallyText(PARTS), "4 agents · 2 working · 1 done");
-    assert.strictEqual(
-      tallyText([
-        { count: 0, word: "agents", tone: "neutral" },
-        { count: 0, word: "working", tone: "working" },
-      ]),
-      "0 agents"
-    );
-  });
-});
-
-describe("the next stepper", () => {
-  it("says each step's state in words and marks the working step current", () => {
-    Scene.scene(
-      app,
-      given,
-      Scene.expectAll(Scene.all.role("listitem")).toHaveCount(4),
-      Scene.expect(Scene.selector('[aria-current="step"]')).toHaveText(
-        "Port the panelworking"
-      ),
-      Scene.expect(Scene.selector('[data-step-state="todo"]')).toHaveText(
-        "Run the judgeto do"
-      ),
-      Scene.inside(
-        Scene.selector('[data-step-state="todo"]'),
-        Scene.expect(Scene.selector('[data-glyph="todo"]')).toExist()
-      ),
-      Scene.inside(
-        Scene.selector('[aria-current="step"]'),
-        Scene.expect(Scene.selector('[data-glyph="busy"]')).toExist()
-      ),
-      Scene.tap(({ commands }) => {
-        assert.lengthOf(commands, 0);
-      })
-    );
-
-    assert.deepStrictEqual(
-      (["todo", "working", "done", "failed"] as const).map(stepWord),
-      ["to do", "working", "done", "failed"]
-    );
-  });
-
-  it("sums the steps in a pill that opens the steps sheet", () => {
-    Scene.scene(
-      app,
-      given,
-      Scene.expect(Scene.testId("pill")).toHaveText("2/42 of 4 steps"),
-      Scene.expect(Scene.testId("pill")).toHaveAttr("data-tone", "working"),
-      Scene.expect(Scene.testId("pill")).toHaveAttr("aria-haspopup", "dialog"),
-      Scene.expect(Scene.testId("pill")).toHaveClass(
-        "pointer-coarse:min-h-(--hit-target)"
-      ),
-      Scene.click(Scene.testId("pill")),
-      expectSent("steps"),
-      Scene.tap(({ commands }) => {
-        assert.lengthOf(commands, 0);
-      })
-    );
-
-    assert.strictEqual(
-      stepsTone([
-        ...STEPS,
-        { title: "x", state: "failed", meta: Option.none() },
-      ]),
-      "failed"
-    );
-    assert.strictEqual(
-      stepsTone(STEPS.map((step) => ({ ...step, state: "done" as const }))),
-      "done"
-    );
-    assert.strictEqual(
-      stepsTone(STEPS.map((step) => ({ ...step, state: "todo" as const }))),
-      "neutral"
     );
   });
 });

@@ -11,14 +11,11 @@ import {
   rowId,
   shellRow,
 } from "@cairn/client-logic/ShellRowTestKit";
-import { RequestId } from "@cairn/protocol/Ids";
-import { SendInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 
-import { OutboxItem } from "../../connection/Outbox.ts";
 import { AppRoute } from "../../Route.ts";
 import {
   managedThreadsFor,
@@ -45,7 +42,13 @@ import {
   shellModelOn,
 } from "./ShellFixtures.ts";
 import { sidebarList } from "./Sidebar.ts";
-import { inform, update, USAGE_PATH } from "./Update.ts";
+import {
+  adoptScratchThread,
+  forgetScratchLaunch,
+  inform,
+  update,
+  USAGE_PATH,
+} from "./Update.ts";
 import {
   headerContentOf,
   isEarlierThreadOpen,
@@ -505,133 +508,120 @@ describe("the shell's update", () => {
     }
   });
 
-  it("shows and hides the scratch thread on its shortcut, and Escape closes the confirm first", () => {
+  it("shows and hides the scratch thread on its shortcut; its dialog, not the update, moves focus", () => {
     const shown = update(
       onProjectThread,
       Message.PressedScratchShortcut()
     ).model;
 
     assert.isTrue(shown.scratch.isOpen);
-    // The overlay takes the keyboard from the composer behind it, and so does the refresh confirm.
+    // Each overlay is a dialog that moves focus in as it mounts and back as it leaves
+    // (`next/ui/Sheet.ts`); a focus Command from here would land first and become the place
+    // focus goes back to.
     assert.deepStrictEqual(
-      update(onProjectThread, Message.PressedScratchShortcut()).commands?.map(
-        (command) => [command.name, command.args]
+      [
+        update(onProjectThread, Message.PressedScratchShortcut()),
+        update(onProjectThread, Message.ClickedRefresh()),
+        update(onProjectThread, Message.ClickedAddProject()),
+        update(
+          onProjectThread,
+          Message.ClickedManage({
+            action: ManageAction.RenameProject({ projectId: CAIRN }),
+          })
+        ),
+      ].map((step) =>
+        (step.commands ?? [])
+          .map((command) => command.name)
+          .filter((name) => name !== "BrowseFolders")
       ),
-      [["FocusField", { selector: "#scratch-editor" }]]
-    );
-    assert.deepStrictEqual(
-      update(onProjectThread, Message.ClickedRefresh()).commands?.map(
-        (command) => [command.name, command.args]
-      ),
-      [["FocusField", { selector: "#refresh-text" }]]
-    );
-    assert.deepStrictEqual(
-      update(shown, Message.PressedScratchShortcut()).commands ?? [],
-      []
+      [[], [], [], []]
     );
     assert.isFalse(
       update(shown, Message.PressedScratchShortcut()).model.scratch.isOpen
     );
+    assert.isFalse(
+      update(shown, Message.ClickedCloseScratch()).model.scratch.isOpen,
+      "Escape, the scrim and Hide close it through its dialog"
+    );
+  });
+
+  it("leaves Escape to an open overlay's dialog, and closes only a menu itself", () => {
+    const shown = update(
+      onProjectThread,
+      Message.PressedScratchShortcut()
+    ).model;
 
     const both = update(shown, Message.ClickedRefresh()).model;
     const escaped = update(both, Message.PressedEscape()).model;
 
-    assert.isTrue(Option.isNone(escaped.refresh));
+    assert.isTrue(Option.isSome(escaped.refresh));
     assert.isTrue(escaped.scratch.isOpen);
+
+    const withMenu = update(
+      onProjectThread,
+      Message.ClickedMenu({ target: MenuTarget.Project({ projectId: CAIRN }) })
+    ).model;
+
+    assert.isTrue(Option.isSome(withMenu.menu));
+    assert.isTrue(
+      Option.isNone(update(withMenu, Message.PressedEscape()).model.menu)
+    );
+    // The dialog's other news (it took or gave back the page) changes nothing.
+    assert.strictEqual(update(both, Message.SettledOverlay()).model, both);
+  });
+
+  it("follows the window across lg: the work and goal panels are columns there, sheets below", () => {
+    const wide = update(
+      onProjectThread,
+      Message.ChangedWidth({ isWide: true })
+    ).model;
+
+    assert.isTrue(wide.isWide);
     assert.isFalse(
-      update(escaped, Message.PressedEscape()).model.scratch.isOpen
+      update(wide, Message.ChangedWidth({ isWide: false })).model.isWide
     );
   });
 
-  it("launches the scratch thread with its first message, sends after, and clears it", () => {
+  it("holds the thread the overlay's composer launched, saves it, and clears it (U-16)", () => {
     const open = update(onProjectThread, Message.ClickedScratchButton()).model;
 
-    const typed = update(
-      open,
-      Message.ChangedScratchDraft({ value: "  " })
-    ).model;
+    assert.deepStrictEqual(
+      update(open, Message.ClickedClearScratch()).commands ?? [],
+      [],
+      "Clear with no thread deletes nothing"
+    );
+
+    const adopted = adoptScratchThread(SCRATCH_THREAD)(open);
 
     assert.deepStrictEqual(
-      update(typed, Message.PressedScratchEnter()).commands ?? [],
-      []
-    );
-
-    const unready = update(
-      update(open, Message.ChangedScratchDraft({ value: "What is fsync?" }))
-        .model,
-      Message.ClickedSendScratch()
-    ).model;
-
-    assert.isTrue(
-      Option.isSome(unready.failure),
-      "no defaults yet, no thread yet"
-    );
-
-    const ready: Model = {
-      ...open,
-      context: {
-        ...open.context,
-        defaults: Option.some({
-          model: { provider: "opencode-go", modelId: "small" },
-          thinkingLevel: "medium",
-        }),
-      },
-      scratch: { ...open.scratch, draft: "What is fsync?" },
-    };
-
-    const sent = update(ready, Message.PressedScratchEnter());
-
-    assert.deepStrictEqual(
-      (sent.commands ?? []).map((command) => command.name),
-      ["PrepareScratchTurn"]
-    );
-
-    const launched = update(
-      sent.model,
-      Message.PreparedScratchTurn({
-        item: OutboxItem.Send({
-          input: SendInput.make({
-            threadId: SCRATCH_THREAD,
-            input: {
-              requestId: RequestId.make("req-1"),
-              text: "What is fsync?",
-              attachments: [],
-              skillRefs: [],
-            },
-            whenBusy: "followUp",
-          }),
-        }),
-        threadId: SCRATCH_THREAD,
-      })
-    );
-
-    assert.deepStrictEqual(
-      launched.model.scratch.threadId,
+      adopted.model.scratch.threadId,
       Option.some(SCRATCH_THREAD)
     );
-    assert.strictEqual(launched.model.scratch.draft, "");
     assert.deepStrictEqual(
-      (launched.commands ?? []).map((command) => command.name),
-      ["SaveScratch"]
+      (adopted.commands ?? [])
+        .filter((command) => command.name === "SaveScratch")
+        .map((command) => command.args),
+      [{ threadId: Option.some(SCRATCH_THREAD) }]
     );
-    assert.strictEqual(launched.outMessage?._tag, "RequestedOutbox");
-
-    const followUp = update(
-      {
-        ...launched.model,
-        scratch: { ...launched.model.scratch, draft: "And rename?" },
-      },
-      Message.ClickedSendScratch()
+    assert.strictEqual(
+      adoptScratchThread(SCRATCH_THREAD)(adopted.model).model,
+      adopted.model,
+      "a send to the held thread changes nothing"
     );
 
-    const nextTurn = runOnly(followUp.commands);
-
+    // A launch that did not start lets its thread go; another thread's failure does not.
+    assert.deepStrictEqual(
+      forgetScratchLaunch(rowId(92))(adopted.model).model.scratch.threadId,
+      Option.some(SCRATCH_THREAD)
+    );
     assert.isTrue(
-      Predicate.isTagged(nextTurn, "PreparedScratchTurn") &&
-        Predicate.isTagged(nextTurn.item, "Send")
+      Option.isNone(
+        forgetScratchLaunch(SCRATCH_THREAD)(adopted.model).model.scratch
+          .threadId
+      )
     );
 
-    const clearing = update(launched.model, Message.ClickedClearScratch());
+    const clearing = update(adopted.model, Message.ClickedClearScratch());
     const clear = runOnly(clearing.commands);
 
     assert.isTrue(Predicate.isTagged(clear, "PreparedScratchClear"));
@@ -651,18 +641,6 @@ describe("the shell's update", () => {
   });
 });
 
-const ready = (model: Model, draft: string): Model => ({
-  ...model,
-  context: {
-    ...model.context,
-    defaults: Option.some({
-      model: { provider: "opencode-go", modelId: "small" },
-      thinkingLevel: "medium",
-    }),
-  },
-  scratch: { ...model.scratch, isOpen: true, draft },
-});
-
 const withoutScratchRow = {
   ...SHELL,
   snapshotSequence: 2,
@@ -677,17 +655,15 @@ const listing = (path: string) => ({
 
 describe("the shell's stale answers and overlays", () => {
   it("forgets a scratch thread whose row left the shell, so the next turn launches a new one", () => {
-    const holding: Model = ready(
-      {
-        ...onProjectThread,
-        started: true,
-        scratch: {
-          ...onProjectThread.scratch,
-          threadId: Option.some(SCRATCH_THREAD),
-        },
+    const holding: Model = {
+      ...onProjectThread,
+      started: true,
+      scratch: {
+        ...onProjectThread.scratch,
+        isOpen: true,
+        threadId: Option.some(SCRATCH_THREAD),
       },
-      "Is it still there?"
-    );
+    };
 
     // Another tab pressed Clear: the brain deleted the thread and its row left the shell.
     const cleared = inform(holding, {
@@ -695,15 +671,9 @@ describe("the shell's stale answers and overlays", () => {
       shell: Option.some(withoutScratchRow),
     });
 
-    const sent = update(cleared.model, Message.PressedScratchEnter());
-
-    assert.deepStrictEqual(
-      (sent.commands ?? []).map((command) => [
-        command.name,
-        command.args?.threadId,
-      ]),
-      [["PrepareScratchTurn", Option.none()]],
-      "the turn went to the cleared thread"
+    assert.isTrue(
+      Option.isNone(cleared.model.scratch.threadId),
+      "the overlay still holds the cleared thread, so its composer would send to it"
     );
     // The fold's first read of the project's earlier project threads goes out beside it.
     assert.deepStrictEqual(
@@ -731,45 +701,6 @@ describe("the shell's stale answers and overlays", () => {
     assert.lengthOf(launching.commands ?? [], 0);
   });
 
-  it("keeps what was typed in the scratch field while a turn was being prepared", () => {
-    const typed = ready(
-      { ...onProjectThread, started: true },
-      "What is fsync?"
-    );
-
-    const sent = update(typed, Message.PressedScratchEnter());
-
-    const more = update(
-      sent.model,
-      Message.ChangedScratchDraft({ value: "What is fsync? and fdatasync?" })
-    ).model;
-
-    const prepared = update(
-      more,
-      Message.PreparedScratchTurn({
-        item: OutboxItem.Send({
-          input: SendInput.make({
-            threadId: SCRATCH_THREAD,
-            input: {
-              requestId: RequestId.make("req-2"),
-              text: "What is fsync?",
-              attachments: [],
-              skillRefs: [],
-            },
-            whenBusy: "followUp",
-          }),
-        }),
-        threadId: SCRATCH_THREAD,
-      })
-    ).model;
-
-    assert.strictEqual(
-      prepared.scratch.draft,
-      "and fdatasync?",
-      "the words typed after the send were wiped"
-    );
-  });
-
   it("drops a listing asked by a picker the user closed, after it reopens", () => {
     let model: Model = { ...onProjectThread, started: true };
 
@@ -778,7 +709,7 @@ describe("the shell's stale answers and overlays", () => {
     for (const message of [
       Message.ClickedAddProject(),
       Message.ClickedBrowseFolder({ path: "/home/u/big" }),
-      Message.PressedEscape(),
+      Message.ClickedCancelAddProject(),
       Message.ClickedAddProject(),
       Message.ClickedBrowseFolder({ path: "/home/u/small" }),
     ]) {
@@ -825,7 +756,7 @@ describe("the shell's stale answers and overlays", () => {
       Message.ClickedAddProject(),
       Message.ChangedAddProjectFolder({ value: "/home/u/x" }),
       Message.SubmittedAddProject(),
-      Message.PressedEscape(),
+      Message.ClickedCancelAddProject(),
       Message.ClickedAddProject(),
       Message.ChangedAddProjectFolder({ value: "/home/u/y" }),
     ]) {
@@ -889,10 +820,6 @@ describe("the shell's stale answers and overlays", () => {
         ),
       ]),
       "the confirm closed with nothing on screen"
-    );
-    assert.isTrue(
-      Option.isNone(confirmed.failure),
-      "the scratch overlay holds the refresh's failure"
     );
   });
 });
@@ -1432,8 +1359,11 @@ describe("the project and thread menus (U-10)", () => {
       dispatched(update(renaming, Message.ClickedConfirmManage())),
       { action: rename, text: threadOf(managedId).title }
     );
+    // Escape reaches the dialog as its Cancel (`next/ui/Sheet.ts`).
     assert.isTrue(
-      Option.isNone(update(renaming, Message.PressedEscape()).model.manage)
+      Option.isNone(
+        update(renaming, Message.ClickedCancelManage()).model.manage
+      )
     );
 
     const menu = update(

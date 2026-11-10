@@ -10,8 +10,9 @@
 // document the thread stream carries. A mark on its way shows its button busy, never the state it
 // asks for.
 //
-// The Stone look, as the work panel draws it: colour only on the status marks; beside the chat
-// column from `lg`, a bottom sheet over a scrim below, rows at least 44 px on a coarse pointer.
+// The Stone look, as the work panel draws it: colour only on the status marks; on the `next` sheet,
+// beside the chat column from `lg`, a modal sheet over a scrim below (a dialog), rows at least
+// 44 px on a coarse pointer.
 
 import {
   criterionStateLabel,
@@ -28,9 +29,10 @@ import { Check, X } from "lucide";
 
 import { classNames } from "../../ui/ClassNames.ts";
 import { button, buttonClass, buttonDefaults } from "../ui/Button.ts";
-import { TYPE, WEIGHT_MEDIUM, WEIGHT_STRONG } from "../ui/Classes.ts";
+import { TYPE, WEIGHT_MEDIUM } from "../ui/Classes.ts";
 import { glyph } from "../ui/Glyph.ts";
-import { iconButtonWithTooltip } from "../ui/IconButton.ts";
+import { modalSheet, sheetDefaults, sideColumn } from "../ui/Sheet.ts";
+import type { SheetConfig } from "../ui/Sheet.ts";
 import { GOAL_PANEL_ID, stateMark } from "./Goal.ts";
 import type { GoalViewInputs } from "./Goal.ts";
 import type { Message } from "./Message.ts";
@@ -217,138 +219,88 @@ const failureLine = (h: H, failure: string): Html =>
 // ---------------------------------------------------------------------------------------------
 // The panel
 
-// Each placement's classes carry their own breakpoint, as the work panel's do.
-const PANEL = classNames(
-  "flex min-w-0 flex-col overflow-hidden border-stroke-1 text-ink-1",
-  "max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-(--layer-sheet) max-lg:max-h-[85dvh] max-lg:rounded-t-(--radius-large) max-lg:border-t max-lg:bg-surface-overlay max-lg:pb-[env(safe-area-inset-bottom)] max-lg:shadow-(--elevation-3)",
-  "lg:w-[22rem] lg:shrink-0 lg:border-l lg:bg-surface-ground"
-);
-
 /**
- * The goal panel while it is open: a scrim and a bottom sheet under `lg`, a column beside the chat
- * from `lg`. Nothing while closed, or off a thread with criteria.
+ * The goal panel while it is open, on the `next` sheet as the work panel is: under `lg` a modal
+ * sheet over a scrim, from `lg` a column beside the chat. Nothing while closed, or off a thread
+ * with criteria.
  */
 export const goalPanelView = Submodel.defineView<
   GoalPanelState,
   Message,
   GoalViewInputs
->((panel, { inputs }, h) => {
+>((panel, { inputs, isWide }, h) => {
   if (!panel.isOpen || Option.isNone(inputs)) {
     return h.empty;
   }
 
   const { threadId, goal, progress } = inputs.value;
 
-  return h.div(
-    [h.DataAttribute("slot", "goal"), h.Class("contents")],
-    [
-      h.div([
-        h.DataAttribute("testid", "goal-scrim"),
-        h.AriaHidden(true),
-        h.OnClick(ShellMessage.ClickedCloseGoal()),
-        h.Class(
-          "max-lg:fixed max-lg:inset-0 max-lg:z-(--layer-scrim) max-lg:bg-scrim lg:hidden"
-        ),
-      ]),
-      h.aside(
-        [
-          h.Id(GOAL_PANEL_ID),
-          h.DataAttribute("testid", "goal-panel"),
-          h.AriaLabelledBy(`${GOAL_PANEL_ID}-title`),
-          h.Class(PANEL),
-        ],
-        [
-          h.div([
-            h.AriaHidden(true),
+  const config: SheetConfig<Message> = {
+    ...sheetDefaults<Message>(GOAL_PANEL_ID, "Goal"),
+    layout: "list",
+    closeLabel: "Close the goal panel",
+    attributes: [h.DataAttribute("testid", "goal-panel")],
+    scrimAttributes: [h.DataAttribute("testid", "goal-scrim")],
+    closeAttributes: [h.DataAttribute("testid", "goal-close")],
+  };
+
+  const body = [
+    Option.match(panel.failure, {
+      onNone: () => h.empty,
+      onSome: (failure) => failureLine(h, failure),
+    }),
+    goal.objective === ""
+      ? h.empty
+      : h.p(
+          [
+            h.DataAttribute("testid", "goal-objective"),
             h.Class(
-              "mx-auto mt-(--space-2) h-1 w-9 shrink-0 rounded-(--radius-round) bg-stroke-2 lg:hidden"
+              classNames(
+                "min-w-0 break-words px-(--space-2) text-ink-1",
+                TYPE.body
+              )
             ),
-          ]),
-          h.header(
-            [
-              h.Class(
-                "flex min-h-13 shrink-0 items-center gap-(--space-2) border-b border-stroke-1 py-(--space-2) ps-(--space-4) pe-(--space-2) lg:min-h-14"
-              ),
-            ],
-            [
-              h.h2(
-                [
-                  h.Id(`${GOAL_PANEL_ID}-title`),
-                  h.Class(
-                    classNames(
-                      "min-w-0 flex-1 truncate",
-                      TYPE.title,
-                      WEIGHT_STRONG
-                    )
-                  ),
-                ],
-                ["Goal"]
-              ),
-              iconButtonWithTooltip(
-                h,
-                {
-                  ...buttonDefaults<Message>(),
-                  variant: "ghost",
-                  label: "Close the goal panel",
-                  onClick: Option.some(ShellMessage.ClickedCloseGoal()),
-                  attributes: [h.DataAttribute("testid", "goal-close")],
-                },
-                glyph(h, X, "x", "regular"),
-                "end"
-              ),
-            ]
-          ),
-          h.div(
-            [
-              h.DataAttribute("slot", "goal-body"),
-              h.Class(
-                "flex min-h-0 flex-1 flex-col gap-(--space-3) overflow-y-auto overscroll-contain p-(--space-2)"
-              ),
-            ],
-            [
-              Option.match(panel.failure, {
-                onNone: () => h.empty,
-                onSome: (failure) => failureLine(h, failure),
-              }),
-              goal.objective === ""
-                ? h.empty
-                : h.p(
-                    [
-                      h.DataAttribute("testid", "goal-objective"),
-                      h.Class(
-                        classNames(
-                          "min-w-0 break-words px-(--space-2) text-ink-1",
-                          TYPE.body
-                        )
-                      ),
-                    ],
-                    [goal.objective]
-                  ),
-              h.p(
-                [
-                  h.DataAttribute("testid", "goal-progress"),
-                  h.Class(
-                    classNames("min-w-0 px-(--space-2) text-ink-2", TYPE.small)
-                  ),
-                ],
-                [progress.line]
-              ),
-              h.ul(
-                [
-                  h.DataAttribute("testid", "goal-criteria"),
-                  h.AriaLabel("Criteria"),
-                  h.Class(
-                    "flex min-w-0 flex-col rounded-(--radius-medium) border border-stroke-1 bg-surface-raised"
-                  ),
-                ],
-                goal.criteria.map((criterion) =>
-                  criterionRow(h, threadId, criterion, panel)
-                )
-              ),
-            ]
-          ),
-        ]
-      ),
-    ]
-  );
+          ],
+          [goal.objective]
+        ),
+    h.p(
+      [
+        h.DataAttribute("testid", "goal-progress"),
+        h.Class(classNames("min-w-0 px-(--space-2) text-ink-2", TYPE.small)),
+      ],
+      [progress.line]
+    ),
+    h.ul(
+      [
+        h.DataAttribute("testid", "goal-criteria"),
+        h.AriaLabel("Criteria"),
+        h.Class(
+          "flex min-w-0 flex-col rounded-(--radius-medium) border border-stroke-1 bg-surface-raised"
+        ),
+      ],
+      goal.criteria.map((criterion) =>
+        criterionRow(h, threadId, criterion, panel)
+      )
+    ),
+  ];
+
+  return isWide
+    ? sideColumn(
+        h,
+        { ...config, onClose: Option.some(ShellMessage.ClickedCloseGoal()) },
+        body,
+        []
+      )
+    : modalSheet(
+        h,
+        {
+          ...config,
+          role: "dialog",
+          focusSelector: Option.none(),
+          onClose: ShellMessage.ClickedCloseGoal(),
+          onSettled: ShellMessage.SettledOverlay(),
+        },
+        body,
+        []
+      );
 });

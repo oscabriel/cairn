@@ -3,7 +3,8 @@
 // the sidebar list draws in the order it draws them (the project thread, the managed threads it
 // shows, the resting ones while their fold is open, the earlier project threads while theirs is),
 // each opening its row as a click would (`Update.ts`). The scratch thread's Cmd+J or Ctrl+J and
-// Escape are the shell's own (`Subscription.ts`). The settings page's Keyboard section lists every
+// Escape are the shell's own (`Subscription.ts`; an open overlay is a dialog that takes its Escape,
+// `next/ui/Sheet.ts`). The settings page's Keyboard section lists every
 // one of them from here, so no key acts unlisted.
 
 import {
@@ -120,7 +121,7 @@ export const keyboardRowsOf = (isMac: boolean): ReadonlyArray<KeyboardRow> => [
     id: "close",
     title: "Close",
     description:
-      "Closes the open dialog, menu, add-project picker or scratch thread.",
+      "Closes the open dialog, menu, add-project picker, panel sheet or scratch thread.",
     keys: ["Esc"],
   },
 ];

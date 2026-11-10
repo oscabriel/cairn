@@ -8,6 +8,7 @@ import { rowId, shellRow } from "@cairn/client-logic/ShellRowTestKit";
 import { ConversationId } from "@cairn/protocol/Ids";
 import type { ShellSnapshot, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
+import * as Dialog from "@foldkit/ui/dialog";
 import { Option, Predicate } from "effect";
 import type { Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -142,6 +143,8 @@ const inputsOf = (
   });
 
 interface SceneModel {
+  /** The window is lg or wider: the panel is a column; below, a modal sheet. */
+  readonly isWide: boolean;
   readonly goal: GoalPanelState;
   readonly sent: ReadonlyArray<string>;
 }
@@ -159,8 +162,8 @@ const appFor = (inputs: Option.Option<GoalInputs>) => ({
     h.div(
       [],
       [
-        goalChipView(model.goal, { inputs }, h),
-        goalPanelView(model.goal, { inputs }, h),
+        goalChipView(model.goal, { inputs, isWide: model.isWide }, h),
+        goalPanelView(model.goal, { inputs, isWide: model.isWide }, h),
         h.output([h.DataAttribute("testid", "sent")], [model.sent.join(",")]),
       ]
     ),
@@ -168,6 +171,7 @@ const appFor = (inputs: Option.Option<GoalInputs>) => ({
 
 const givenGoal = (goal: Partial<GoalPanelState> = {}) =>
   Scene.given<SceneModel>({
+    isWide: true,
     goal: { ...initialGoalPanel, isOpen: true, ...goal },
     sent: [],
   });
@@ -354,7 +358,7 @@ describe("the goal chip and panel", () => {
     );
   });
 
-  it("draws only the chip while closed, and closes from its button and the scrim", () => {
+  it("draws only the chip while closed; a column from lg, a modal sheet below, closed from its button and the scrim", () => {
     Scene.scene(
       appFor(goalInputs),
       givenGoal({ isOpen: false }),
@@ -370,12 +374,44 @@ describe("the goal chip and panel", () => {
       })
     );
 
+    // A column beside the chat from lg, not modal.
     Scene.scene(
       appFor(goalInputs),
       givenGoal(),
+      Scene.expect(Scene.role("complementary", { name: "Goal" })).toExist(),
+      Scene.expect(Scene.testId("goal-scrim")).toBeAbsent(),
+      Scene.click(Scene.testId("goal-close")),
+      expectSent("ClickedCloseGoal"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+
+    // Under lg a modal sheet that takes focus as it mounts (U-12).
+    Scene.scene(
+      appFor(goalInputs),
+      Scene.given<SceneModel>({
+        isWide: false,
+        goal: { ...initialGoalPanel, isOpen: true },
+        sent: [],
+      }),
+      Scene.Mount.expectHas(
+        Dialog.AcquireResources({
+          id: "goal-panel",
+          focusSelector: "[data-foldkit-dialog-initial-focus]",
+        })
+      ),
+      Scene.expect(Scene.selector("dialog#goal-panel")).toHaveAttr(
+        "aria-modal",
+        "true"
+      ),
+      Scene.Mount.resolve(
+        Dialog.AcquireResources,
+        Dialog.Message.SucceededAcquireResources()
+      ),
       Scene.click(Scene.testId("goal-close")),
       Scene.click(Scene.testId("goal-scrim")),
-      expectSent("ClickedCloseGoal,ClickedCloseGoal"),
+      expectSent("SettledOverlay,ClickedCloseGoal,ClickedCloseGoal"),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

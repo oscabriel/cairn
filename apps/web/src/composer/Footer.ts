@@ -36,14 +36,13 @@ import {
   runtimeModePresentation,
 } from "@cairn/client-logic/RuntimeMode";
 import type { ThinkingLevel } from "@cairn/protocol/Models";
-import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Effect, Option, Queue, Stream } from "effect";
 import { Mount } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { Check } from "lucide";
 
 import { MENU_ITEM_CLASS } from "./Classes.ts";
-import { activeDraft, isDraftTarget } from "./Drafts.ts";
+import { canPickRuntimeMode, runtimeModeOf } from "./Drafts.ts";
 import { icon } from "./Icon.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
@@ -227,14 +226,6 @@ export const MeasureFooter = Mount.defineStream("MeasureFooter", {
 const footerBlocks = (model: Model): ReadonlyArray<"traits" | "mode"> =>
   thinkingLevels(model).length > 0 ? ["traits", "mode"] : ["mode"];
 
-const runtimeModeOf = (model: Model): RuntimeMode =>
-  isDraftTarget(model)
-    ? activeDraft(model).runtimeMode
-    : Option.match(model.context.thread, {
-        onNone: () => "full-access",
-        onSome: (thread) => thread.runtimeMode,
-      });
-
 const checkSlot = (h: HtmlBuilder<Message>, checked: boolean): Html =>
   checked
     ? icon(h, Check, "check", "ms-auto size-4")
@@ -264,10 +255,7 @@ const menuItem = (
   );
 
 const groupHeading = (h: HtmlBuilder<Message>, text: string): Html =>
-  h.div(
-    [h.Class("px-2 py-1.5 font-medium text-muted-foreground text-xs")],
-    [text]
-  );
+  h.div([h.Class("px-2 py-1.5 font-medium text-ink-2 text-xs")], [text]);
 
 /** The thinking levels the model accepts, as menu rows. */
 export const thinkingItems = (
@@ -293,7 +281,7 @@ export const modeItems = (
   h: HtmlBuilder<Message>
 ): ReadonlyArray<Html> => {
   const current = runtimeModeOf(model);
-  const editable = isDraftTarget(model);
+  const editable = canPickRuntimeMode(model);
 
   return runtimeModeOptions.map((mode) => {
     const presentation = runtimeModePresentation[mode];
@@ -306,7 +294,7 @@ export const modeItems = (
       [
         h.span([h.Class("font-medium")], [presentation.label]),
         h.span(
-          [h.Class("text-muted-foreground text-xs")],
+          [h.Class("text-ink-2 text-xs")],
           [
             presentation.isEnforced
               ? presentation.description

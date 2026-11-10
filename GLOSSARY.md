@@ -86,13 +86,13 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Parent banner**: The line above a thread's composer while one of its subagents asks the user, in the rows' own words ("Subagent · Approval", "2 subagents · Waiting for Go"); it names each asking child and its Open opens the first. It hides while the thread asks the user itself.
 
-**Work panel**: The panel a thread in a tree opens from its chat header (`next` only): its parent chain, its children with their states (live ones with Stop, the word beside the composer's Stop glyph, whose first press asks "Stop?" in place since nothing undoes a stop, a question that lets go after five seconds or at any other press in the panel; resting ones under "Previous", folded, six then twelve more at a time), a subagent's own steps, and the thread's workflows from the steps panel's data, with Stop on the whole workflow while it may run nodes and on each live node of a running one. A column beside the chat column from 1,024 px, a bottom sheet below.
+**Work panel**: The panel a thread in a tree opens from its chat header (`next` only): its parent chain, its children with their states (live ones with Stop, the word beside the composer's Stop glyph, whose first press asks "Stop?" in place since nothing undoes a stop, a question that lets go after five seconds or at any other press in the panel; resting ones under "Previous", folded, six then twelve more at a time), a subagent's own steps, and the thread's workflows from the steps panel's data, with Stop on the whole workflow while it may run nodes and on each live node of a running one. A column beside the chat column from 1,024 px, which leaves the chat in use; below, a modal sheet (a dialog).
 
 **Subagent steps**: A child's steps in the work panel, read from its own row and records, never model text: "You said go", "Started" (in a worktree or the project's checkout), "Working on it", "Said what it did", each Done, Now, To do, Failed or Stopped. The header's button counts them ("2/4 steps").
 
 **Goal chip**: The chat header's button on a goal thread (`next` only), counting its criteria as the verdict writer left them ("2 of 4 met, 1 not met"; "2/4" on the phone). It opens the goal panel. The project thread's sidebar row carries the same tally ("2/4 met").
 
-**Goal panel**: The panel the goal chip opens: the objective, the progress line, and each criterion with its state, the judge that decides it and the verdict's evidence. Only a criterion the user judges offers Met and Not met, which send `goal.mark`; the state changes only when the verdict writer records it. A column beside the chat column from 1,024 px, a bottom sheet below.
+**Goal panel**: The panel the goal chip opens: the objective, the progress line, and each criterion with its state, the judge that decides it and the verdict's evidence. Only a criterion the user judges offers Met and Not met, which send `goal.mark`; the state changes only when the verdict writer records it. A column beside the chat column from 1,024 px, which leaves the chat in use; below, a modal sheet (a dialog).
 
 **Asked its parent**: A subagent row's state while the child's question is with its parent's model (ADR 0027), so the user is not asked yet and nothing above it lights.
 
@@ -296,7 +296,9 @@ _Avoid_: plugin
 
 **Look**: The set of design token values the `next` views draw with: one look, Stone revised (the user, 2026-10-29), in dark and light in `next/tokens.css`; there is no look switch. Previewed and approved in look rounds. _Avoid_: theme (that is dark or light), skin.
 
-**Primitive (next)**: A view helper in `apps/web/src/next/ui/` (button, chip, status chip, row, card, menu, sheet, field, banner, meter...) drawn with design tokens only. A next view builds on primitives rather than raw classes.
+**Primitive (next)**: A view helper in `apps/web/src/next/ui/` (button, chip, status chip, row, card, menu, sheet, field, banner, meter...) drawn with design tokens only. A next view builds on primitives rather than raw classes, and every primitive is drawn by a live view: one nothing draws is deleted, or adopted where a view hand-rolls a copy of it.
+
+**Sheet (next)**: The primitive every overlay is drawn on (`next/ui/Sheet.ts`): a bottom sheet on a phone; wider, a side panel, a dialog card or a thread's card. Over the page it is a modal dialog: focus moves in and back to what held it, Tab stays inside, Escape, the scrim and Close close it, and the page behind is inert and does not scroll. The work and goal panels are its parts as a column beside the chat from 1,024 px. The phone's sidebar drawer (the shell's projects and threads, from the start edge over a scrim) is not drawn on it.
 
 **Look catalogue**: The dev-only page at `/__look` (`apps/web/src/next/ui/catalogue`) that draws every next primitive in every state in dark and light. `judges/look-rules.ts` judges it and the look rounds screenshot it; it is never in the production build.
 
@@ -310,7 +312,7 @@ _Avoid_: plugin
 
 **Project rail**: The shell's column of project bubbles: one squircle with a low corner radius per folder project, filled edge to edge by the project's favicon (found in the project's root as t3code finds it, served at `/api/projects/<id>/favicon`) or showing its first letter, with a mark when a thread in the project needs the user or is working. A bubble opens its project's project thread, or, when it has none, a new draft in that project whose first message starts it. Below the last bubble, a + bubble of the same shape opens the add-project picker (a sheet on a phone, a dialog on a desktop): a folder on the Beelink, browsed to or typed, becomes a project the rail selects, and a folder that is already a project selects that project. On the hero and a draft's page the rail and the list show the draft's project, the one the hero names, whether the picker chose it or it is the hero's default. _Avoid_: inbox.
 
-**Scratch overlay**: The floating panel over any page that holds the scratch thread: Cmd+J or Ctrl+J shows and hides it without losing it (a header button on a phone), and shown, it takes the keyboard; its first message launches the scratch thread, and Clear deletes the thread and its folder.
+**Scratch overlay**: The floating panel over any page that holds the scratch thread, a dialog on the sheet: Cmd+J or Ctrl+J shows and hides it without losing it (a header button on a phone, Escape or Hide on any), and shown, it takes the keyboard. At its foot is the composer itself, which serves the overlay while it shows (its model, attachments, queue or steer and Stop), with a draft of its own; its first message launches the scratch thread there, always with full access, since nothing in the overlay answers an approval (its mode shows but cannot be picked), and Clear deletes the thread and its folder.
 
 **Usage page**: `/usage`, opened from the shell's foot (`next/meters`): the spend ledger with each figure's basis, the model plans' windows (an unknown share reads Unknown, never zero) and the budgets. The default budget changes there, and each thread with spend recorded takes a budget of its own from its row (Set budget, ADR 0047).
 
@@ -322,7 +324,7 @@ _Avoid_: plugin
 
 **Draft**: A message not yet sent, kept in the browser per thread (or per new-thread draft) so typing never waits on the network.
 
-**Composer**: Where the user writes a turn: the editor, its `/`, `@` and `$` menus, and the footer's model pill and mode control. Docked under an open thread, or inside the hero for a draft.
+**Composer**: Where the user writes a turn: the editor, its `/`, `@` and `$` menus, and the footer's model pill and mode control. Docked under an open thread, inside the hero for a draft, or at the scratch overlay's foot while that shows; there is one, wherever it is drawn.
 
 **Model pill**: The composer footer's first control: the provider's mark (Claude, OpenAI, OpenCode, or the provider's initial when it has no mark), the model's short name and its thinking level ("Opus 5.5 · High"). It opens the model picker.
 

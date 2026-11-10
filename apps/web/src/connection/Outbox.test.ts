@@ -1162,11 +1162,12 @@ describe("a turn the brain refuses", () => {
     );
   });
 
-  it("goes back into the scratch overlay when it was a scratch turn", () => {
+  it("goes back into the scratch overlay's draft when the overlay's composer sent it (U-16)", () => {
     const scratchId = ThreadId.make("01890a5d-ac96-774b-bcce-b302099a8057");
     const live = liveModel(0);
 
-    const sent = update(
+    // The overlay is shown, so the one composer serves it from the next update on.
+    const shown = update(
       {
         ...live,
         nextShell: {
@@ -1179,9 +1180,18 @@ describe("a turn the brain refuses", () => {
         },
       },
       Message.GotNextShellMessage({
-        message: NextShellMessage.PreparedScratchTurn({
+        message: NextShellMessage.SettledOverlay(),
+      })
+    ).model;
+
+    const sent = update(
+      shown,
+      Message.GotComposerMessage({
+        message: ComposerMessage.PreparedTurn({
+          draftKey: "scratch",
           item: first,
-          threadId: scratchId,
+          navigateTo: Option.none(),
+          attachments: [],
         }),
       })
     ).model;
@@ -1198,12 +1208,16 @@ describe("a turn the brain refuses", () => {
     ).model;
 
     expect({
-      scratch: refused.nextShell.scratch.draft,
-      composer: refused.composer.drafts[`thread:${scratchId}`]?.text,
+      target: shown.composer.context.target._tag,
+      recorded: Object.values(sent.sentTurns).map((turn) => turn.fromScratch),
+      scratch: refused.composer.drafts.scratch?.text,
+      thread: refused.composer.drafts[`thread:${scratchId}`]?.text,
       sent: refused.sentTurns,
     }).toStrictEqual({
+      target: "Scratch",
+      recorded: [true],
       scratch: "message request-1",
-      composer: undefined,
+      thread: undefined,
       sent: {},
     });
   });

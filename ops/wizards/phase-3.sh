@@ -360,8 +360,22 @@ if want 2; then
   ADMIN_PROFILE=kept
   say ""
   say "The deploy needs the ${BOLD}admin${RESET} Alchemy profile (your Global API Key and the GitHub CLI)."
-  note "ops/wizards/phase-0.sh deleted it after its own deploy. If it is gone, recreate it first"
-  note "with ops/wizards/phase-0.sh 6, then come back to this stage."
+  # Profile names and their providers only; a piped listing is plain text and holds no key.
+  PROFILES=$(pnpm exec alchemy profile list </dev/null 2>/dev/null || true)
+  if grep -Eq '^[-*] admin(:|$)' <<<"$PROFILES"; then
+    note "The admin profile exists."
+  else
+    note "There is no admin profile (ops/wizards/phase-0.sh deletes it after its own deploy)."
+    note "This stage makes it again, as phase 0 stage 6 does."
+    open_url "https://dash.cloudflare.com/profile/api-tokens"
+    step "Under API Keys → Global API Key → View. Keep the page open."
+    step "Next, Alchemy asks how to sign in to Cloudflare: choose ${BOLD}API Token or API Key${RESET},"
+    say "    then the Global API Key, and paste the key and your Cloudflare email when asked."
+    step "Then it adds GitHub: choose ${BOLD}GitHub CLI${RESET} (gh is already logged in)."
+    pause "Press Enter to start Alchemy's prompts"
+    pnpm exec alchemy profile create admin 2>/dev/null || note "profile admin already exists; editing it"
+    pnpm exec alchemy profile edit --profile admin --add Cloudflare --add GitHub
+  fi
   if confirm "Deploy stacks/github.ts under the admin profile now (Alchemy shows its plan and asks first)"; then
     if pnpm exec alchemy deploy --config stacks/github.ts --profile admin; then
       CI_DEPLOY=pass
@@ -382,11 +396,22 @@ if want 2; then
       say "Last, the proof: the stone image workflow logs in to the registry with the narrowed token"
       say "and pushes (a few minutes on GitHub's runners, nothing on the Beelink)."
       if confirm "Run the stone image workflow on GitHub now and watch it"; then
+        # Watch the run this dispatch made, never an older one: note the newest dispatched run
+        # first, then wait for a newer one to be listed.
+        LAST_RUN=$(gh run list --repo oscabriel/cairn --workflow stone-image.yml --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId // ""' || true)
+        RUN_ID=""
         if gh workflow run stone-image.yml --repo oscabriel/cairn --ref main; then
-          note "Waiting a few seconds for the run to appear..."
-          sleep 8
-          RUN_ID=$(gh run list --repo oscabriel/cairn --workflow stone-image.yml --limit 1 --json databaseId -q '.[0].databaseId')
-          if gh run watch "$RUN_ID" --repo oscabriel/cairn --exit-status; then
+          note "Waiting for the run to appear..."
+          for _ in $(seq 1 30); do
+            sleep 3
+            RUN_ID=$(gh run list --repo oscabriel/cairn --workflow stone-image.yml --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId // ""' || true)
+            [[ -n $RUN_ID && $RUN_ID != "$LAST_RUN" ]] && break
+            RUN_ID=""
+          done
+          if [[ -z $RUN_ID ]]; then
+            CI_PUSH=fail
+            warn "The dispatched run did not appear within 90 s; see https://github.com/oscabriel/cairn/actions"
+          elif gh run watch "$RUN_ID" --repo oscabriel/cairn --exit-status; then
             CI_PUSH=pass
           else
             CI_PUSH=fail
@@ -406,8 +431,8 @@ if want 2; then
 
   say ""
   say "The admin profile still holds your Cloudflare Global API Key, which can do anything on"
-  say "the account. It is needed only when the CI token changes again, and stage 6 of"
-  say "ops/wizards/phase-0.sh recreates it in a minute."
+  say "the account. It is needed only when the CI token changes again, and this stage makes it"
+  say "again in a minute when it is missing."
   if confirm "Delete the admin profile now"; then
     if pnpm exec alchemy profile delete admin --yes; then
       ADMIN_PROFILE=deleted

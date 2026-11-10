@@ -15,12 +15,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest";
 
 import {
   citationsIn,
   findPorts,
   headerOf,
+  isUnparsed,
   openClone,
   render,
   survey,
@@ -99,6 +100,103 @@ describe("a header's t3code citations", () => {
       },
       { path: "apps/web/src/lib/utils.ts", commit: "c079503d" },
     ]);
+  });
+
+  // The prose forms below are copied from real headers (ThreadWindow.ts, Http.ts, TimelineEntries.ts,
+  // composer/Classes.ts, ThreadWire.ts): a citation need not start with a URL or "t3code at".
+  it("reads a possessive citation that ends at Changed:", () => {
+    const header = headerOf(
+      [
+        "// Policy numbers from t3code's apps/server/src/orchestration-v2/threadHistoryPaging.ts",
+        `// (\`THREAD_HISTORY_PAGE_POLICY\`) at ${SHA}. Changed: apps/server/src/Window.ts is ours.`,
+      ].join("\n")
+    );
+
+    expect(citationsIn(header)).toStrictEqual([
+      {
+        path: "apps/server/src/orchestration-v2/threadHistoryPaging.ts",
+        commit: SHA,
+      },
+    ]);
+  });
+
+  it("reads a backticked path with a line range", () => {
+    const header = headerOf(
+      [
+        "// The server layer follows t3code",
+        `// \`apps/server/src/server.ts\` lines 295 to 314 at ${SHA}, without its serving gate.`,
+      ].join("\n")
+    );
+
+    expect(citationsIn(header)).toStrictEqual([
+      { path: "apps/server/src/server.ts", commit: SHA },
+    ]);
+  });
+
+  it("reads a citation where t3code is the sentence's subject", () => {
+    const header = headerOf(
+      [
+        "// The transcript's entries. t3code derives its timeline from orchestration turn items",
+        `// (apps/web/src/session-logic.ts at ${SHA}); Cairn's source is pi's own transcript.`,
+      ].join("\n")
+    );
+
+    expect(citationsIn(header)).toStrictEqual([
+      { path: "apps/web/src/session-logic.ts", commit: SHA },
+    ]);
+  });
+
+  it("reads a commit named before a parenthesised brace group and a bare name", () => {
+    const header = headerOf(
+      [
+        `// Class strings copied from t3code's rendered composer at ${SHA}`,
+        "// (apps/web/src/components/chat/{ChatComposer,ComposerSurface}.tsx and",
+        "// BranchToolbar.tsx, read from the live nightly's DOM).",
+      ].join("\n")
+    );
+
+    expect(citationsIn(header)).toStrictEqual([
+      { path: "apps/web/src/components/chat/ChatComposer.tsx", commit: SHA },
+      { path: "apps/web/src/components/chat/ComposerSurface.tsx", commit: SHA },
+      { path: "apps/web/src/components/chat/BranchToolbar.tsx", commit: SHA },
+    ]);
+  });
+
+  it("reads a t3code citation after a cairn-v1 one, past an earlier bare mention", () => {
+    const header = headerOf(
+      [
+        "// Strings over 32 KiB are cut (t3code's limits).",
+        "// Ported in part from cairn-v1, apps/server/src/visible.ts at 1a5cd4a; the truncation marker",
+        `// follows t3code's apps/server/src/orchestration-v2/WireProjection.ts at ${SHA}.`,
+      ].join("\n")
+    );
+
+    expect(citationsIn(header)).toStrictEqual([
+      {
+        path: "apps/server/src/orchestration-v2/WireProjection.ts",
+        commit: SHA,
+      },
+    ]);
+  });
+
+  it("calls a header unparsed when it names t3code with a commit but no path is read", () => {
+    expect(
+      isUnparsed(
+        headerOf(
+          `// The shape of t3code's sidebar at ${SHA}, read from the DOM.`
+        )
+      )
+    ).toBeTruthy();
+    expect(
+      isUnparsed(
+        headerOf(
+          `// From t3code's apps/web/src/a.ts at ${SHA}, and cairn-v1 at 1a5cd4a.`
+        )
+      )
+    ).toBeFalsy();
+    expect(
+      isUnparsed(headerOf("// Unlike t3code, this keeps no cache."))
+    ).toBeFalsy();
   });
 
   it("reads only the leading comment block", () => {
@@ -288,6 +386,11 @@ describe("survey and render on a fixture clone", () => {
     );
     write(
       cairn,
+      "apps/web/src/Prose.ts",
+      `// The shape of t3code's sidebar at ${base}, read from the DOM.\n\nexport const prose = 1;\n`
+    );
+    write(
+      cairn,
       "apps/web/src/Plain.ts",
       "// No port here.\n\nexport const plain = 1;\n"
     );
@@ -299,16 +402,15 @@ describe("survey and render on a fixture clone", () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  it("finds the ports and nothing else", () => {
-    expect(
-      findPorts(cairn)
-        .map((port) => port.file)
-        .toSorted()
-    ).toStrictEqual([
+  it("finds the ports, and names a header it could not read", () => {
+    const scan = findPorts(cairn);
+
+    expect(scan.ports.map((port) => port.file).toSorted()).toStrictEqual([
       "apps/server/src/projects/Branches.ts",
       "apps/web/src/Later.ts",
       "packages/client-logic/src/Sidebar.ts",
     ]);
+    expect(scan.unparsed).toStrictEqual(["apps/web/src/Prose.ts"]);
   });
 
   it("lists fixes on logic paths first, then other fixes, then the rest", () => {
@@ -361,6 +463,12 @@ describe("survey and render on a fixture clone", () => {
 
     return render(report, NOW, all);
   };
+
+  it("renders the header it could not read", () => {
+    expect(rendered(false)).toContain(
+      "Headers that name t3code and a commit but cite no path this script can read (check by hand):\n\n- apps/web/src/Prose.ts"
+    );
+  });
 
   it("renders how old the clone is, and a cited commit it cannot compare", () => {
     const text = rendered(false);

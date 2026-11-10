@@ -16,11 +16,12 @@
 // commit can be listed until the user fetches.
 //
 // A header names its sources in prose, so the parse is a heuristic: a citation runs from a source
-// marker (`github.com/<owner>/<repo>`, `cairn-v1`, or `t3code at <commit>`) to the next marker or to
-// "Kept:" or "Changed:". Inside a t3code citation, every repository path is a cited path, a bare
-// file name is read beside the path before it, and a path's commit is the first commit after it,
-// else the last before it. A cited path that the clone does not hold at its commit is listed for a
-// person to check, never dropped.
+// marker (`github.com/<owner>/<repo>`, `cairn-v1`, or any mention of `t3code`, possessive or not) to
+// the next marker of another source or to "Kept:" or "Changed:". Inside a t3code citation, every
+// repository path is a cited path, a bare file name is read beside the path before it, and a path's
+// commit is the first commit after it, else the last before it. Nothing is dropped silently: a
+// header that names t3code and a commit but yields no path is listed as unparsed, and a cited path
+// that the clone does not hold at its commit is listed for a person to check.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -40,6 +41,12 @@ export interface Citation {
 export interface Port {
   readonly file: string;
   readonly citations: ReadonlyArray<Citation>;
+}
+
+/** What a scan of the tree found: the ports, and the headers that name t3code but parsed to nothing. */
+export interface PortScan {
+  readonly ports: ReadonlyArray<Port>;
+  readonly unparsed: ReadonlyArray<string>;
 }
 
 const DEFAULT_CLONE = path.join(
@@ -92,7 +99,7 @@ export const headerOf = (text: string): string => {
 
 /** Where one source's citation starts, and the end of the prose that names it. */
 const MARKER =
-  /github\.com\/[\w.-]+\/[\w.-]+|\bpingdotgg\/t3code\b|\bcairn-v1\b|\bt3code(?= at [0-9a-f]{7})|\b(?:Kept|Changed):/gu;
+  /github\.com\/[\w.-]+\/[\w.-]+|\bpingdotgg\/t3code\b|\bcairn-v1\b|\bt3code\b|\b(?:Kept|Changed):/gu;
 
 const EXTENSION = String.raw`\.(?:tsx?|jsx?|mts|css|json|md|ya?ml|html)`;
 
@@ -195,20 +202,50 @@ const citationsInSegment = (wrapped: string): ReadonlyArray<Citation> => {
   });
 };
 
+const isT3code = (marker: Found) => marker.text.includes("t3code");
+
+/**
+ * The stretches of a header that belong to t3code: each runs from a t3code marker to the next marker
+ * of another source (or "Kept:", "Changed:"), so a second mention of t3code inside one citation
+ * ("t3code's composer at <commit> ... as t3code does") does not split its path from its commit.
+ */
+const t3codeSegments = (header: string): ReadonlyArray<string> => {
+  const markers = allOf(MARKER, header);
+  const segments: Array<string> = [];
+  let coveredTo = -1;
+
+  for (const [index, marker] of markers.entries()) {
+    if (isT3code(marker) && marker.at >= coveredTo) {
+      const end =
+        markers.find((other, at) => at > index && !isT3code(other))?.at ??
+        header.length;
+
+      segments.push(header.slice(marker.at, end));
+      coveredTo = end;
+    }
+  }
+
+  return segments;
+};
+
+/**
+ * Whether a header names t3code with a commit in the same stretch of prose yet yields no cited path
+ * from it: a header form the parse does not know, reported instead of dropped.
+ */
+export const isUnparsed = (header: string): boolean =>
+  t3codeSegments(header).some(
+    (segment) =>
+      allOf(COMMIT, segment).some((found) => isCommit(found.text)) &&
+      citationsInSegment(segment).length === 0
+  );
+
 /** Every t3code path a header cites, with the commit it names for each, once each. */
 export const citationsIn = (header: string): ReadonlyArray<Citation> => {
-  const markers = allOf(MARKER, header);
   const seen = new Set<string>();
   const citations: Array<Citation> = [];
 
-  for (const [index, marker] of markers.entries()) {
-    if (!marker.text.includes("t3code")) {
-      continue;
-    }
-
-    const end = markers[index + 1]?.at ?? header.length;
-
-    for (const citation of citationsInSegment(header.slice(marker.at, end))) {
+  for (const segment of t3codeSegments(header)) {
+    for (const citation of citationsInSegment(segment)) {
       const key = `${citation.path}@${citation.commit}`;
 
       if (!seen.has(key)) {
@@ -232,19 +269,34 @@ const walk = (folder: string): ReadonlyArray<string> =>
     return entry.isFile() && SOURCE_FILE.test(entry.name) ? [full] : [];
   });
 
-/** Every file under the searched folders whose header cites t3code, with its citations. */
-export const findPorts = (root: string): ReadonlyArray<Port> =>
-  SEARCHED.flatMap((folder) => {
+/**
+ * Every file under the searched folders whose header cites t3code, with its citations, and every
+ * file whose header names t3code and a commit in a stretch that yielded no path.
+ */
+export const findPorts = (root: string): PortScan => {
+  const ports: Array<Port> = [];
+  const unparsed: Array<string> = [];
+
+  for (const file of SEARCHED.flatMap((folder) => {
     const full = path.join(root, folder);
 
     return existsSync(full) ? walk(full) : [];
-  }).flatMap((file) => {
-    const citations = citationsIn(headerOf(readFileSync(file, "utf-8")));
+  })) {
+    const header = headerOf(readFileSync(file, "utf-8"));
+    const citations = citationsIn(header);
+    const relative = path.relative(root, file);
 
-    return citations.length === 0
-      ? []
-      : [{ file: path.relative(root, file), citations }];
-  });
+    if (citations.length > 0) {
+      ports.push({ file: relative, citations });
+    }
+
+    if (isUnparsed(header)) {
+      unparsed.push(relative);
+    }
+  }
+
+  return { ports, unparsed: unparsed.toSorted() };
+};
 
 /** A read-only view of the clone. Every call refuses to fetch a missing object. */
 export interface Clone {
@@ -339,6 +391,8 @@ export interface Report {
   readonly refInfo: CommitInfo | null;
   readonly lastFetched: number | null;
   readonly ports: number;
+  /** Headers that name t3code and a commit but cite no path the parse reads: check them by hand. */
+  readonly unparsed: ReadonlyArray<string>;
   readonly cited: ReadonlyArray<CitedCommit>;
   /** Cited paths the clone does not hold at their cited commit: a header to check by hand. */
   readonly unresolved: ReadonlyArray<{ readonly file: string } & Citation>;
@@ -442,11 +496,8 @@ const STATE_TEXT: Record<CitedCommit["state"], (ref: string) => string> = {
 };
 
 /** Reads the clone for every port's citations. Nothing is written anywhere. */
-export const survey = (
-  ports: ReadonlyArray<Port>,
-  clone: Clone,
-  ref: string
-): Report => {
+export const survey = (scan: PortScan, clone: Clone, ref: string): Report => {
+  const { ports } = scan;
   const refInfo = commitInfo(clone, ref);
   const resolved = new Map<string, CommitInfo | null>();
   const unresolved: Array<{ readonly file: string } & Citation> = [];
@@ -521,6 +572,7 @@ export const survey = (
     refInfo,
     lastFetched: lastFetchedOf(clone.dir),
     ports: ports.length,
+    unparsed: scan.unparsed,
     cited: [...cited.values()],
     unresolved,
     gone,
@@ -571,6 +623,18 @@ export const render = (report: Report, nowMs: number, all: boolean): string => {
     lines.push(
       `- ${entry.commit.slice(0, 10)}: ${String(entry.paths)} cited paths; ${what}.`
     );
+  }
+
+  if (report.unparsed.length > 0) {
+    lines.push(
+      "",
+      "Headers that name t3code and a commit but cite no path this script can read (check by hand):",
+      ""
+    );
+
+    for (const file of report.unparsed) {
+      lines.push(`- ${file}`);
+    }
   }
 
   if (report.gone.length > 0) {

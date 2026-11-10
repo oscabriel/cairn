@@ -59,7 +59,7 @@ Ten at once, launch to first tool call, in ms: 3,417, 3,453, 3,520, 3,663, 4,985
 
 The four slow trials waited 60,150, 84,564, 84,865 and 121,149 ms for the container's first answer. Everything after that answer stayed within a few seconds, as in every earlier stall: the time is on Cloudflare's side, before Cairn's code runs. The worst stall is now 127 s, not the 59 s of the 34 minute burst.
 
-Five in sequence right after: 2,382, 2,513, 2,663, 4,223 and 4,739 ms, first answer at most 1,212 ms. Once the burst had warmed the hosts, a lone start was back under 5 s.
+Five in sequence right after: 2,382, 2,513, 2,663, 4,223 and 4,739 ms, first answer at most 1,288 ms. Once the burst had warmed the hosts, a lone start was back under 5 s.
 
 ## Verdict against the gate
 
@@ -86,7 +86,7 @@ Nothing Cairn controls causes the stall, so the options are the three these note
 
 | Option | What it does | What it costs | What it leaves |
 | --- | --- | --- | --- |
-| A hedged second start | Start a second stone when the first has not answered in about 3 s, use whichever answers first, stop the loser | Nothing at idle. In a cold burst, up to one extra stone per slow start for a few seconds: 5 of 10 would have hedged on 2026-11-05 | Untested. It helps only if the second start lands on a host that answers, and the four stalls over a minute were all on Cloudflare's side of the first answer |
+| A hedged second start | Start a second stone when the first has not answered in about 3 s, use whichever answers first, stop the loser | Nothing at idle. In a cold burst, up to one extra stone per slow start for a few seconds: 4 of 10 would have hedged on 2026-11-05 (their first answer took over 3 s; the next slowest took 2,029 ms) | Untested. It helps only if the second start lands on a host that answers, and the four stalls over a minute were all on Cloudflare's side of the first answer |
 | A relaxed target for a burst | Keep Stone start at p95 under 5 s for a warm or lone start, and set a separate, looser number for ten at once after a quiet day | Nothing in money. The Fan-out target's first minute on a quiet project is then slow: a median over 5 s and a tail of about 2 minutes on this evidence | Relaxes a kickoff target, which only the user can do |
 | A warm pool | Keep stones warm on a schedule so a burst never starts cold | About $27.70 a month by arithmetic on list prices | Breaks the Idle cost target of under $6 a month with no stones running |
 

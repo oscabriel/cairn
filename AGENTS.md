@@ -13,8 +13,8 @@ The kickoff is the brief, not the current state. Where a line below disagrees wi
 | t3code's inbox sidebar, copied exactly | A project rail, and one project thread per project | ADR 0026 (amendment), ADR 0040 |
 | Role aliases (`@worker`, `@judge`) | Removed: a child names its model or runs on its parent's | ADR 0043 |
 | The Composer target on iOS-width WebKit; `playwright` among the MCP servers | Chromium in the judges, WebKit by hand on the iPhone; no Playwright anywhere | ADR 0044 |
-| Typed results on three providers, Codex the third | Two: the bridge and OpenCode Go; the Codex login is shelved | ADR 0037 |
-| Artifacts and portals through porch | Shelved with porch (2026-10-29); stone portals get a fixed Caddy handle | ADR 0038, `docs/phase-3/plan.md` decision 6 |
+| Typed results on three providers, Codex the third | Two: the bridge and OpenCode Go; the Codex login is shelved | `docs/phase-2/plan.md` decisions (the user, 2026-10-29); ADR 0037 still names Codex |
+| Artifacts and portals through porch | Shelved with porch (2026-10-29); stone portals get a fixed Caddy handle | `docs/phase-2/plan.md` decisions (the user, 2026-10-29); ADR 0038 still describes porch; `docs/phase-3/plan.md` decision 6 |
 | Effect 4.0.5 | The catalog's pin | `pnpm-workspace.yaml` |
 | Alchemy beta.83, `alchemy/Cloudflare`, one stack | The catalog's pin, `@alchemy.run/*` imports, and a second stack for CI's credentials | ADR 0006 (amended), ADR 0051 |
 | pi-durable behind one Effect boundary service | A folder boundary the lint enforces | Coding standard S42 |

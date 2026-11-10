@@ -17,7 +17,7 @@ Creating an account-owned token needs the account's API Tokens Write permission,
 
 ## Which profile
 
-The `admin` Alchemy profile, created by `ops/wizards/phase-0.sh` stage 6 with the Cloudflare Global API Key and the GitHub CLI. The phase 0 wizard deletes the profile after the deploy; the handoff of 2026-11-09 says a stored Global API Key is still in `~/.alchemy` under that profile. Whether to keep it is the user's decision. A narrower credential for the profile is possible (Alchemy accepts an API token, and an account-scoped token with Account API Tokens Write, plus what the state store needs, can mint `cairn-ci`), but it is untested.
+The `admin` Alchemy profile, created by `ops/wizards/phase-0.sh` stage 6 (and again by `ops/wizards/phase-3.sh` stage 2 when it is missing) with the Cloudflare Global API Key and the GitHub CLI. The phase 0 wizard deletes the profile after the deploy; the handoff of 2026-11-09 says a stored Global API Key is still in `~/.alchemy` under that profile. Whether to keep it is the user's decision. A narrower credential for the profile is possible (Alchemy accepts an API token, and an account-scoped token with Account API Tokens Write, plus what the state store needs, can mint `cairn-ci`), but it is untested.
 
 ## The token's scope
 

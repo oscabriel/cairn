@@ -476,3 +476,52 @@ export const shotVerdict = (
       : `${String(drift.cells)} cell(s) moved more than ${String(allowance)} levels (most ${String(drift.maxLevels)}), within x ${String(drift.box?.x)} y ${String(drift.box?.y)} ${String(drift.box?.width)} by ${String(drift.box?.height)} CSS px`,
   };
 };
+
+/** What a round's page needs of a shot to match it with a frozen one. */
+export interface RoundShot {
+  readonly state: string;
+  readonly width: LookWidth;
+  readonly theme: LookTheme;
+}
+
+/** A round's shots split by what its page shows (`shotsToShow`). */
+export interface ShotSelection<S> {
+  /** New shots, with no frozen shot of the same state, width and theme, and drifted ones. */
+  readonly shown: ReadonlyArray<S>;
+  /** Shots that match their frozen shot under its round's allowance. */
+  readonly matched: ReadonlyArray<S>;
+}
+
+/**
+ * Which of a round's shots its page shows, so the user judges only what changed: a shot with no
+ * frozen shot of the same state, width and theme (a new state, or a width or theme it gained), and
+ * a shot that `shotVerdict` finds drifted from its frozen shot under that round's allowance. The
+ * rest matched and are left off the page; the round's report still holds every shot, so freezing
+ * it keeps them all. With no frozen round, every shot shows.
+ */
+export const shotsToShow = <S extends RoundShot>(
+  frozen: FrozenRound | undefined,
+  shots: ReadonlyArray<S>,
+  pngOf: (shot: S) => Uint8Array
+): ShotSelection<S> => {
+  const shown: Array<S> = [];
+  const matched: Array<S> = [];
+
+  for (const shot of shots) {
+    const before = frozen?.shots.find(
+      (candidate) =>
+        candidate.state === shot.state &&
+        candidate.width === shot.width &&
+        candidate.theme === shot.theme
+    );
+
+    const same =
+      frozen !== undefined &&
+      before !== undefined &&
+      shotVerdict(before, pngOf(shot), frozen.allowance.cellLevels).pass;
+
+    (same ? matched : shown).push(shot);
+  }
+
+  return { shown, matched };
+};

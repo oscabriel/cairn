@@ -27,7 +27,11 @@
 // `round <n>` publishes to ~/Developer/agent-artifacts/cairn/v2/look/round-<n>/ (served at
 // https://plans.gneiss.run/cairn/v2/look/round-<n>/): `index.html`, the screenshots under `shots/`,
 // a copy of tokens.css and `report.json`. Rounds 0 and 1 were static mock pages, so it refuses
-// rounds below 2, and refuses an existing round without `--replace`.
+// rounds below 2, and refuses an existing round without `--replace`. The round captures every
+// state and `report.json` keeps every shot, but `index.html` shows only what the user has not
+// judged yet: shots with no match in the newest round frozen before it (same state, width and
+// theme), and shots that drift from their match under LookFreeze's `shotsToShow` (the check's
+// verdict and allowance). It says how many matched and were left off.
 //
 // `freeze <n>` is run on the user's approval of round <n>: it reads that round's `report.json`,
 // checks every screenshot still hashes as reported and that today's tokens.css is the one the
@@ -91,6 +95,7 @@ import {
   parseFrozenRound,
   sha256,
   shotName,
+  shotsToShow,
   shotVerdict,
   TOKENS_PATH,
   tokensFinding,
@@ -1173,14 +1178,26 @@ const findingsOf = (shot: ShotRecord): string => {
 const figure = (shot: ShotRecord, title: string): string =>
   `<figure class="shot w${String(shot.width)}"><a href="${shot.file}"><img src="${shot.file}" width="${String(shot.width)}" alt="${escape(`${title} at ${String(shot.width)} px in ${shot.theme}`)}" loading="lazy"></a><figcaption>${String(shot.width)} px, ${shot.theme}</figcaption>${findingsOf(shot)}</figure>`;
 
-const roundPage = (report: Report, round: number): string => {
+/** What a round's page shows of its report: the new or changed shots, and how many matched. */
+interface PageShots {
+  readonly shown: ReadonlyArray<ShotRecord>;
+  readonly matched: number;
+  /** The frozen round they were matched against; none when nothing is frozen before this round. */
+  readonly against: number | null;
+}
+
+const roundPage = (
+  report: Report,
+  round: number,
+  { shown, matched, against }: PageShots
+): string => {
   const sums = summary(report);
 
   const byState = (name: string, theme: LookTheme) =>
-    report.shots.filter((shot) => shot.state === name && shot.theme === theme);
+    shown.filter((shot) => shot.state === name && shot.theme === theme);
 
-  const captured = STATES.filter((state) =>
-    report.shots.some((shot) => shot.state === state.name)
+  const captured = STATES.filter(
+    (state) => byState(state.name, "dark").length > 0
   );
 
   const sections = captured
@@ -1197,7 +1214,9 @@ const roundPage = (report: Report, round: number): string => {
     })
     .join("\n");
 
-  const light = captured.filter((state) => state.light);
+  const light = STATES.filter(
+    (state) => byState(state.name, "light").length > 0
+  );
 
   const lightSection =
     light.length === 0
@@ -1279,7 +1298,7 @@ ${light
 <div class="eyebrow">Cairn · look track · round ${String(round)} · captured at ${escape(report.commit)} · tokens ${escape(report.tokens.sha256.slice(0, 12))}</div>
 <h1>The app as it draws today, round ${String(round)}</h1>
 <p>Unlike rounds 0 and 1, these are not mock pages. Each picture is the real <code>next</code> client, driven by <code>judges/look.ts</code> over a scripted brain with t3code's imported thread, at 390 px as a phone and at 1,440 px, in dark (and in light where the state has a light variant).</p>
-<p>Under each picture are the look rules' findings for it: touch targets, text that spills or is cut, sideways scroll, colour tones and focus rings. A finding is a fault in the views for the look track to fix, not a question for you.</p>
+${against === null ? "" : `<p>${String(matched)} of ${String(report.shots.length)} pictures matched round ${String(against)} and were left off this page, which shows only the new and changed ones. Freezing this round keeps every picture, those too.</p>\n`}<p>Under each picture are the look rules' findings for it: touch targets, text that spills or is cut, sideways scroll, colour tones and focus rings. A finding is a fault in the views for the look track to fix, not a question for you.</p>
 ${values.note === "" ? "" : `<div class="callout">${prose(values.note)}</div>`}
 <nav class="jump">${captured.map((state) => `<a href="#${state.name}">${escape(state.title)}</a>`).join("")}${light.length > 0 ? `<a href="#light">In light</a>` : ""}<a href="#rules">The rules</a><a href="#call">Your call</a></nav>
 </header>
@@ -1558,13 +1577,30 @@ const main = async (): Promise<boolean> => {
 
     const report = await capture(folder, round);
 
+    // The page shows what changed since the newest round frozen before this one (a round
+    // published again after its own freeze is still judged against the round before it).
+    const before = newestRound(
+      readFrozen(values.frozen).filter((frozen) => frozen.round < round)
+    );
+
+    const { shown, matched } = shotsToShow(before, report.shots, (shot) =>
+      readFileSync(path.join(folder, shot.file))
+    );
+
     copyFileSync(path.join(root, TOKENS_PATH), path.join(folder, "tokens.css"));
-    writeFileSync(path.join(folder, "index.html"), roundPage(report, round));
+    writeFileSync(
+      path.join(folder, "index.html"),
+      roundPage(report, round, {
+        shown,
+        matched: matched.length,
+        against: before?.round ?? null,
+      })
+    );
 
     const ok = verdictOf(report);
 
     process.stdout.write(
-      `${JSON.stringify({ ok, folder, url: `${ROUNDS_URL}/round-${String(round)}/`, ...summary(report) })}\n`
+      `${JSON.stringify({ ok, folder, url: `${ROUNDS_URL}/round-${String(round)}/`, ...summary(report), onPage: shown.length, matched: matched.length })}\n`
     );
 
     return ok;

@@ -22,7 +22,9 @@ import {
   newestRound,
   parseFrozenRound,
   sha256,
+  shotName,
   shotVerdict,
+  shotsToShow,
   TOKENS_PATH,
   tokensFinding,
 } from "./lib/LookFreeze.ts";
@@ -323,6 +325,100 @@ describe("a frozen fixture round", () => {
       ])?.round
     ).toBe(4);
     expect(newestRound([])).toBeUndefined();
+  });
+});
+
+/** A shot of the next round: its name parts and the PNG it took. */
+const taken = (
+  state: string,
+  width: 390 | 1440,
+  theme: "dark" | "light",
+  bytes: Buffer
+) => ({ state, width, theme, bytes });
+
+/** The names of the shots the page shows and of those it leaves off. */
+const select = (
+  frozen: FrozenRound | undefined,
+  shots: ReadonlyArray<ReturnType<typeof taken>>
+) => {
+  const { shown, matched } = shotsToShow(frozen, shots, (shot) => shot.bytes);
+
+  return {
+    shown: shown.map((shot) => shotName(shot)),
+    matched: matched.map((shot) => shotName(shot)),
+  };
+};
+
+describe(shotsToShow, () => {
+  const png = encodePng(picture(), true);
+  const round = frozenRound(png);
+
+  it("leaves off a shot identical to its frozen shot, or within the allowance", () => {
+    // One pixel moved by 3 levels: no cell's mean moves.
+    const nudged = encodePng(
+      picture((x, y) => (x === 5 && y === 5 ? [20, 20, 20] : null)),
+      true
+    );
+
+    expect(select(round, [taken("thread", 390, "dark", png)])).toStrictEqual({
+      shown: [],
+      matched: ["thread-390-dark"],
+    });
+    expect(select(round, [taken("thread", 390, "dark", nudged)])).toStrictEqual(
+      { shown: [], matched: ["thread-390-dark"] }
+    );
+  });
+
+  it("shows a shot that drifts from its frozen shot or changed size", () => {
+    const drifted = encodePng(
+      picture((x, y) => (x < 32 && y < 32 ? [18, 18, 18] : null)),
+      true
+    );
+
+    const taller = encodePng(
+      picture(() => null, 128, 128),
+      true
+    );
+
+    expect(
+      select(round, [taken("thread", 390, "dark", drifted)])
+    ).toStrictEqual({ shown: ["thread-390-dark"], matched: [] });
+    expect(select(round, [taken("thread", 390, "dark", taller)])).toStrictEqual(
+      { shown: ["thread-390-dark"], matched: [] }
+    );
+  });
+
+  it("shows a new state, and a width or theme the frozen round lacks", () => {
+    expect(
+      select(round, [
+        taken("thread", 390, "dark", png),
+        taken("brief-card", 390, "dark", png),
+        taken("thread", 1440, "dark", png),
+        taken("thread", 390, "light", png),
+      ])
+    ).toStrictEqual({
+      shown: ["brief-card-390-dark", "thread-1440-dark", "thread-390-light"],
+      matched: ["thread-390-dark"],
+    });
+  });
+
+  it("judges by the frozen round's allowance", () => {
+    const drifted = encodePng(
+      picture((x, y) => (x < 32 && y < 32 ? [18, 18, 18] : null)),
+      true
+    );
+
+    const lenient: FrozenRound = { ...round, allowance: { cellLevels: 1 } };
+
+    expect(
+      select(lenient, [taken("thread", 390, "dark", drifted)])
+    ).toStrictEqual({ shown: [], matched: ["thread-390-dark"] });
+  });
+
+  it("shows every shot when nothing is frozen", () => {
+    expect(
+      select(undefined, [taken("thread", 390, "dark", png)])
+    ).toStrictEqual({ shown: ["thread-390-dark"], matched: [] });
   });
 });
 

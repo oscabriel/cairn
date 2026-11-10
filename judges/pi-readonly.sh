@@ -39,6 +39,9 @@
 # FAIL lines and exit nonzero.
 set -euo pipefail
 
+# Records this run when it ends (judges/lib/record.sh, ADR 0054).
+source "$(dirname "$0")/lib/record.sh" && record_run pi-readonly.sh "$@"
+
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 agent=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
 agent=${agent%/}

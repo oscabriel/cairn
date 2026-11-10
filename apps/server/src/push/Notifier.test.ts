@@ -47,6 +47,8 @@ import {
 import {
   EXECUTOR_SIGN_IN_KEY,
   MAX_MESSAGE_BYTES,
+  NIGHTLY_FAILED_TAG,
+  nightlyFailedMessage,
   Notifier,
   PushMessage,
   watchedTree,
@@ -728,6 +730,36 @@ describe(Notifier, () => {
           yield* notifier.settle;
 
           assert.strictEqual(service.attempts.length, 2);
+        })
+      );
+    }
+  );
+
+  it.effect(
+    "pushes the nightly's failure to every device each time it is asked, in its fixed words",
+    () => {
+      const service = fakePushService(() => 201);
+
+      return withNotifier(
+        service,
+        Effect.gen(function* () {
+          yield* subscribe("phone", "laptop");
+          const notifier = yield* Notifier;
+
+          const first = yield* notifier.nightlyFailed;
+          const second = yield* notifier.nightlyFailed;
+
+          assert.deepStrictEqual(first, ["delivered", "delivered"]);
+          assert.deepStrictEqual(second, ["delivered", "delivered"]);
+          assert.strictEqual(service.attempts.length, 4);
+          assert.deepStrictEqual(
+            messagesTo(service.attempts, "phone")[0],
+            nightlyFailedMessage(0)
+          );
+          assert.strictEqual(
+            messagesTo(service.attempts, "phone")[0]?.tag,
+            NIGHTLY_FAILED_TAG
+          );
         })
       );
     }

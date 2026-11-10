@@ -9,6 +9,7 @@
 // run that ended (failed, or ran longer than 20 seconds) while no visible page reported showing the
 // thread in the last 30 seconds is pushed once, claimed in `notified_runs` under the thread and the
 // run's end time. Executor's needs-sign-in push is sent once until the link is signed in again.
+// The nightly's failure push (`NightlyFailedRoute.ts`) is sent each time the failed nightly asks.
 // A subagent's run end is never pushed (its result reaches its parent as a note, ADR 0028), and a
 // push is suppressed while a visible page shows its thread or any ancestor of it (`isWatchedTree`).
 // Approval push (briefs note B7, rules in `RequestPush.ts`): the same events push a request the
@@ -286,6 +287,18 @@ export const executorSignInMessage = (badge: number): PushMessage => ({
 /** The claim key of the needs-sign-in push. */
 export const EXECUTOR_SIGN_IN_KEY = "executor-sign-in";
 
+/** The tag of the nightly's failure push: each failed night replaces the last on the device. */
+export const NIGHTLY_FAILED_TAG = "nightly-failed";
+
+/** The nightly's failure push: fixed words, since nothing in it comes from the caller. */
+export const nightlyFailedMessage = (badge: number): PushMessage => ({
+  title: "The nightly judges failed",
+  body: "The durability nightly failed. Its log is today's durability file in ~/cairn-judges/, and journalctl --user -u cairn-nightly has the run.",
+  tag: NIGHTLY_FAILED_TAG,
+  url: "/",
+  badge,
+});
+
 /** The push for a request waiting on a thread (`RequestPush.ts`). */
 export const requestMessage = (
   push: RequestPush,
@@ -380,6 +393,11 @@ export class Notifier extends Context.Service<
     readonly executorNeedsSignIn: Effect.Effect<void>;
     /** Executor works again: the next lapse pushes again. */
     readonly executorSignedIn: Effect.Effect<void>;
+    /**
+     * Pushes "the nightly judges failed" to every device now and waits for each delivery. No claim:
+     * every failed night pushes, and the tag replaces the last one on the device.
+     */
+    readonly nightlyFailed: Effect.Effect<ReadonlyArray<DeliveryOutcome>>;
     /** Waits until every push started so far has been delivered or given up. */
     readonly settle: Effect.Effect<void>;
   }
@@ -900,6 +918,10 @@ export class Notifier extends Context.Service<
           Effect.withSpan("Notifier.executorSignedIn")
         );
 
+      const nightlyFailed = Effect.gen(function* () {
+        return yield* sendToAll(nightlyFailedMessage(yield* badgeCount));
+      }).pipe(Effect.withSpan("Notifier.nightlyFailed"));
+
       const readCursor =
         sql`SELECT sequence FROM push_cursor WHERE id = 1`.pipe(
           Effect.flatMap(decodeCursor),
@@ -985,6 +1007,7 @@ export class Notifier extends Context.Service<
         sweep,
         executorNeedsSignIn,
         executorSignedIn,
+        nightlyFailed,
         settle,
       });
     })

@@ -61,6 +61,9 @@ import {
 } from "./fixtures/workflows/LaunchBrain.ts";
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["double", "sample", "stop"] as const;
 

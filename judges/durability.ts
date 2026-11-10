@@ -134,8 +134,11 @@ import type { Browser } from "./lib/Browser.ts";
 import * as DeployedUnit from "./lib/DeployedUnit.ts";
 import * as Events from "./lib/Events.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
 import * as Unit from "./lib/Unit.ts";
 import { buildWeb, freePort } from "./load.ts";
+
+recordOnExit(import.meta);
 
 const WINDOWS = [
   "streaming",

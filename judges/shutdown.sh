@@ -25,6 +25,9 @@
 # --user` and node; no sudo, no secrets.
 set -euo pipefail
 
+# Records this run when it ends (judges/lib/record.sh, ADR 0054).
+source "$(dirname "$0")/lib/record.sh" && record_run shutdown.sh "$@"
+
 cd "$(dirname "$0")/.."
 
 if [[ ${1:-} == --unit ]]; then

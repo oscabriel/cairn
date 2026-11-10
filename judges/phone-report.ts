@@ -28,6 +28,9 @@ import { DateTime, Option } from "effect";
 
 import * as Events from "./lib/Events.ts";
 import type { BrainEvent } from "./lib/Events.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 /** A load must be interactive within this, on the phone (kickoff Targets). */
 export const LOAD_LIMIT_MS = 1000;

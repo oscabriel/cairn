@@ -62,6 +62,9 @@ import {
   PackageDecision,
   PI_HOST_POLICY,
 } from "../apps/server/src/pi-host/PiHostPolicy.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
 

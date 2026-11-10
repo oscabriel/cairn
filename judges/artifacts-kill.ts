@@ -47,6 +47,9 @@ import { Console, Effect, Option, Schema } from "effect";
 
 import { THREAD_A } from "../apps/server/src/reach/ArtifactScenarios.ts";
 import type { ArtifactLife } from "./fixtures/reach/ArtifactBrain.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

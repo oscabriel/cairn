@@ -53,6 +53,10 @@ import {
   Stream,
 } from "effect";
 
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
+
 const spawned: Array<string> = [];
 
 // Count every child process, before anything that could start one loads: the brain's modules

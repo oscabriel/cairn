@@ -11,3 +11,5 @@ spikes/*/runs/
 .claude/worktrees/
 # Probes judges/lint-boundaries.test.ts writes; a killed run can leave one behind.
 **/LintProbe*.ts
+# tsgo incremental output; no tsconfig here asks for it, so a one-off build leaves it behind.
+*.tsbuildinfo

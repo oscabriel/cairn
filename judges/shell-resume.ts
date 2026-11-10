@@ -70,6 +70,9 @@ import {
   createThread,
   testThreadId,
 } from "../apps/server/src/shell/ShellTestKit.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

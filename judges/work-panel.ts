@@ -57,6 +57,9 @@ import {
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["stop", "state", "move", "count"] as const;
 

@@ -70,6 +70,9 @@ import {
 import { GoalBook } from "../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../apps/server/src/workflows/WorkflowStop.ts";
 import { chromium, IPHONE_15 } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,

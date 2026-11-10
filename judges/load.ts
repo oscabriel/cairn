@@ -49,7 +49,10 @@ import { chromium } from "./lib/Browser.ts";
 import type { Browser, Page } from "./lib/Browser.ts";
 import * as Events from "./lib/Events.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
 import { loadVerdict, PHONE_AGENT, readLog } from "./phone-report.ts";
+
+recordOnExit(import.meta);
 
 export const REPO = path.join(import.meta.dirname, "..");
 

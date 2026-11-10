@@ -73,6 +73,9 @@ import {
 import { cardBrain } from "./fixtures/surfaces/CardBrain.ts";
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = [
   "slot",

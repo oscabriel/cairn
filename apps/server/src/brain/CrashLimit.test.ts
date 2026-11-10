@@ -30,6 +30,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Function, Option, Schema } from "effect";
 import { Type } from "typebox";
 
+import { KEPT_WAITS } from "../BootRepairs.ts";
 import { conversationOf, taskOf } from "../subagents/Delivery.ts";
 import { Approvals, approvalIdOf } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
@@ -37,6 +38,7 @@ import {
   CRASH_LIMIT,
   crashLooped,
   endCrashLoopedIn,
+  namedWaits,
   TOOL_TASK,
 } from "./CrashLimit.ts";
 import type { CountedTask } from "./CrashLimit.ts";
@@ -59,6 +61,12 @@ const task = (
 const nested = (id: number, restarts: number, owner: number): CountedTask => ({
   ...task(id, TOOL_TASK, restarts),
   owner: taskOf(owner),
+});
+
+/** A nested call of `name` under `owner`, cut off the limit's number of times. */
+const nestedCall = (id: number, name: string, owner: number): CountedTask => ({
+  ...nested(id, CRASH_LIMIT, owner),
+  input: { kind: "nested", call: { name, arguments: {} } },
 });
 
 const ids = (tasks: ReadonlyArray<CountedTask>) =>
@@ -115,6 +123,31 @@ describe("the crash accounting", () => {
         )
       ),
       [23]
+    );
+  });
+
+  it("keeps a workflow node still queued for its slot, which holds no record yet, by its name", () => {
+    // Script 30 is a workflow's script call; node 31 reserved and holds its record; nodes 32 and
+    // 33 wait for a node slot, so they have not reserved; 34 is a nested read that waits on
+    // nothing. The brain keeps what holds a record or a script (30, 31) and what `namedWaits` names.
+    const tasks = [
+      task(30, TOOL_TASK, CRASH_LIMIT),
+      nestedCall(31, "agent", 30),
+      nestedCall(32, "agent", 30),
+      nestedCall(33, "verify", 30),
+      nestedCall(34, "read", 30),
+    ];
+
+    const named = namedWaits(tasks, KEPT_WAITS.tools);
+
+    assert.deepStrictEqual(
+      ids(
+        crashLooped(tasks, {
+          kinds: KEPT_WAITS.kinds,
+          waits: new Set([30, 31, ...named]),
+        })
+      ),
+      [34]
     );
   });
 

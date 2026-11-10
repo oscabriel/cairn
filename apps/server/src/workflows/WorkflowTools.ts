@@ -198,6 +198,12 @@ export const WORKFLOWS_EXTENSION = "cairn.workflows";
 /** The watcher task's name. */
 export const WATCH_TASK = "cairn.workflow-watch";
 
+/** The node tool a script's `agent()` calls. */
+export const AGENT_TOOL = "agent";
+
+/** The node tool a script's `verify()` calls. */
+export const VERIFY_TOOL = "verify";
+
 /** The longest `log()` line a row keeps. */
 export const LOG_LINE_LIMIT = 2000;
 
@@ -2097,7 +2103,7 @@ export const workflowExtension = (
   };
 
   const agent = defineTool({
-    name: "agent",
+    name: AGENT_TOOL,
     description:
       "Called by the workflow prelude's agent(): runs one node of the workflow as a child conversation. Not for direct use.",
     parameters: anyObject,
@@ -2189,7 +2195,7 @@ export const workflowExtension = (
   });
 
   const verify = defineTool({
-    name: "verify",
+    name: VERIFY_TOOL,
     description:
       "Called by the workflow prelude's verify(): checks one result against a claim in a fresh child. Not for direct use.",
     parameters: anyObject,

@@ -58,7 +58,11 @@ import type { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { reconcileSpendAtBoot } from "./usage/SpendLedger.ts";
 import type { SpendLedger } from "./usage/SpendLedger.ts";
 import { STOPPER_TASK } from "./workflows/WorkflowBudget.ts";
-import { WATCH_TASK } from "./workflows/WorkflowTools.ts";
+import {
+  AGENT_TOOL,
+  VERIFY_TOOL,
+  WATCH_TASK,
+} from "./workflows/WorkflowTools.ts";
 import type { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
 
 /** One repair: a name for the log and the effect. */
@@ -94,12 +98,13 @@ export const bootRepair = <E, R>(
  * they wait on other work, a clock or a person and start nothing outside, or (a subagent's start)
  * must make their child once (ADR 0030); the workflow watcher waits on a node's or a script call's
  * task, and the budget stopper looks until no node runs. Tools: `subagent_status` waits on its
- * children with no record of its own. A tool call that holds a record, and a workflow's script
- * call, are kept by what they hold (`CrashLimit.ts`).
+ * children with no record of its own, and a workflow's `agent` and `verify` calls wait on their
+ * child, before their reserve writes a record while they are queued for a node slot. A tool call
+ * that holds a record, and a workflow's script call, are kept by what they hold (`CrashLimit.ts`).
  */
 export const KEPT_WAITS: KeptWaits = {
   kinds: new Set([...SUBAGENT_WAIT_TASKS, WATCH_TASK, STOPPER_TASK]),
-  tools: new Set([SUBAGENT_STATUS_TOOL]),
+  tools: new Set([SUBAGENT_STATUS_TOOL, AGENT_TOOL, VERIFY_TOOL]),
 };
 
 /** Every boot repair, in order. */

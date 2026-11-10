@@ -15,6 +15,8 @@
 // - Each node's child calls `work`, which appends `{node, what}` to `effects.log` (outside the
 //   store): `start` once per child (a memo guards it), then `done` or `aborted`.
 // - `--hold point:label:ms` holds that node there for `ms` (`holding <point> <label>` is printed).
+//   `label` may name several nodes, `a+b+c`: each is held, and once all are, `holding <point>
+//   a+b+c` is printed.
 // - `--stop label:ms` stops that node `ms` after it runs (`harness.abortTask` on its nested task),
 //   once across lives (`stop-requested` in the run's directory), printing `stopped <label>`.
 // - `--answer` answers every pending `approve` record with accept.
@@ -29,7 +31,7 @@
 // - `--crash-limit` runs the brain's crash accounting (`CrashLimit.ts`, ADR 0046) before the
 //   Harness resumes: it counts the tasks crashes cut off the limit's number of times in a row and
 //   aborts the ones that are not a wait (a tool call that holds a record, the script call, a
-//   workflow wait task); it prints `cut-off <n>` and
+//   node's `agent` or `verify` call, a workflow wait task); it prints `cut-off <n>` and
 //   `ended <n>`. `--default-restart-limit` opens the Harness with pi-durable's own restart limit
 //   instead of none, the crash-loop case's broken control. A life with `--crash-limit` ends with
 //   `workflow stalled` when the script call has ended and its row still runs 5 s later.
@@ -91,7 +93,11 @@ import type {
   KitBrain,
   WorkEffect,
 } from "../../../apps/server/src/workflows/WorkflowTestKit.ts";
-import { WATCH_TASK } from "../../../apps/server/src/workflows/WorkflowTools.ts";
+import {
+  AGENT_TOOL,
+  VERIFY_TOOL,
+  WATCH_TASK,
+} from "../../../apps/server/src/workflows/WorkflowTools.ts";
 import type { HoldPoint } from "../../../apps/server/src/workflows/WorkflowTools.ts";
 
 const { values } = parseArgs({
@@ -146,9 +152,20 @@ const CodemodeRunDoc = defineDoc<{ [key: string]: JsonValue }>({
   checkpointWhen: () => false,
 });
 
+/** The labels `--hold` names, `+` between them, and those this life holds already. */
+const holdLabels = new Set((holdLabel ?? "").split("+"));
+
+const heldLabels = new Set<string>();
+
 const hold = async (point: HoldPoint, label: string) => {
-  if (point === holdPoint && label === holdLabel) {
+  if (point === holdPoint && holdLabels.has(label)) {
     say(`holding ${point} ${label}`);
+    heldLabels.add(label);
+
+    if (holdLabels.size > 1 && heldLabels.size === holdLabels.size) {
+      say(`holding ${point} ${holdLabel ?? ""}`);
+    }
+
     await sleep(Number(holdMs));
   }
 };
@@ -195,18 +212,25 @@ const WORKFLOW_WAIT_TASKS: ReadonlySet<string> = new Set([
   STOPPER_TASK,
 ]);
 
+/** The workflow tools whose calls it keeps by name, as `BootRepairs.ts` lists them. */
+const WORKFLOW_WAIT_TOOLS: ReadonlySet<string> = new Set([
+  AGENT_TOOL,
+  VERIFY_TOOL,
+]);
+
 /** What the crash accounting found at this life's boot. */
 const crashes = { cutOff: 0, ended: 0 };
 
 /**
  * The brain's crash accounting (`CrashLimit.ts`, ADR 0046) on the kit's Harness, before it resumes:
  * every live task cut off the limit's number of times in a row is counted, and the ones that are
- * not a wait (a tool call that holds a record, the script call, a workflow wait task) are aborted.
+ * not a wait (a tool call that holds a record, the script call, a node's `agent` or `verify` call,
+ * a workflow wait task) are aborted.
  */
 const crashLimit = async (brain: KitBrain) => {
   const count = await endCrashLoopedIn(
     brain.harness,
-    { kinds: WORKFLOW_WAIT_TASKS, tools: new Set() },
+    { kinds: WORKFLOW_WAIT_TASKS, tools: WORKFLOW_WAIT_TOOLS },
     context
   );
 

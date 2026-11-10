@@ -16,10 +16,13 @@
 //   `cairn.approvals` (`call-<task id>`, whatever its status: a gated call, `ask_user`,
 //   `ask_parent`, `workflow_plan`, a workflow's `approve`, `agent` and `verify` nodes, an Executor
 //   or portal call that asked), a workflow's script call (the row's `codemodeTaskId`), or a call of
-//   a tool the caller names (`subagent_status`, which waits on its children and holds no record);
+//   a tool the caller names (`subagent_status`, which waits on its children and holds no record,
+//   and a workflow's `agent` and `verify`, which hold none while they are queued for a node slot);
 //   and every tool call above a kept one through its nested calls (a script waiting on its nested
 //   call's approval). A kept call reruns only to wait again or to read its decision, and a gated
-//   call's effect runs at most once by its effect mark (`Permissions.ts`);
+//   call's effect runs at most once by its effect mark (`Permissions.ts`). A code mode script
+//   queued for a script slot is not kept: nothing durable says it never started, and it ends with
+//   the "aborted" result the model reads;
 // - the task kinds the caller names: the subagent and workflow tasks that wait on other work, a
 //   clock or a person (`BootRepairs.ts` lists them).
 //
@@ -103,6 +106,28 @@ const decodeToolCall = Schema.decodeUnknownOption(
     name: Schema.String,
   })
 );
+
+/**
+ * The nested tool calls that call one of `tools`, read from their task input alone (no store read):
+ * a workflow's `agent` or `verify` call still queued for a node slot holds no record yet, and is
+ * kept by its name. Pure, so the rule is tested without a brain.
+ */
+export const namedWaits = (
+  tasks: ReadonlyArray<CountedTask>,
+  tools: ReadonlySet<string>
+): ReadonlySet<number> =>
+  new Set(
+    tasks.flatMap((task) => {
+      const input = decodeToolInput(task.input);
+
+      return task.kind === TOOL_TASK &&
+        Option.isSome(input) &&
+        input.value.kind === "nested" &&
+        tools.has(input.value.call.name)
+        ? [Number(task.id)]
+        : [];
+    })
+  );
 
 /** The name of the tool a tool call task calls; none when its entry cannot be read. */
 const callName = async (
@@ -194,8 +219,15 @@ export const toolWaits = async (
     );
   });
 
+  const named = namedWaits(tasks, tools);
+
   const waits = async (task: CountedTask): Promise<boolean> => {
     const id = Number(task.id);
+
+    if (named.has(id)) {
+      return true;
+    }
+
     const records = await recordsOf(task.conversationId);
 
     if (records.has(approvalIdOf(id))) {

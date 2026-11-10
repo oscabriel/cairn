@@ -14,10 +14,11 @@
 // while the script's question waits), divergence (the stored start data changed between lives, as
 // a pi bump does), and control (a dispatch that ignores its row; it must fail by dispatching twice).
 //
-// Crash loop (ADR 0046): six kills while a node is held cut every task of the run off past
-// pi-durable's default restart limit; the last life runs the brain's crash accounting, which ends
-// none of the workflow's tasks (tool calls and watchers are waits it keeps), so the workflow still
-// ends `finished` with every node once and nobody retries anything. Its control opens the last life
+// Crash loop (ADR 0046): six kills while the fan's three nodes are held after their reserve cut
+// every task of the run off past pi-durable's default restart limit; the last life runs the brain's
+// crash accounting, which ends none of the workflow's tasks (the script call, the node calls and
+// the watcher are waits it keeps; no node's work is live), so the workflow still ends `finished`
+// with every node once and nobody retries anything. Its control opens the last life
 // with pi-durable's own restart limit, as a bump that kept it would: the script call ends with a
 // restart-limit error, its row stays `running`, and the case must fail by stalling.
 //
@@ -182,12 +183,15 @@ const envelopeCase = (
 });
 
 /**
- * Six lives killed while node b is held after its reserve, so every task of the run is cut off six
- * times in a row, past pi-durable's default restart limit, when the next life opens.
+ * Six lives killed while the fan's three nodes are all held after their reserve (each child made,
+ * its input not yet sent), so every task of the run is cut off six times in a row, past pi-durable's
+ * default restart limit, when the next life opens, and every one of them is a wait: the script
+ * call, the three `agent` calls holding their records, the watcher. No child's `work` call is live,
+ * since one is work the accounting ends (ADR 0046; `judges/durability.ts` kill-six shows that).
  */
 const CRASH_LIVES: ReadonlyArray<Life> = Array.from({ length: 6 }, () =>
-  life(["--hold", "after-reserve:b:60000"], {
-    line: "holding after-reserve b",
+  life(["--hold", "after-reserve:a+b+c:60000"], {
+    line: "holding after-reserve a+b+c",
     delayMs: 200,
   })
 );

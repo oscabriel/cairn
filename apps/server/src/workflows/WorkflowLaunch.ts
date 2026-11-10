@@ -7,10 +7,13 @@
 // `sample` 1, so the gate bakes `SAMPLE = 1` and `pipeline` takes one item (a separate, full run
 // with nothing carried over); the card's edits (`launch`) replace the row's budget; Decline, an
 // expiry or a stop marks the row `declined`. The frozen payload stays as the model proposed it.
+// A launch is bound to the run that proposed it (`LaunchRunsDoc`): the gate runs it only from that
+// run, and Go's launch watcher (`LaunchWatch`) declines it when that run ends before it ran.
 //
 // Every node of a running workflow is a brief. `briefWithin` decides whether the launch's envelope
-// covers it (the model it runs on and whether it writes, the thread's mode, the node cap; ADR 0043
-// keys the envelope by model): a node inside is
+// covers it (the model it runs on and whether it writes, the thread's mode, the node cap). The
+// envelope grants per model, not per call site (ADR 0043 and ADR 0032, amended 2026-11-09): a node
+// from any call site fits when its model is one the launch showed. A node inside is
 // recorded as an accepted brief with `decidedBy` envelope in the commit that dispatches it; a node
 // outside raises its own brief card and waits for the user like any approval. So every dispatched
 // row of the ledger names an accepted brief, and `ledgerProblems` checks it.
@@ -24,6 +27,7 @@ import type { Envelope, RuntimeMode } from "@cairn/protocol/Policy";
 import type { Budget } from "@cairn/protocol/Spend";
 import type { NodeRefusal } from "@cairn/protocol/Workflows";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
+import { defineTask, LiveDoc } from "@earendil-works/pi-durable";
 import { Option, Schema } from "effect";
 
 import {
@@ -39,13 +43,15 @@ import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import {
   approveRecord,
   declineRow,
+  endApprovedRow,
+  LaunchRunsDoc,
   launchOf,
   NODE_BRIEF_TOOLS,
-  supersedeRow,
   WorkflowsDoc,
 } from "./WorkflowDocs.ts";
 import type {
   BudgetState,
+  LaunchRunsState,
   NodeItemState,
   WorkflowItemState,
 } from "./WorkflowDocs.ts";
@@ -112,12 +118,111 @@ export const applyLaunchAnswer = (
   return true;
 };
 
+/** The run a launch is bound to, by its first entry; none for a planted or unbound launch. */
+const boundRunOf = (
+  runs: Readonly<LaunchRunsState>,
+  workflowId: string
+): Option.Option<number> =>
+  Option.fromNullOr(runs.items[workflowId]?.run ?? null);
+
+/** The launch watcher's task name. */
+export const LAUNCH_WATCH_TASK = "cairn.workflow-launch-watch";
+
+/**
+ * The launch watcher (`cairn.workflow-launch-watch`), a background task Go creates beside its
+ * approved row: it follows the run the launch was proposed in, one generation at a time
+ * (`pi.live.run.taskId` passes from each to the next while `first` stays), and once that run has
+ * ended with the row still approved (the model never ran it, or the user stopped the run first) it
+ * declines the row, decided by the system as `run-stopped`. So an approved launch is never a
+ * standing grant (ADR 0032 as amended). A rerun after `kill -9` looks again from the start.
+ */
+export const LaunchWatch = defineTask<
+  { workflowId: string },
+  { phase: "watch" },
+  null
+>({
+  name: LAUNCH_WATCH_TASK,
+  version: 1,
+  initial: () => ({ phase: "watch" }),
+  phases: {
+    watch: async (task, runtime, context) => {
+      const { workflowId } = task.input;
+
+      for (;;) {
+        // oxlint-disable-next-line no-await-in-loop -- one look per generation of the run
+        const ledger = await runtime.snapshot(
+          WorkflowsDoc,
+          runtime.conversationId,
+          context
+        );
+
+        // oxlint-disable-next-line no-await-in-loop
+        const runs = await runtime.snapshot(
+          LaunchRunsDoc,
+          runtime.conversationId,
+          context
+        );
+
+        // oxlint-disable-next-line no-await-in-loop
+        const live = await runtime.snapshot(
+          LiveDoc,
+          runtime.conversationId,
+          context
+        );
+
+        const bound = boundRunOf(runs ?? { items: {} }, workflowId);
+
+        // The launch's run, while it is still the live one.
+        const current = Option.filter(
+          Option.fromUndefinedOr(live?.run),
+          (each) =>
+            Option.exists(Option.fromUndefinedOr(each.first), (first) =>
+              Option.contains(bound, first)
+            )
+        );
+
+        if (
+          ledger?.items[workflowId]?.state !== "approved" ||
+          Option.isNone(current)
+        ) {
+          break;
+        }
+
+        // oxlint-disable-next-line no-await-in-loop -- the run's current generation
+        await runtime.waitForTask(current.value.taskId, context);
+      }
+
+      await runtime.commit(async (tx) => {
+        const ledger = await tx.doc(WorkflowsDoc, runtime.conversationId);
+        const row = ledger.items[workflowId];
+
+        // The run ended: a row it never ran ends with it. One that ran, or ended, stays as it is.
+        if (row !== undefined) {
+          endApprovedRow(row, "run-stopped", runtime.now());
+        }
+
+        return {
+          status: "terminal",
+          outcome: { status: "completed", result: null },
+        };
+      }, context);
+    },
+  },
+  abort: async (_task, runtime, context) => {
+    await runtime.commit(
+      () => ({ status: "terminal", outcome: { status: "aborted" } }),
+      context
+    );
+  },
+});
+
 /**
  * The answering commit's part for a workflow's launch (`answerApproval`'s `answered` hook): the row
- * its payload names takes the answer, so Go and the approved row land together. A Go supersedes
- * every other approved row of the same script that never ran (a launch whose run stopped before
- * it called codemode), so the ledger holds at most one approved row per script hash and the gate
- * runs the launch the user approved last. Nothing for any other record.
+ * its payload names takes the answer, so Go and the approved row land together. Go also creates the
+ * row's launch watcher (`LaunchWatch`), which declines the row if its run ends before it runs, and
+ * supersedes every approved row of the same script that another run left (one whose run ended
+ * before the watcher could end it, or one written before launches were bound to runs). An approved
+ * row of the same run is another launch the user wants, and stays. Nothing for any other record.
  */
 export const launchAnswered = async (
   tx: Tx,
@@ -131,6 +236,7 @@ export const launchAnswered = async (
   }
 
   const ledger = await tx.doc(WorkflowsDoc, conversationId);
+  const runs = await tx.doc(LaunchRunsDoc, conversationId);
   const row = ledger.items[launch.value.workflowId];
 
   if (row === undefined || !applyLaunchAnswer(row, record)) {
@@ -142,11 +248,28 @@ export const launchAnswered = async (
   }
 
   const at = record.answeredAt ?? record.askedAt;
+  const run = boundRunOf(runs, row.id);
 
   for (const other of Object.values(ledger.items)) {
-    if (other.id !== row.id && other.scriptHash === row.scriptHash) {
-      supersedeRow(other, at);
+    const sameRun = Option.exists(run, (own) =>
+      Option.contains(boundRunOf(runs, other.id), own)
+    );
+
+    if (
+      other.id !== row.id &&
+      other.scriptHash === row.scriptHash &&
+      !sameRun
+    ) {
+      endApprovedRow(other, "superseded", at);
     }
+  }
+
+  if (Option.isSome(run)) {
+    await tx.createTask(
+      LaunchWatch,
+      { workflowId: row.id },
+      { ownership: { kind: "conversation" }, conversationId, background: true }
+    );
   }
 };
 
@@ -192,9 +315,10 @@ export interface Outside {
 
 /**
  * Whether the launch's envelope covers a node (ADR 0032, keyed by model per ADR 0043): its model
- * granted with the same arms, the level aside, as a writer for a writer (a writer grant covers a
- * reader on that model); a mode no wider than the widest granted (no modes granted covers any); and
- * room under the node cap. None when it fits.
+ * granted anywhere in the launch, whichever call site showed it (the envelope grants per model,
+ * not per call site), with the same arms, the level aside, as a writer for a writer (a writer
+ * grant covers a reader on that model); a mode no wider than the widest granted (no modes granted
+ * covers any); and room under the node cap. None when it fits.
  */
 export const briefWithin = (
   envelope: Envelope,

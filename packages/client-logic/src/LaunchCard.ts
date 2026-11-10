@@ -103,11 +103,15 @@ export const specText = (spec: string): string =>
 const grantText = (entry: Envelope["roles"][number]): string =>
   `${specText(entry.spec)}, ${entry.readonly ? "reads only" : "may write"}`;
 
-/** The models the envelope grants, in words; "No models" for an envelope that grants none. */
+/**
+ * The models the envelope grants, in words, per model and to any node, whichever call site showed
+ * it (ADR 0043 as amended): "Any node may run on opencode-go/gpt-6-luna, reads only". "No models"
+ * for an envelope that grants none.
+ */
 export const grantsText = (envelope: Envelope): string =>
   envelope.roles.length === 0
     ? "No models"
-    : envelope.roles.map(grantText).join("; ");
+    : `Any node may run on ${envelope.roles.map(grantText).join("; ")}`;
 
 /**
  * The launch's numbers in reading order, as the card's first lines: nodes, the estimate, the

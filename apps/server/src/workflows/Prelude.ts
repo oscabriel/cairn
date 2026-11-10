@@ -94,7 +94,11 @@ export type BeginCall = typeof BeginCall.Type;
 export const AgentCall = Schema.Struct({
   workflowId: Schema.String,
   prompt: Schema.String,
-  /** `line:column` of the script's call, or null when the stack showed none. */
+  /**
+   * `line:column` of the script's call, or null when the stack showed none. The dry run keys its
+   * call-site table by it; a live node does not check it, since the envelope grants per model,
+   * not per call site (ADR 0043 as amended).
+   */
   site: Schema.OptionFromNullOr(Schema.String),
   label: Schema.OptionFromNullOr(Schema.String),
   /** `opts.phase`, else the title of the last `phase()` call. */

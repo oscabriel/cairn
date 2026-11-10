@@ -6,7 +6,8 @@
 // (`WorkflowPlan`, no model called) with the thread's own model and level as what a call that names
 // no model runs on (ADR 0043), estimates it from the thread's own past nodes on each model, and in
 // one commit writes the `proposed` ledger row, the launch approval (a
-// `brief` record whose frozen payload is the plan and its envelope, id `call-<task id>`) and the
+// `brief` record whose frozen payload is the plan and its envelope, id `call-<task id>`), the run
+// it was proposed in (`LaunchRunsDoc`: the gate runs it from that run only) and the
 // `workflow.proposed` event. Then it waits for the answer like any gated call; boot retries a task
 // whose approval is pending. A rerun after `kill -9` finds its row and record and waits again
 // without dry-running twice.
@@ -15,7 +16,7 @@
 // ends, and a stop (or the boot repair after one a crash cut off) declines it in the commit that
 // cancels the record (`heldByRun` counts a launch as its task's), so a row never stays `proposed`
 // after its record settled. Go tells the model to call `codemode` with exactly the same script: the
-// gate runs only the hash the user approved.
+// gate runs only the row the user approved, from the run that proposed it.
 
 import type { ThinkingLevel } from "@cairn/protocol/Models";
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
@@ -27,7 +28,7 @@ import type {
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import { defineTool } from "@earendil-works/pi-durable";
+import { defineTool, LiveDoc } from "@earendil-works/pi-durable";
 import { Effect, Option, Result, Schema } from "effect";
 import { Type } from "typebox";
 
@@ -48,6 +49,7 @@ import {
 } from "./recipes/BuiltInRecipes.ts";
 import { PROJECT_RECIPES_DIR } from "./recipes/Recipes.ts";
 import {
+  LaunchRunsDoc,
   proposedRecord,
   resultRefOf,
   workflowIdOf,
@@ -244,6 +246,30 @@ const settle = async (api: ToolExecutionApi, context: ChordContext) =>
       : Option.some({ row: copyRow(row), record: copyRecord(record) });
   }, context);
 
+/**
+ * Binds the launch `workflowId` to the live run when nothing bound it yet (a row proposed before
+ * launches were bound to runs); nothing when it is bound or no run is live.
+ */
+const bindToLiveRun = async (
+  api: ToolExecutionApi,
+  workflowId: string,
+  context: ChordContext
+): Promise<void> => {
+  const bound = await api.snapshot(LaunchRunsDoc, api.conversationId, context);
+  const live = await api.snapshot(LiveDoc, api.conversationId, context);
+  const first = live?.run?.first;
+
+  if (bound?.items[workflowId] !== undefined || first === undefined) {
+    return;
+  }
+
+  await api.commit(async (tx) => {
+    const runs = await tx.doc(LaunchRunsDoc, api.conversationId);
+
+    runs.items[workflowId] ??= { run: first };
+  }, context);
+};
+
 /** `workflow_plan`, over the dry run. */
 export const planTool = (plan: PlanAccess) => {
   /** Dry-runs, then writes the row, the record and the event once; the refusal's words otherwise. */
@@ -266,8 +292,12 @@ export const planTool = (plan: PlanAccess) => {
       context
     );
 
-    // A rerun finds what its first attempt proposed, and dry-runs nothing again.
+    // A rerun finds what its first attempt proposed, and dry-runs nothing again. A launch proposed
+    // before launches were bound to runs (a card that waited across the deploy) is bound here: the
+    // rerun is inside the run that proposed it.
     if (ledger?.items[workflowId] !== undefined) {
+      await bindToLiveRun(api, workflowId, context);
+
       return Option.none();
     }
 
@@ -312,6 +342,17 @@ export const planTool = (plan: PlanAccess) => {
     const history = historyOf(ledger);
     const { mode } = await readPermissions(api, context);
 
+    // The run this call is part of, by its first entry, which every tool round of the run keeps:
+    // the gate runs the launch only from this run.
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    const proposingRun = live?.run?.first;
+
+    if (proposingRun === undefined) {
+      return Option.some(
+        "workflow_plan runs only inside a run of this thread, and none is live. Nothing was proposed."
+      );
+    }
+
     const launch = toLaunch(run.success, {
       workflowId,
       // The script stays in this call's own arguments.
@@ -327,6 +368,7 @@ export const planTool = (plan: PlanAccess) => {
     await api.commit(async (tx) => {
       const rows = await tx.doc(WorkflowsDoc, api.conversationId);
       const approvals = await tx.doc(Approvals, api.conversationId);
+      const runs = await tx.doc(LaunchRunsDoc, api.conversationId);
       const record = launchRecord(api, launch);
 
       if (rows.items[workflowId] !== undefined) {
@@ -338,6 +380,7 @@ export const planTool = (plan: PlanAccess) => {
         approvalId: record.id,
         sample: Option.none(),
       });
+      runs.items[workflowId] = { run: proposingRun };
       approvals.items[record.id] = record;
 
       if (Option.isSome(named)) {

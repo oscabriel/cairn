@@ -77,6 +77,7 @@ import type {
 import {
   isNodeBrief,
   LAUNCH_TOOL,
+  LAUNCH_WATCH_TASK,
   launchAnswered,
 } from "../../../apps/server/src/workflows/WorkflowLaunch.ts";
 import {
@@ -210,6 +211,7 @@ const STALL_MS = 5000;
 const WORKFLOW_WAIT_TASKS: ReadonlySet<string> = new Set([
   WATCH_TASK,
   STOPPER_TASK,
+  LAUNCH_WATCH_TASK,
 ]);
 
 /** The workflow tools whose calls it keeps by name, as `BootRepairs.ts` lists them. */

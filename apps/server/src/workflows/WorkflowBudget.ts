@@ -67,8 +67,14 @@ import {
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
-import { emit, isEventObject, reactor } from "../brain/Events.ts";
-import type { Reactor } from "../brain/Events.ts";
+import {
+  emit,
+  eventKind,
+  isEventObject,
+  reactor,
+  UnreadableEvent,
+} from "../brain/Events.ts";
+import type { EventRecord, Reactor } from "../brain/Events.ts";
 import { applyNote, hasQueuedReset, readNote } from "../brain/NoteAdmission.ts";
 import { piEntryId } from "../brain/PiIds.ts";
 import {
@@ -888,11 +894,24 @@ const LineEventData = Schema.Struct({
   budget: Budget,
 });
 
-const decodeLine = Schema.decodeUnknownOption(LineEventData);
+/** The decoder of a line event's data at each version it was written at (`EVENT_VERSIONS`). */
+const LINE_DECODERS: ReadonlyMap<
+  number,
+  (data: JsonValue) => Option.Option<typeof LineEventData.Type>
+> = new Map([[1, Schema.decodeUnknownOption(LineEventData)]]);
 
-/** Reads a line event's data; throws (the event stays pending, the status shows it) when malformed. */
-const lineOf = (data: JsonValue): LineEvent => {
-  const decoded = isEventObject(data) ? decodeLine(data) : Option.none();
+/**
+ * Reads a line event's data by the version it was written at (`event.v`). Throws `UnreadableEvent`
+ * for a version this reactor does not know or data that is not the meter's at its version: no
+ * retry can read it, so the host dead-letters it at once (ADR 0033 as amended).
+ */
+const lineOf = (event: EventRecord): LineEvent => {
+  const decode = Option.fromUndefinedOr(LINE_DECODERS.get(event.v));
+
+  const decoded = Option.flatMap(
+    Option.filter(decode, () => isEventObject(event.data)),
+    (read) => read(event.data)
+  );
 
   return Option.getOrThrowWith(
     Option.map(decoded, (line) => ({
@@ -904,9 +923,13 @@ const lineOf = (data: JsonValue): LineEvent => {
       budget: budgetJson(line.budget),
     })),
     () =>
-      new Error(
-        "A workflow budget event's data is not the meter's. It stays pending; repair the entry."
-      )
+      new UnreadableEvent({
+        message: Option.isNone(decode)
+          ? `Workflow budget event ${String(event.id)} (${event.name}) is at version ${String(event.v)}, which the budget reactor cannot read.`
+          : `Workflow budget event ${String(event.id)} (${event.name}) holds data that is not the meter's at version ${String(event.v)}.`,
+        eventId: event.id,
+        kind: eventKind(event.name),
+      })
   );
 };
 
@@ -1077,7 +1100,7 @@ export const workflowBudgetReactor: Reactor = reactor(
   BUDGET_REACTOR,
   { events: ["workflow.budget.soft", "workflow.budget.spent"], from: "now" },
   async (tx, event) => {
-    const line = lineOf(event.data);
+    const line = lineOf(event);
 
     const handle = event.name === "workflow.budget.spent" ? onSpent : onSoft;
 

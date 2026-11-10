@@ -197,6 +197,55 @@ export const WorkflowSourcesDoc = defineDoc<WorkflowSourcesState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
 
+/**
+ * The run a launch was proposed in: the run's first entry (`pi.live.run.first`, which stays the
+ * same from tool round to tool round), or null for a launch a test kit or judge fixture planted
+ * before the run that runs it existed (`WorkflowTestKit.plant`); `workflow_plan` never writes null.
+ */
+export interface LaunchRunState {
+  [key: string]: JsonValue;
+  run: number | null;
+}
+
+/** `cairn.workflow-launch-runs` state. */
+export interface LaunchRunsState {
+  [key: string]: JsonValue;
+  items: { [workflowId: string]: LaunchRunState };
+}
+
+/**
+ * Where `workflow_plan` binds each launch to the run that proposed it, in the commit that writes
+ * its `proposed` row: the gate runs an approved row only from that run (ADR 0032 as amended), and a
+ * row with no entry here (proposed before the binding existed) runs from none. Not on the thread
+ * stream.
+ */
+export const LaunchRunsDoc = defineDoc<LaunchRunsState>({
+  kind: "cairn.workflow-launch-runs",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
+});
+
+/**
+ * Whether the launch `workflowId` may run from the run whose first entry is `run` (none: no run is
+ * live): bound to that run, or planted for any run. A launch with no binding runs from none.
+ */
+export const isLaunchOfRun = (
+  runs: Readonly<LaunchRunsState> | undefined,
+  workflowId: string,
+  run: Option.Option<number>
+): boolean => {
+  const bound = runs?.items[workflowId];
+
+  return (
+    bound !== undefined &&
+    (bound.run === null || Option.contains(run, bound.run))
+  );
+};
+
 // Ids. Every id the ledger mints matches the protocol's `RequestId` (`[A-Za-z0-9_-]{1,128}`).
 
 /** A workflow's id: `wf-<workflow_plan tool task id>`. */
@@ -337,17 +386,22 @@ export const declineRow = (
 };
 
 /**
- * Moves an `approved` row that never ran to `declined`, decided by the system as `superseded`: a
- * newer Go of the same script took its place, so the gate (which runs one approved row per script
- * hash) can only ever run the newer one. False when the row is not `approved`.
+ * Moves an `approved` row that never ran to `declined`, decided by the system: `run-stopped` when
+ * the run it was proposed in ended before it called codemode (an approved launch is no standing
+ * grant), `superseded` when a newer Go of the same script found it left over from such a run. False
+ * when the row is not `approved`.
  */
-export const supersedeRow = (row: WorkflowItemState, at: number): boolean => {
+export const endApprovedRow = (
+  row: WorkflowItemState,
+  why: "run-stopped" | "superseded",
+  at: number
+): boolean => {
   if (row.state !== "approved") {
     return false;
   }
 
   row.state = "declined";
-  row.decidedBy = { kind: "system", why: "superseded" };
+  row.decidedBy = { kind: "system", why };
   row.decidedAt = at;
   row.endedAt = at;
 

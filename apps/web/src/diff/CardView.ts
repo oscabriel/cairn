@@ -1,11 +1,36 @@
-// The changed-files card under a turn (plan look track L7): classic's card
-// (`diff/Card.ts`, a port of t3code's `ChangedFilesCard`) in the Stone look: a sunken box with a
+// Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/ChangedFilesTree.tsx
+// (`ChangedFilesCard`, `ChangedFilesTree`) and apps/web/src/components/chat/DiffStatLabel.tsx at
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92, through the classic card (its view deleted in W-6;
+// its input stays in `Card.ts`). Kept: the header ("N changed files" and the summed stat, "Open
+// diff"), the tree rows with their padding per depth, folder and file icons and per-row stats, and
+// a compact count above a thousand. Changed: folders always shown open, plain lucide file icons,
+// and a "N more files" line when the brain listed only the first 500. Removed: the context menu on
+// files, the tooltip, and virtualization at 250 rows.
+//
+// The changed-files card under a turn (plan look track L7) in the Stone look: a sunken box with a
 // hairline. It rests folded to one summary line, the count of changed files and their summed
 // lines, which opens it (the user, 2026-10-30: a turn's whole file breakdown was too much); open,
 // it lists the files as a tree. While the diff panel is on (`Panel.ts`) the header also offers
 // "Open diff" and each file row opens the diff at it; while it is off the rows are plain. The
 // line counts are green and red (the done and failed tones, the user, 2026-10-31), with "+" and
 // "−" still saying which is which.
+//
+// MIT License. Copyright (c) 2026 T3 Tools Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import {
   buildTurnDiffTree,

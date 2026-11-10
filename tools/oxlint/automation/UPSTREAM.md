@@ -19,7 +19,7 @@ Fold took the rules from humanlayer/channels `e499a74`, which took them from ai-
 - `no-silent-error-swallow` covers every `Effect.catch*` combinator (`catchCause`, `catchIf` and the rest, not only `catch`, `catchTag`, `catchTags` and the reason pair), resolves `Effect` from its import (`effect` or `effect/Effect`) and drops Effect 3's `Effect.unit`.
 
 - `no-bare-effect-run` flags `Effect.runPromise`, `runPromiseExit`, `runFork`, `runSync`, `runSyncExit` and `runCallback`, through the `effect` barrel (renamed or not), the `effect/Effect` namespace or a named import. Their `*With` forms take a context and pass.
-- `no-raw-test-limit` flags a Vitest limit written as a number: the last argument of `it`, `test`, `describe`, `suite`, `bench` or a hook, through any modifier or `each` (`it.live(name, body, 30_000)`), and the `timeout` of an options object passed to one. A limit scaled by the test slack (`testLimit(30_000)`) passes.
+- `no-raw-test-limit` flags every Vitest limit that does not scale by the test slack: the limit argument of `it`, `test`, `describe`, `suite`, `bench` or a hook, through any modifier or `each`, called or tagged (`it.live(name, body, limit)`), and the `timeout` of an options object passed to one or to `@effect/vitest`'s `layer(X, { timeout })`. Only `testLimit(...)`, or a `const` of the same file holding one, passes. Anything else is reported, whatever its value: a number, arithmetic such as `120_000 * TEST_SLACK`, a `const` holding them, an imported constant (even one a test kit scaled), a `let` or a parameter, since nothing in the file shows that it scales.
 
 ## Scope
 

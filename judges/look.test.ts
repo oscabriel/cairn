@@ -242,6 +242,17 @@ describe("a frozen fixture round", () => {
     ).toBeDefined();
   });
 
+  it("names today's tokens file when the round recorded it under its old path", () => {
+    const moved: FrozenRound = {
+      ...round,
+      tokens: { ...round.tokens, path: "apps/web/src/next/tokens.css" },
+    };
+
+    expect(tokensFinding(moved, withToken("--ink-1", "#fefefe"))).toMatch(
+      /^apps\/web\/src\/tokens\.css \(recorded as apps\/web\/src\/next\/tokens\.css\) hashes [0-9a-f]{12}, round 7 froze/u
+    );
+  });
+
   it("fails when one cell's mean moves by one level", () => {
     // The ground one level lighter across the top left 32 px cell, and nowhere else.
     const drifted = encodePng(

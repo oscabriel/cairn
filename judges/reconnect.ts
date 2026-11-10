@@ -1,18 +1,28 @@
 /* oxlint-disable no-await-in-loop -- a judge drives one kill and restart after another, on purpose */
 // The reconnect judge: the client must converge after its brain dies.
 //
-//   node judges/reconnect.ts [--rounds 5] [--budget-ms 2000] [--headed]
+//   node judges/reconnect.ts [--rounds 5] [--budget-ms 2000] [--headed] [--broken threads]
 //
 // It starts a dev brain (apps/server/src/dev-main.ts) on an ephemeral loopback port with its own
-// throwaway data directory, serves the client through Vite proxying to it, opens the page in
-// Chromium and waits for it to be Live. Then, each round, it `kill -9`s the brain, restarts it on
-// the same port, and times the page's first shell frame that makes it current (a snapshot, or the
-// marker that ends a replay) from the restarted brain's listening line. Between rounds it adds a
-// project through the protocol, so every reconnect has something new to pick up.
+// throwaway data directory, adds two folder projects and launches a project thread into the first,
+// serves the client through Vite proxying to it, opens the page in Chromium and waits for it to be
+// Live. Then, each round, it `kill -9`s the brain, restarts it on the same port, and times the
+// page's first shell frame that makes it current (a snapshot, or the marker that ends a replay)
+// from the restarted brain's listening line. Between rounds it adds a project and launches its
+// project thread through the protocol, so every reconnect has something new to pick up.
 //
 // Passes when every round's first frame came within the budget, the page's final list (the rail's
-// folder projects, the selected one and its project thread) equals a fresh snapshot from the
-// brain, and the page raised no error. Prints one JSON line and exits 0 on a pass.
+// folder projects, the selected one and its project thread) equals a fresh snapshot from the brain,
+// and the page raised no error. The page sits on the hero, so its selected bubble must be the
+// brain's most recently updated folder project (the hero's default), and that project's project
+// thread must be a real thread on both sides. Prints one JSON line and exits 0 on a pass.
+//
+// Broken control, planted in the page by this judge (never in the app), which must make the list
+// check fail:
+//   threads  after the first reconnect every shell frame loses its thread rows: a snapshot arrives
+//            with none and each thread update removes its row, as a shell reducer that drops thread
+//            rows on a replay would, so the last project's project thread never reaches the sidebar.
+// The control's run exits 1 when it failed rightly, with listMatches false in its JSON line.
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -25,7 +35,10 @@ import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-import { CommandId } from "@cairn/protocol/Ids";
+import { defaultProjectOf } from "@cairn/client-logic/ProjectThread";
+import { CommandId, RequestId, ThreadId } from "@cairn/protocol/Ids";
+import type { ProjectId } from "@cairn/protocol/Ids";
+import { RootWorkspace } from "@cairn/protocol/Launch";
 import { CairnRpcs, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { ProjectCreate } from "@cairn/protocol/ShellCommands";
@@ -44,6 +57,8 @@ import type { RpcClientError } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { createServer as createViteServer } from "vite";
 
+import { FAUX_MODEL } from "../apps/server/src/brain/FauxModels.ts";
+import { projectIdFor } from "../apps/server/src/shell/ShellCommands.ts";
 import { chromium } from "./lib/Browser.ts";
 import { recordOnExit } from "./lib/Record.ts";
 
@@ -54,8 +69,24 @@ const { values } = parseArgs({
     rounds: { type: "string", default: "5" },
     "budget-ms": { type: "string", default: "2000" },
     headed: { type: "boolean", default: false },
+    broken: { type: "string", default: "" },
   },
 });
+
+const BROKEN_CONTROLS = ["threads"] as const;
+
+type Broken = (typeof BROKEN_CONTROLS)[number] | "";
+
+const isBroken = (value: string): value is Broken =>
+  value === "" || BROKEN_CONTROLS.some((control) => control === value);
+
+if (!isBroken(values.broken)) {
+  throw new Error(
+    `--broken is one of ${BROKEN_CONTROLS.join(", ")}, not ${values.broken}`
+  );
+}
+
+const broken: Broken = values.broken;
 
 const rounds = Number(values.rounds);
 
@@ -222,19 +253,48 @@ const decodeCommandId = Schema.decodeSync(CommandId);
 
 const workspaces: Array<string> = [];
 
-const addProject = async (name: string) => {
+/** Adds a folder project named `name` over a new temporary folder; its id. */
+const addProject = async (name: string): Promise<ProjectId> => {
   const workspaceRoot = mkdtempSync(path.join(tmpdir(), `cairn-${name}-`));
 
   workspaces.push(workspaceRoot);
 
-  const result = await withClient((client) =>
+  const commandId = decodeCommandId(uuidv7());
+
+  await withClient((client) =>
     client["shell.dispatch"](
       ProjectCreate.make({
-        commandId: decodeCommandId(uuidv7()),
+        commandId,
         workspaceRoot,
         title: Option.some(name),
       })
     )
+  );
+
+  return projectIdFor(commandId);
+};
+
+/** Launches the project's first top-level thread, which becomes its project thread (ADR 0048). */
+const launchProjectThread = async (projectId: ProjectId, name: string) => {
+  const result = await withClient((client) =>
+    client["thread.launch"]({
+      commandId: decodeCommandId(uuidv7()),
+      threadId: ThreadId.make(uuidv7()),
+      projectId,
+      title: Option.some(name),
+      model: FAUX_MODEL,
+      thinkingLevel: "off",
+      runtimeMode: "full-access",
+      workspace: RootWorkspace.make({ branch: Option.none() }),
+      initialMessage: {
+        requestId: RequestId.make(
+          `req_reconnect_${randomBytes(8).toString("hex")}`
+        ),
+        text: `Hello from ${name}`,
+        attachments: [],
+        skillRefs: [],
+      },
+    })
   );
 
   return result;
@@ -268,7 +328,7 @@ process.once("exit", () => {
   brain.process.kill("SIGKILL");
 });
 
-await addProject("first");
+await launchProjectThread(await addProject("first"), "first");
 
 await addProject("second");
 
@@ -288,6 +348,53 @@ await vite.listen();
 const browser = await chromium.launch({ headless: !values.headed });
 
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+// The plant. Page code, kept as text: it patches the browser's own WebSocket and MessageEvent,
+// which this module's types cannot describe without casts. The page's first protocol socket reads
+// the brain as sent; every later one (each reconnect) reads its shell frames without thread rows.
+// Updates are rewritten, not dropped: a plant that dropped them left the page never Live again,
+// which fails the rounds and not the list check this control is for.
+const PLANT_THREADS = `
+  const Native = window.WebSocket;
+  const reconnects = new WeakSet();
+  let protocolSockets = 0;
+  window.WebSocket = class extends Native {
+    constructor(...args) {
+      super(...args);
+      if (String(args[0]).includes("/ws?")) {
+        protocolSockets += 1;
+        if (protocolSockets > 1) reconnects.add(this);
+      }
+    }
+  };
+  // A thread update becomes the removal of its row at the same sequence.
+  const withoutThreads = (item) =>
+    item === null || typeof item !== "object"
+      ? item
+      : item._tag === "Snapshot"
+        ? { ...item, snapshot: { ...item.snapshot, threads: [] } }
+        : item._tag === "ThreadUpdated"
+          ? { _tag: "ThreadRemoved", sequence: item.sequence, threadId: item.thread.id }
+          : item;
+  const strip = (message) =>
+    message !== null && typeof message === "object" && message._tag === "Chunk"
+      ? { ...message, values: message.values.map(withoutThreads) }
+      : message;
+  const descriptor = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data");
+  Object.defineProperty(MessageEvent.prototype, "data", {
+    configurable: true,
+    get() {
+      const raw = descriptor.get.call(this);
+      if (typeof raw !== "string" || !reconnects.has(this.target)) return raw;
+      const message = JSON.parse(raw);
+      return JSON.stringify(Array.isArray(message) ? message.map(strip) : strip(message));
+    },
+  });
+`;
+
+if (broken === "threads") {
+  await page.addInitScript({ content: PLANT_THREADS });
+}
 
 const pageErrors: Array<string> = [];
 
@@ -370,10 +477,14 @@ for (let round = 1; round <= rounds; round += 1) {
   });
 
   await page.waitForSelector(live, { state: "attached", timeout: 15_000 });
-  await addProject(`round-${round}`);
+  await launchProjectThread(
+    await addProject(`round-${round}`),
+    `round-${round}`
+  );
 }
 
-// Let the last project reach the page, then compare it with the brain's own snapshot.
+// Let the last project and its thread reach the page, then compare them with the brain's own
+// snapshot.
 await sleep(1000);
 
 const snapshot = await brainShell();
@@ -413,15 +524,20 @@ const brainList = Option.match(snapshot, {
       (project) => project.kind === "folder"
     );
 
-    const selected = folders.find((project) => project.title === selectedTitle);
+    // The page sits on the hero, whose selected project is its default: the brain's most recently
+    // updated folder project. The page's own reading never picks the brain's side.
+    const selected = defaultProjectOf(shell.projects);
 
     return {
       projects: folders.map((project) => project.title),
-      selected: selected === undefined ? null : selected.title,
-      projectThread:
-        selected === undefined
-          ? null
-          : Option.getOrNull(Option.map(selected.projectThreadId, String)),
+      selected: Option.getOrNull(
+        Option.map(selected, (project) => project.title)
+      ),
+      projectThread: Option.getOrNull(
+        Option.flatMap(selected, (project) =>
+          Option.map(project.projectThreadId, String)
+        )
+      ),
     };
   },
 });
@@ -437,6 +553,7 @@ const listMatches =
   sameIds(pageList.projects, brainList.projects) &&
   pageList.selected !== null &&
   pageList.selected === brainList.selected &&
+  brainList.projectThread !== null &&
   pageList.projectThread === brainList.projectThread;
 
 await browser.close();
@@ -460,6 +577,7 @@ console.log(
   JSON.stringify({
     judge: "reconnect",
     pass,
+    broken: broken === "" ? null : broken,
     budgetMs,
     rounds: results,
     worstFirstFrameMs: Math.max(

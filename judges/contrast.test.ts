@@ -1042,29 +1042,9 @@ const ALLOWED_CLASSIC = {
   ],
   // View code never drawn in the frame: the classic diff panel, off behind
   // diff/Panel.ts's DIFF_PANEL_ENABLED (its view is only the panel's lazy import and its
-  // placeholder is drawn only while the panel is on), the classic changed-files card (a type
-  // import), and the classic button and header classes only those draw.
-  "apps/web/src/diff/Card.ts": [
-    "bg-accent",
-    "ring-ring",
-    "ring-offset-background",
-    "text-diff-addition",
-    "text-diff-deletion",
-    "text-muted-foreground",
-    "text-muted-foreground",
-    "text-foreground",
-    "text-muted-foreground",
-    "text-foreground",
-    "text-foreground",
-    "bg-secondary",
-    "bg-input",
-    "bg-secondary",
-    "bg-background",
-    "from-input",
-    "to-input",
-    "text-foreground",
-    "text-muted-foreground",
-  ],
+  // placeholder is drawn only while the panel is on), the classic stat label only that panel draws,
+  // and the classic button classes only it draws.
+  "apps/web/src/diff/Card.ts": ["text-diff-addition", "text-diff-deletion"],
   "apps/web/src/diff/View.ts": [
     "bg-diff-addition",
     "bg-diff-deletion",
@@ -1128,15 +1108,6 @@ const ALLOWED_CLASSIC = {
     "text-secondary-foreground",
     "bg-secondary",
     "bg-secondary",
-  ],
-  "apps/web/src/ui/ChatHeader.ts": [
-    "bg-accent",
-    "ring-ring",
-    "ring-offset-background",
-    "text-foreground",
-    "bg-accent",
-    "text-accent-foreground",
-    "text-muted-foreground",
   ],
 } satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 

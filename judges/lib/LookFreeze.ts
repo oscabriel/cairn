@@ -402,16 +402,28 @@ export const shotName = (shot: {
   readonly theme: string;
 }): string => `${shot.state}-${String(shot.width)}-${shot.theme}`;
 
-/** Why the tokens fail a frozen round, or nothing when they hash as it recorded. */
+/** Where the design tokens live today, from the repository root. */
+export const TOKENS_PATH = "apps/web/src/tokens.css";
+
+/**
+ * Why the tokens fail a frozen round, or nothing when they hash as it recorded. It names today's
+ * file, and the path the round recorded when that differs: the rounds frozen before the views'
+ * folder move recorded it under `apps/web/src/next/`, and their manifests stay as frozen.
+ */
 export const tokensFinding = (
   round: FrozenRound,
   tokensText: string
 ): string | undefined => {
   const today = sha256(tokensText);
 
+  const file =
+    round.tokens.path === TOKENS_PATH
+      ? TOKENS_PATH
+      : `${TOKENS_PATH} (recorded as ${round.tokens.path})`;
+
   return today === round.tokens.sha256
     ? undefined
-    : `${round.tokens.path} hashes ${today.slice(0, 12)}, round ${String(round.round)} froze ${round.tokens.sha256.slice(0, 12)}: a token changed after the user approved the round, so it needs a new round`;
+    : `${file} hashes ${today.slice(0, 12)}, round ${String(round.round)} froze ${round.tokens.sha256.slice(0, 12)}: a token changed after the user approved the round, so it needs a new round`;
 };
 
 /** How one shot of today's client compares with its frozen record. */

@@ -487,11 +487,11 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "reconnect",
     files: ["reconnect.ts"],
     proves:
-      "The kickoff's Durability target, client side: the page converges within 2 s after its brain is killed and restarted. On the dev brain's scripted default (ADR 0024).",
+      "The kickoff's Durability target, client side: the page converges within 2 s after its brain is killed and restarted, and its rail, selected project and project thread then equal the brain's. On the dev brain's scripted default (ADR 0024).",
     runs: ["set", "hand"],
     cost: free,
     needs: ["browser"],
-    control: "none",
+    control: "--broken threads",
   },
   {
     name: "rollup",

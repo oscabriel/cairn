@@ -345,6 +345,74 @@ describe("saved attachments in one tab", () => {
         }).toStrictEqual({ tray: [], stored: [] });
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
+
+  it.effect.each(["sent", "removed"] as const)(
+    "stay gone when a later save, asked before the refusal answered, is written (%s)",
+    (how) =>
+      Effect.gen(function* () {
+        const inA = { draftKey: Option.some("thread:a") };
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        /** Storage that refuses every write, as a full localStorage does. */
+        const full = KeyValueStore.make({
+          ...store,
+          set: (key) =>
+            Effect.fail(
+              new KeyValueStore.KeyValueStoreError({
+                message: "quota exceeded",
+                method: "set",
+                key,
+              })
+            ),
+        });
+
+        /** `tab` once `answers` arrived, in order. */
+        const answered = (tab: Model, answers: ReadonlyArray<Message>) => {
+          let model = tab;
+
+          for (const answer of answers) {
+            ({ model } = update(model, answer, inA));
+          }
+
+          return model;
+        };
+
+        // One attachment ready and saved: the tab and storage agree.
+        const first = restore({ ...initial, loaded: true }, "thread:a", [
+          ref("att_a"),
+        ]);
+
+        const saved = answered(first.model, yield* runSaves(first));
+
+        // S1 takes it out and is refused; S2, asked before S1 answers, adds another and is written,
+        // so storage holds both.
+        const left = leaves[how](saved);
+        const added = restore(left.model, "thread:a", [ref("att_b")]);
+
+        const refusedAnswers = yield* runSaves(left).pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, full)
+        );
+
+        const addedAnswers = yield* runSaves(added);
+
+        const tab = answered(added.model, [...refusedAnswers, ...addedAnswers]);
+
+        // Any later save writes the removal again.
+        const told = update(tab, Message.ChangedStoredAttachments(), inA);
+        const later = answered(told.model, yield* runSaves(told));
+        const stored = yield* loadSaved;
+
+        expect({
+          tray: readyIds(tab, "thread:a"),
+          later: readyIds(later, "thread:a"),
+          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
+        }).toStrictEqual({
+          tray: ["att_b"],
+          later: ["att_b"],
+          stored: ["att_b"],
+        });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
 });
 
 describe("an upload answer", () => {

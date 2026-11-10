@@ -75,6 +75,12 @@ export const Model = Schema.Struct({
    * save answers); a save writes what changed since.
    */
   stored: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
+  /**
+   * The saved attachments this tab took out (sent, or removed with their x) in a save storage
+   * refused, while storage may still hold them: an answer to a save asked before the refusal
+   * answered never brings them back, and they leave once storage no longer holds them.
+   */
+  refusedRemovals: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
 });
 
 export type Model = typeof Model.Type;
@@ -87,4 +93,5 @@ export const initial: Model = {
   waitingSends: {},
   notices: {},
   stored: {},
+  refusedRemovals: {},
 };

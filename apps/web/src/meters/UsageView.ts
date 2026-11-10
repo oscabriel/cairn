@@ -1,4 +1,4 @@
-// The usage page (plan wave 6, 6G; surfaces note S9, models note M10), drawn in the look: the
+// The usage page (plan wave 6, 6G; surfaces note S9, models note M10): the
 // spend ledger (the whole roll-up by model, then each thread with spend recorded), the plan windows
 // of each plan Cairn knows (Claude on the bridge, Codex, OpenCode Go, and any other the brain
 // reads), and the budgets (the default a brief or launch starts from, then each thread with one).

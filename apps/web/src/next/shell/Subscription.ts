@@ -1,14 +1,19 @@
 // The `next` shell's Subscriptions: the clock its ages and visits read (every second while a row
 // is working or waiting, else every 15 seconds), the key binding table (`Keys.ts`), Cmd+J and
 // Ctrl+J, which show or hide the scratch thread on any platform, even while typing (the user,
-// 2026-10-29), and Escape, which closes the rename or remove dialog, an open menu, the add-project
-// picker, the refresh confirm or the overlay while one is open. A work panel row's "Stop?" lets go
-// after a pause, since a tap in WebKit never blurs it (U-3).
+// 2026-10-29), and Escape, which closes an open menu (each overlay is a dialog that takes its own,
+// `next/ui/Sheet.ts`). A work panel row's "Stop?" lets go after a pause, since a tap in WebKit
+// never blurs it (U-3). The window's width at `lg` says whether the work and goal panels are
+// columns or sheets.
 
 import { threadStatus } from "@cairn/client-logic/ThreadState";
 import { Clock, Duration, Effect, Option, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";
-import { streamFromEventFilterMap, streamFromKeyBindings } from "foldkit/dom";
+import {
+  streamFromEventFilterMap,
+  streamFromKeyBindings,
+  streamFromMediaQuery,
+} from "foldkit/dom";
 
 import type { Services } from "./Command.ts";
 import { keyBindings } from "./Keys.ts";
@@ -55,6 +60,14 @@ const escape: Stream.Stream<Message> = streamFromEventFilterMap({
       : Option.none(),
 });
 
+/** Tailwind's `lg`: from here the work and goal panels are columns beside the chat. */
+const WIDE_QUERY = "(min-width: 64rem)";
+
+const wide: Stream.Stream<Message> = streamFromMediaQuery({
+  query: WIDE_QUERY,
+  mapMatches: (isWide) => Message.ChangedWidth({ isWide }),
+});
+
 /** How long a row's "Stop?" waits for its second press before it lets go. */
 export const STOP_ASK_MS = 5000;
 
@@ -88,17 +101,11 @@ export const subscriptions = Subscription.make<Model, Message, Services>()(
     escape: entry(
       { open: Schema.Boolean },
       {
-        modelToDependencies: (model) => ({
-          open:
-            model.scratch.isOpen ||
-            Option.isSome(model.refresh) ||
-            Option.isSome(model.addProject) ||
-            Option.isSome(model.menu) ||
-            Option.isSome(model.manage),
-        }),
+        modelToDependencies: (model) => ({ open: Option.isSome(model.menu) }),
         dependenciesToStream: ({ open }) => (open ? escape : Stream.empty),
       }
     ),
+    width: Subscription.persistentEntry(wide),
     stopAsked: entry(
       { armed: Schema.Option(Schema.String) },
       {

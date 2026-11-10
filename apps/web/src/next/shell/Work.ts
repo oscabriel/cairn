@@ -232,6 +232,8 @@ export const stepsCountText = (steps: ReadonlyArray<ChildStep>): string =>
 /** What the header's button and the panel are drawn from: the routed thread's inputs. */
 export interface WorkViewInputs {
   readonly inputs: Option.Option<WorkInputs>;
+  /** The window is `lg` or wider: the panel is a column beside the chat, not a modal sheet. */
+  readonly isWide: boolean;
 }
 
 /** The header's button words: a subagent's steps, else its children, else its workflows. */

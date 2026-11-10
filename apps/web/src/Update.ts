@@ -26,7 +26,11 @@ import {
 import type { Services } from "./Command.ts";
 import { burnBusyBudget } from "./composer/Busy.ts";
 import { composerContext } from "./composer/Context.ts";
-import { draftProject, isDraftTarget } from "./composer/Drafts.ts";
+import {
+  draftProject,
+  isDraftTarget,
+  isScratchTarget,
+} from "./composer/Drafts.ts";
 import { OutMessage as ComposerOutMessage } from "./composer/Message.ts";
 import type { Message as ComposerMessage } from "./composer/Message.ts";
 import { queuedInputs } from "./composer/Queue.ts";
@@ -803,6 +807,22 @@ const composerSentCard = Update.foldChildStep({
 });
 
 /**
+ * After a turn the scratch overlay's composer sent (U-16): a launch's thread is the overlay's from
+ * now on, which the shell keeps; a send changes nothing there.
+ */
+const adoptScratchLaunch =
+  (item: SentTurn["item"]): Step =>
+  (model) =>
+    Predicate.isTagged(item, "Launch")
+      ? Update.foldChildStep({
+          update: NextShell.adoptScratchThread(item.input.threadId),
+          read: readNextShell,
+          write: writeNextShell,
+          toParentMessage: toGotNextShellMessage,
+        })(model)
+      : { model };
+
+/**
  * What the composer hands up: a turn for the outbox (and where to go), a request for the
  * add-project picker, the draft's chosen project, saved drafts it cannot show, or its focus and
  * keystrokes, which the request card's typing guard reads.
@@ -811,8 +831,12 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
       ({ attachments, item, navigateTo }) =>
-      (model) =>
-        Update.combine(
+      (model) => {
+        // The scratch overlay's turn: a refusal puts it back in the overlay, and the thread its
+        // first message launches is the overlay's from now on (U-16).
+        const fromScratch = isScratchTarget(model.composer);
+
+        return Update.combine(
           modifyFields(model, {
             outbox: (outbox) => enqueue(outbox, item),
             sentTurns: (sent) =>
@@ -822,12 +846,14 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
                     item,
                     attachments,
                     acknowledged: false,
-                    fromScratch: false,
+                    fromScratch,
                   }),
           }),
           [
             persist,
             sendNext,
+            (next) =>
+              fromScratch ? adoptScratchLaunch(item)(next) : { model: next },
             (next) => ({
               model: next,
               commands: Option.match(navigateTo, {
@@ -837,7 +863,8 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
             }),
             composerSentCard,
           ]
-        ),
+        );
+      },
     // The shell owns the add-project picker, and its rail follows the draft's project.
     RequestedAddProject: () => openShellAddProject,
     ChoseDraftProject: ({ projectId }) => followDraftProject(projectId),
@@ -927,6 +954,16 @@ const syncComposer: Step = (model) => {
     threadView: Option.map(model.thread.view, (state) => state.view),
     defaults: Option.map(model.hello, (hello) => hello.defaults),
     usage: model.settings.usage,
+    // The shown scratch overlay's composer is the one composer (U-16).
+    scratch: model.nextShell.scratch.isOpen
+      ? Option.some({
+          threadId: model.nextShell.scratch.threadId,
+          threadView: Option.map(
+            model.scratchThread.view,
+            (state) => state.view
+          ),
+        })
+      : Option.none(),
   });
 
   return Composer.contextChanged(model.composer, context)
@@ -987,22 +1024,23 @@ const turnThread = (item: SentTurn["item"]): Option.Option<ThreadId> =>
     Dispatch: () => Option.none(),
   });
 
-/** The words a turn sends. */
-const turnText = (item: SentTurn["item"]): string =>
-  OutboxItem.match(item, {
-    Send: ({ input }) => input.input.text,
-    Launch: ({ input }) => input.initialMessage.text,
-    Dispatch: () => "",
-  });
-
 /** True when `threadId` is the scratch overlay's thread. */
 const isScratchThread = (model: Model, threadId: ThreadId): boolean =>
   Option.contains(model.nextShell.scratch.threadId, threadId);
 
-/** Puts a refused scratch turn back in the scratch overlay's field. */
-const restoreScratchTurn = (text: string, launched: boolean): Step =>
+/** Puts a refused scratch turn back in the scratch overlay's composer draft (U-16). */
+const restoreComposerScratchTurn = Update.foldChild({
+  update: (composer: Model["composer"], sent: SentTurn) =>
+    Composer.restoreScratchTurn(composer, sent.item, sent.attachments),
+  read: readComposer,
+  write: writeComposer,
+  toParentMessage: toGotComposerMessage,
+});
+
+/** A scratch launch failed: the shell lets its thread go, so the next turn launches a new one. */
+const forgetScratchLaunch = (threadId: ThreadId): Step =>
   Update.foldChildStep({
-    update: NextShell.restoreScratchTurn(text, launched),
+    update: NextShell.forgetScratchLaunch(threadId),
     read: readNextShell,
     write: writeNextShell,
     toParentMessage: toGotNextShellMessage,
@@ -1041,10 +1079,12 @@ const restoreSent =
           });
 
           if (sent.fromScratch) {
-            return restoreScratchTurn(
-              turnText(sent.item),
-              Option.isSome(launchedThread(sent))
-            )(forgotten);
+            return Update.combine(forgotten, [
+              restoreComposerScratchTurn(sent),
+              ...Option.toArray(
+                Option.map(launchedThread(sent), forgetScratchLaunch)
+              ),
+            ]);
           }
 
           const reopen = Option.filter(launchedThread(sent), (threadId) =>
@@ -1144,18 +1184,6 @@ const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
         Update.combine(
           modifyFields(model, {
             outbox: (outbox) => enqueue(outbox, item),
-            // A scratch turn is kept like the composer's, so a refusal puts it back in the overlay.
-            sentTurns: (sent) =>
-              Option.exists(turnThread(item), (threadId) =>
-                isScratchThread(model, threadId)
-              )
-                ? Record.set(sent, outboxKey(item), {
-                    item,
-                    attachments: [],
-                    acknowledged: false,
-                    fromScratch: true,
-                  })
-                : sent,
           }),
           [
             persist,

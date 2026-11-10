@@ -14,6 +14,7 @@ import { ConversationId, EntryId, RunId, ThreadId } from "@cairn/protocol/Ids";
 import type { ShellSnapshot, ThreadShell } from "@cairn/protocol/Shell";
 import type { Entry } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
+import * as Dialog from "@foldkit/ui/dialog";
 import { DateTime, Option, Predicate } from "effect";
 import type { Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -124,6 +125,8 @@ const FAMILY = [
 ];
 
 interface SceneModel {
+  /** The window is lg or wider: the panel is a column; below, a modal sheet. */
+  readonly isWide: boolean;
   readonly work: WorkState;
   readonly sent: ReadonlyArray<string>;
 }
@@ -156,8 +159,8 @@ const appFor = (inputs: Option.Option<WorkInputs>) => ({
     h.div(
       [],
       [
-        workToggleView(model.work, { inputs }, h),
-        workPanelView(model.work, { inputs }, h),
+        workToggleView(model.work, { inputs, isWide: model.isWide }, h),
+        workPanelView(model.work, { inputs, isWide: model.isWide }, h),
         h.output([h.DataAttribute("testid", "sent")], [model.sent.join(",")]),
       ]
     ),
@@ -165,6 +168,7 @@ const appFor = (inputs: Option.Option<WorkInputs>) => ({
 
 const givenWork = (work: Partial<WorkState> = {}) =>
   Scene.given<SceneModel>({
+    isWide: true,
     work: { ...initialWork, isOpen: true, ...work },
     sent: [],
   });
@@ -465,13 +469,46 @@ describe("the work panel on a parent", () => {
     );
   });
 
-  it("closes from its button and from the scrim", () => {
+  it("is a column beside the chat from lg, not modal, closed from its button", () => {
     Scene.scene(
       appFor(inputs),
       givenWork(),
+      Scene.expect(Scene.role("complementary", { name: "Work" })).toExist(),
+      Scene.expect(Scene.testId("work-scrim")).toBeAbsent(),
+      Scene.click(Scene.testId("work-close")),
+      expectSent("ClickedCloseWork"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("is a modal sheet under lg that takes focus as it mounts, closed from its button and its scrim (U-12)", () => {
+    Scene.scene(
+      appFor(inputs),
+      Scene.given<SceneModel>({
+        isWide: false,
+        work: { ...initialWork, isOpen: true },
+        sent: [],
+      }),
+      Scene.Mount.expectHas(
+        Dialog.AcquireResources({
+          id: "work-panel",
+          focusSelector: "[data-foldkit-dialog-initial-focus]",
+        })
+      ),
+      Scene.expect(Scene.selector("dialog#work-panel")).toHaveAttr(
+        "aria-modal",
+        "true"
+      ),
+      Scene.expect(Scene.role("heading", { name: "Work" })).toExist(),
+      Scene.Mount.resolve(
+        Dialog.AcquireResources,
+        Dialog.Message.SucceededAcquireResources()
+      ),
       Scene.click(Scene.testId("work-close")),
       Scene.click(Scene.testId("work-scrim")),
-      expectSent("ClickedCloseWork,ClickedCloseWork"),
+      expectSent("SettledOverlay,ClickedCloseWork,ClickedCloseWork"),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

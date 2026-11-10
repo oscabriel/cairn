@@ -11,8 +11,10 @@
 // One run per width, in order, each step judged on what the page shows. The parent spawns four
 // children in one step and each starts by Go through the protocol, as the brief card sends it.
 //   lineage-stop  the header's work button says "4 subagents" and opens the panel: at 1,440 a
-//                 column beside the chat column, never over it, as tall as the page; at 390 a
-//                 bottom sheet over a scrim, the full width, its rows and Stop buttons at least
+//                 column beside the chat column, never over it, as tall as the page, the chat
+//                 beside it still in use; at 390 a bottom sheet over a scrim, the full width, a
+//                 modal dialog holding focus with the chat behind it inert (U-12), which Escape
+//                 closes, giving focus back to the button; its rows and Stop buttons at least
 //                 44 px. Two children work with Stop beside them, each the word "Stop" (U-3); the
 //                 done and the failed one are under "Previous (2)", folded. The first press on
 //                 Stop for "Read the README" reads "Stop?" and stops nothing, and lets go after a
@@ -363,8 +365,17 @@ const placement = async (page: Page) =>
     };
 
     const scrim = document.querySelector('[data-testid="work-scrim"]');
+    const sheet = document.querySelector('[data-testid="work-panel"]');
+    const dialog = sheet?.closest("dialog") ?? null;
 
     return {
+      // A modal sheet is a dialog (U-12): modal, focus inside it, the chat behind it inert.
+      modal: dialog?.getAttribute("aria-modal") === "true",
+      focused: sheet !== null && sheet.contains(document.activeElement),
+      inert:
+        document
+          .querySelector('[data-chat-column="true"]')
+          ?.closest("[inert]") !== null,
       panel: boxOf('[data-testid="work-panel"]'),
       column: boxOf('[data-chat-column="true"]'),
       scroller: boxOf('[data-testid="timeline-scroll"]'),
@@ -627,6 +638,29 @@ const runWidth = async (browser: Browser, width: number) => {
             `the phone's panel is not a bottom sheet: ${JSON.stringify(box)}`
           );
           expect(where.scrim === "shown", "the sheet has no scrim");
+          expect(
+            where.modal && where.focused && where.inert,
+            `the sheet is not a modal dialog holding focus: modal ${String(where.modal)}, focus inside ${String(where.focused)}, page inert ${String(where.inert)}`
+          );
+
+          // Escape closes it and gives focus back to the header's button, which opens it again.
+          await page.keyboard.press("Escape");
+          await page
+            .locator('[data-testid="work-panel"]')
+            .waitFor({ state: "detached", timeout: 5000 });
+
+          const workButton = page.locator('[data-testid="work-toggle"]');
+
+          expect(
+            await workButton.evaluate(
+              (button) => document.activeElement === button
+            ),
+            "focus did not go back to the work button"
+          );
+          await workButton.click();
+          await page
+            .locator('[data-testid="work-panel"]')
+            .waitFor({ state: "visible", timeout: 5000 });
         } else {
           expect(
             box.left >= column.right - 1 &&
@@ -635,6 +669,10 @@ const runWidth = async (browser: Browser, width: number) => {
             `the panel is not a column beside the chat: panel ${JSON.stringify(box)}, column ${JSON.stringify(column)}`
           );
           expect(where.scrim === "hidden", "a scrim covers the desktop page");
+          expect(
+            !where.modal && !where.inert,
+            "the desktop's column is modal, but the chat beside it stays in use"
+          );
         }
       }
 

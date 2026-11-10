@@ -211,7 +211,7 @@ const plantFocus = (): boolean => {
 /** A block 600 px wide inside a specimen. */
 const plantWide = (): boolean => {
   const into = document.querySelector<HTMLElement>(
-    '[data-look-state="divider/horizontal"] > div'
+    '[data-look-state="kbd/key"] > div'
   );
 
   if (into === null) {

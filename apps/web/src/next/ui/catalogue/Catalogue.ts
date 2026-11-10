@@ -15,11 +15,9 @@ import { Option, Schema } from "effect";
 import { Update } from "foldkit";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 import { defineMessageUnion } from "foldkit/message";
-import { Copy, Ellipsis, Inbox, Plus, Search, Settings, X } from "lucide";
+import { Copy, Ellipsis, Plus, Search, Settings, X } from "lucide";
 
 import { classNames } from "../../../ui/ClassNames.ts";
-import { avatar, glyphAvatar } from "../Avatar.ts";
-import type { AvatarSize } from "../Avatar.ts";
 import { banner } from "../Banner.ts";
 import { BUTTON_VARIANTS, button, buttonDefaults } from "../Button.ts";
 import type { ButtonConfig, ButtonSize } from "../Button.ts";
@@ -27,8 +25,6 @@ import { card, cardText, recordLines } from "../Card.ts";
 import { chip, toggleChip } from "../Chip.ts";
 import { TYPE, WEIGHT_STRONG } from "../Classes.ts";
 import { disclosure } from "../Disclosure.ts";
-import { divider, labelledDivider } from "../Divider.ts";
-import { emptyState } from "../EmptyState.ts";
 import { fieldDefaults, inputField, textareaField } from "../Field.ts";
 import type { FieldConfig } from "../Field.ts";
 import { glyph, markOfTone, STATUS_MARKS, statusGlyph } from "../Glyph.ts";
@@ -40,12 +36,8 @@ import type { MenuItemLook, PanelItem } from "../Menu.ts";
 import { meter, progress } from "../Meter.ts";
 import { row, rowDefaults } from "../Row.ts";
 import type { RowConfig, RowContent } from "../Row.ts";
-import { sheet, sheetToView } from "../Sheet.ts";
+import { sheet, sheetDefaults, sheetToView } from "../Sheet.ts";
 import { statusChip, statusOfLabel } from "../StatusChip.ts";
-import { STEP_STATES, stepper, stepsPill, stepWord } from "../Stepper.ts";
-import type { Step } from "../Stepper.ts";
-import { tally } from "../Tally.ts";
-import type { TallyPart } from "../Tally.ts";
 import { TONES, TONE_TEXT } from "../Tone.ts";
 import type { Tone } from "../Tone.ts";
 import { tooltipBubble } from "../Tooltip.ts";
@@ -445,30 +437,6 @@ const glyphs = (h: H): Html =>
     )
   );
 
-const avatars = (h: H): Html =>
-  section(h, "avatar", "Avatar", [
-    ...(["small", "regular", "large"] as const).map((size: AvatarSize) =>
-      specimen(
-        h,
-        `avatar/${size}`,
-        `${size}, every tone`,
-        TONES.map((tone, index) =>
-          avatar(
-            h,
-            ["cairn", "opus", "luna", "pi durable", "porch", "web"][index] ??
-              "cairn",
-            size,
-            tone
-          )
-        )
-      )
-    ),
-    specimen(h, "avatar/glyph", "glyph", [
-      glyphAvatar(h, glyph(h, Inbox, "inbox", "small"), "regular", "accent"),
-      glyphAvatar(h, glyph(h, Inbox, "inbox", "large"), "large", "neutral"),
-    ]),
-  ]);
-
 const rowOf = (
   h: H,
   config: Partial<RowConfig<Message>>,
@@ -549,7 +517,12 @@ const rows = (h: H): Html =>
           h,
           {},
           {
-            leading: Option.some(avatar(h, "luna", "small", "accent")),
+            leading: Option.some(
+              h.span(
+                [h.Class(TONE_TEXT.working)],
+                [statusGlyph(h, "busy", "regular")]
+              )
+            ),
             title: "A subagent reads the reach note",
             meta: Option.some("$0.04"),
           }
@@ -658,6 +631,23 @@ const menus = (h: H): Html =>
     ]),
   ]);
 
+/** A positioned pane a contained sheet covers, with words under it. */
+const pane = (h: H, content: Html): Html =>
+  h.div(
+    [
+      h.Class(
+        "relative h-80 w-full overflow-hidden rounded-(--radius-medium) border border-stroke-1 bg-surface-ground"
+      ),
+    ],
+    [
+      h.p(
+        [h.Class(classNames("p-(--space-4) text-ink-2", TYPE.body))],
+        ["The pane under the sheet."]
+      ),
+      content,
+    ]
+  );
+
 const sheets = (h: H, model: Model): Html =>
   section(
     h,
@@ -667,36 +657,45 @@ const sheets = (h: H, model: Model): Html =>
       specimen(
         h,
         "sheet/contained",
-        "open in a pane, nothing closes it: bottom sheet on the phone, floating from sm, docked from lg",
+        "a panel in a pane, nothing closes it: bottom sheet on the phone, floating from sm, docked from lg",
         [
-          h.div(
-            [
-              h.Class(
-                "relative h-80 w-full overflow-hidden rounded-(--radius-medium) border border-stroke-1 bg-surface-ground"
-              ),
-            ],
-            [
-              h.p(
-                [h.Class(classNames("p-(--space-4) text-ink-2", TYPE.body))],
-                ["The pane under the sheet."]
-              ),
-              sheet(
-                h,
-                {
-                  id: "look-sheet-contained",
-                  title: "Steps",
-                  onClose: Option.none(),
-                  attributes: [],
-                },
-                [
-                  cardText(
-                    h,
-                    "The work panel's steps for a child, or a goal's criteria."
-                  ),
-                ],
-                [buttonOf(h, { variant: "primary" }, "Done")]
-              ),
-            ]
+          pane(
+            h,
+            sheet(
+              h,
+              sheetDefaults<Message>("look-sheet-contained", "Steps"),
+              [
+                cardText(
+                  h,
+                  "The work panel's steps for a child, or a goal's criteria."
+                ),
+              ],
+              [buttonOf(h, { variant: "primary" }, "Done")]
+            )
+          ),
+        ],
+        "flex"
+      ),
+      specimen(
+        h,
+        "sheet/dialog",
+        "a dialog in a pane, with its close button: bottom sheet on the phone, a card from md",
+        [
+          pane(
+            h,
+            sheet(
+              h,
+              {
+                ...sheetDefaults<Message>("look-sheet-dialog", "Rename thread"),
+                kind: "dialog",
+                onClose: Option.some(Message.IgnoredSpecimen()),
+              },
+              [cardText(h, "A confirm or a picker: its words and its field.")],
+              [
+                buttonOf(h, { variant: "ghost" }, "Cancel"),
+                buttonOf(h, { variant: "primary" }, "Save"),
+              ]
+            )
           ),
         ],
         "flex"
@@ -717,10 +716,14 @@ const sheets = (h: H, model: Model): Html =>
           viewInputs: {
             toView: sheetToView(
               h,
-              "Criteria",
+              {
+                ...sheetDefaults<Message>(LIVE_SHEET_ID, "Criteria"),
+                role: "dialog",
+                focusSelector: Option.none(),
+                attributes: [h.DataAttribute("testid", "look-live-sheet")],
+              },
               [cardText(h, "Escape, the scrim or Close dismisses it.")],
-              [buttonOf(h, { variant: "primary" }, "Done")],
-              [h.DataAttribute("testid", "look-live-sheet")]
+              [buttonOf(h, { variant: "primary" }, "Done")]
             ),
           },
           toParentMessage: toGotSheetDialogMessage,
@@ -895,115 +898,9 @@ const banners = (h: H): Html =>
     true
   );
 
-const dividers = (h: H): Html =>
-  section(h, "divider", "Divider", [
-    specimen(
-      h,
-      "divider/horizontal",
-      "horizontal",
-      [
-        h.p([h.Class(classNames("text-ink-2", TYPE.ui))], ["Above"]),
-        divider(h, "horizontal"),
-        h.p([h.Class(classNames("text-ink-2", TYPE.ui))], ["Below"]),
-      ],
-      "flex flex-col gap-(--space-2)"
-    ),
-    specimen(h, "divider/vertical", "vertical", [
-      h.span([h.Class(classNames("text-ink-2", TYPE.ui))], ["Left"]),
-      divider(h, "vertical"),
-      h.span([h.Class(classNames("text-ink-2", TYPE.ui))], ["Right"]),
-    ]),
-    specimen(
-      h,
-      "divider/labelled",
-      "labelled",
-      [labelledDivider(h, "Previous agents")],
-      "flex flex-col"
-    ),
-  ]);
-
-const TALLY: ReadonlyArray<TallyPart> = [
-  { count: 4, word: "agents", tone: "neutral" },
-  { count: 2, word: "working", tone: "working" },
-  { count: 0, word: "failed", tone: "failed" },
-  { count: 1, word: "done", tone: "done" },
-];
-
-const STEPS: ReadonlyArray<Step> = [
-  { title: "Read the workflows note", state: "done", meta: Option.some("1m") },
-  {
-    title: "Port deriveWorkflowGroups",
-    state: "done",
-    meta: Option.some("6m"),
-  },
-  { title: "Port the panel's tests", state: "working", meta: Option.none() },
-  { title: "Run the steps judge", state: "todo", meta: Option.none() },
-  { title: "Draw the phone sheet", state: "todo", meta: Option.none() },
-];
-
-const FAILED_STEPS: ReadonlyArray<Step> = [
-  ...STEPS.slice(0, 2),
-  { title: "Port the panel's tests", state: "failed", meta: Option.some("2m") },
-];
-
-const tallies = (h: H): Html =>
-  section(h, "tally", "Tally", [
-    specimen(
-      h,
-      "tally/parts",
-      "counts with their words, empty parts left out",
-      [tally(h, TALLY)]
-    ),
-    specimen(h, "tally/total", "a total only, even at zero", [
-      tally(h, [{ count: 0, word: "agents", tone: "neutral" }]),
-      tally(h, [
-        { count: 12, word: "tool calls", tone: "neutral" },
-        { count: 3, word: "edits", tone: "neutral" },
-        { count: 1, word: "approval", tone: "waiting" },
-      ]),
-    ]),
-  ]);
-
-const steppers = (h: H): Html =>
-  section(h, "stepper", "Stepper", [
-    specimen(
-      h,
-      "stepper/states",
-      "every step state: to do, working, done, failed",
-      [
-        stepper(
-          h,
-          "Every step state",
-          STEP_STATES.map((state) => ({
-            title: `A step ${stepWord(state)}`,
-            state,
-            meta: Option.none(),
-          }))
-        ),
-      ],
-      "flex flex-col"
-    ),
-    specimen(
-      h,
-      "stepper/pill",
-      "the steps pill: working, failed, done, to do, opening the sheet",
-      [
-        stepsPill(h, STEPS, Option.none()),
-        stepsPill(h, FAILED_STEPS, Option.none()),
-        stepsPill(
-          h,
-          STEPS.map((step) => ({ ...step, state: "done" as const })),
-          Option.none()
-        ),
-        stepsPill(
-          h,
-          STEPS.map((step) => ({ ...step, state: "todo" as const })),
-          Option.none()
-        ),
-        stepsPill(h, STEPS, Option.some(Message.OpenedSheet())),
-      ]
-    ),
-  ]);
+/** A fold line's quiet counts, in the words the transcript's fold tally writes. */
+const counts = (h: H, words: string): Html =>
+  h.span([h.Class(classNames("tabular-nums text-ink-3", TYPE.small))], [words]);
 
 const disclosures = (h: H, model: Model): Html => {
   const live = (
@@ -1043,7 +940,7 @@ const disclosures = (h: H, model: Model): Html => {
       {
         glyph: Option.none(),
         title,
-        tally: Option.some(tally(h, TALLY.slice(0, 2))),
+        tally: Option.some(counts(h, "4 agents · 2 working")),
         body: [cardText(h, "The body, below the header.")],
       }
     );
@@ -1066,7 +963,7 @@ const disclosures = (h: H, model: Model): Html => {
             "look-disclosure-fold",
             "Worked for 4m 12s",
             Option.none(),
-            Option.some(tally(h, TALLY)),
+            Option.some(counts(h, "4 agents · 2 working · 1 done")),
             [
               rowOf(h, {}, { title: "Read packages/client-logic" }),
               rowOf(h, {}, { title: "Edited Steps.ts" }),
@@ -1081,26 +978,18 @@ const disclosures = (h: H, model: Model): Html => {
                 [statusGlyph(h, "busy", "regular")]
               )
             ),
-            Option.some(stepsPill(h, STEPS, Option.none())),
-            [stepper(h, "Build steps", STEPS)]
+            Option.some(counts(h, "2 of 4 steps")),
+            [
+              rowOf(h, {}, { title: "Port deriveWorkflowGroups" }),
+              rowOf(h, {}, { title: "Run the steps judge" }),
+            ]
           ),
           live(
             "look-disclosure-previous",
             "Previous agents",
             Option.none(),
-            Option.some(
-              tally(h, [{ count: 3, word: "agents", tone: "neutral" }])
-            ),
-            [
-              rowOf(
-                h,
-                {},
-                {
-                  leading: Option.some(avatar(h, "luna", "small", "accent")),
-                  title: "A subagent read the reach note",
-                }
-              ),
-            ]
+            Option.some(counts(h, "3 agents")),
+            [rowOf(h, {}, { title: "A subagent read the reach note" })]
           ),
         ],
         "flex flex-col gap-(--space-1)"
@@ -1190,28 +1079,6 @@ const meters = (h: H): Html =>
       ],
       "flex flex-col gap-(--space-3)"
     ),
-  ]);
-
-const empties = (h: H): Html =>
-  section(h, "empty", "Empty state", [
-    specimen(h, "empty/full", "glyph, body and action", [
-      emptyState(h, {
-        glyph: Option.some(glyph(h, Inbox, "inbox", "large")),
-        title: "Nothing needs you",
-        body: Option.some(
-          "Questions, approvals and briefs from your threads land here."
-        ),
-        action: Option.some(buttonOf(h, { variant: "primary" }, "New thread")),
-      }),
-    ]),
-    specimen(h, "empty/plain", "title only", [
-      emptyState(h, {
-        glyph: Option.none(),
-        title: "No subagents yet",
-        body: Option.none(),
-        action: Option.none(),
-      }),
-    ]),
   ]);
 
 // ---------------------------------------------------------------------------------------------
@@ -1311,21 +1178,16 @@ export const view = (model: Model, h: H): Html =>
               chips(h, model),
               statusChips(h),
               glyphs(h),
-              avatars(h),
               rows(h),
               menus(h),
               cards(h),
               sheets(h, model),
               disclosures(h, model),
-              tallies(h),
-              steppers(h),
               tooltips(h),
               fields(h, model),
               banners(h),
-              dividers(h),
               kbds(h),
               meters(h),
-              empties(h),
               shell(h),
             ]
           ),

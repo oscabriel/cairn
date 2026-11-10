@@ -1,16 +1,29 @@
 // Scene tests for the `next` sheet: in a pane it is a dialog named by its title, not modal, closed
 // by its close button or a tap on its scrim, and with no close button when nothing closes it; over
-// the page it is @foldkit/ui's dialog drawn as a sheet, its scrim, title and close button the
-// dialog's own, and nothing while the dialog is hidden. A bottom sheet under `sm`, a floating panel
-// from `sm`, docked from `lg`.
+// the page it is @foldkit/ui's dialog drawn as a sheet, modal, its scrim, title and close button the
+// dialog's own, and nothing while the dialog is hidden; as a modal sheet its caller keeps whether
+// it is open, focus moves to the control it names as its element mounts, and Escape, the scrim and
+// Close come back as the caller's close while the dialog's other news changes nothing; as a column
+// it is a named region, not modal. A bottom sheet on the phone; from `sm` or `md` its kind.
 
 import { assert, describe, it } from "@effect/vitest";
+import * as Dialog from "@foldkit/ui/dialog";
 import type { RenderInfo } from "@foldkit/ui/dialog";
 import { Option } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 
+import type { Message } from "./SceneFixture.ts";
 import { appOf, expectSent, given, sent } from "./SceneFixture.ts";
-import { sheet, sheetClass, sheetToView } from "./Sheet.ts";
+import {
+  dialogMessageTo,
+  modalSheet,
+  sheet,
+  sheetClass,
+  sheetDefaults,
+  sheetToView,
+  sideColumn,
+} from "./Sheet.ts";
 
 const render = (isVisible: boolean): RenderInfo => ({
   dialog: [],
@@ -27,8 +40,7 @@ const app = appOf((h) => [
   sheet(
     h,
     {
-      id: "criteria",
-      title: "Criteria",
+      ...sheetDefaults<Message>("criteria", "Criteria"),
       onClose: Option.some(sent("close")),
       attributes: [h.DataAttribute("testid", "closable")],
     },
@@ -38,9 +50,7 @@ const app = appOf((h) => [
   sheet(
     h,
     {
-      id: "steps",
-      title: "Steps",
-      onClose: Option.none(),
+      ...sheetDefaults<Message>("steps", "Steps"),
       attributes: [h.DataAttribute("testid", "fixed")],
     },
     [],
@@ -51,16 +61,31 @@ const app = appOf((h) => [
     [
       sheetToView(
         h,
-        "Over the page",
+        {
+          ...sheetDefaults<Message>("over", "Over the page"),
+          role: "alertdialog",
+          focusSelector: Option.none(),
+          attributes: [h.DataAttribute("testid", "viewport-panel")],
+        },
         [h.p([], ["Shown body"])],
-        [],
-        [h.DataAttribute("testid", "viewport-panel")]
+        []
       )(render(true)),
     ]
   ),
   h.div(
     [h.DataAttribute("testid", "hidden")],
-    [sheetToView(h, "Hidden sheet", [], [])(render(false))]
+    [
+      sheetToView(
+        h,
+        {
+          ...sheetDefaults<Message>("hidden", "Hidden sheet"),
+          role: "dialog",
+          focusSelector: Option.none(),
+        },
+        [],
+        []
+      )(render(false)),
+    ]
   ),
 ]);
 
@@ -131,7 +156,7 @@ describe("the next sheet in a pane", () => {
 });
 
 describe("the next sheet over the page", () => {
-  it("draws @foldkit/ui's dialog as a fixed sheet with its title and close button", () => {
+  it("draws @foldkit/ui's dialog as a fixed sheet with its role, title and close button", () => {
     Scene.scene(
       app,
       given,
@@ -141,6 +166,10 @@ describe("the next sheet over the page", () => {
           "data-placement",
           "viewport"
         )
+      ),
+      Scene.inside(
+        Scene.testId("shown"),
+        Scene.expect(Scene.selector("dialog")).toHaveAttr("role", "alertdialog")
       ),
       Scene.expect(Scene.testId("viewport-panel")).toHaveClass("fixed"),
       Scene.inside(
@@ -181,25 +210,175 @@ describe("the next sheet over the page", () => {
     );
   });
 
-  it("is a bottom sheet on the phone, floats from sm and docks from lg", () => {
+  it("is a bottom sheet on the phone; a panel floats from sm and docks from lg, a dialog is a card from md", () => {
     Scene.scene(
       appOf((h) => [
         h.div(
           [h.DataAttribute("testid", "panel"), h.Class(sheetClass("viewport"))],
           []
         ),
+        h.div(
+          [
+            h.DataAttribute("testid", "dialog"),
+            h.Class(sheetClass("viewport", "dialog")),
+          ],
+          []
+        ),
+        h.div(
+          [
+            h.DataAttribute("testid", "thread"),
+            h.Class(sheetClass("viewport", "thread")),
+          ],
+          []
+        ),
       ]),
       given,
-      Scene.expect(Scene.testId("panel")).toHaveClass("bottom-0"),
-      Scene.expect(Scene.testId("panel")).toHaveClass(
-        "rounded-t-(--radius-large)"
-      ),
+      ...["panel", "dialog", "thread"].flatMap((kind) => [
+        Scene.expect(Scene.testId(kind)).toHaveClass("bottom-0"),
+        Scene.expect(Scene.testId(kind)).toHaveClass(
+          "rounded-t-(--radius-large)"
+        ),
+      ]),
       Scene.expect(Scene.testId("panel")).toHaveClass("sm:top-(--space-3)"),
-      Scene.expect(Scene.testId("panel")).toHaveClass(
-        "sm:rounded-(--radius-large)"
-      ),
       Scene.expect(Scene.testId("panel")).toHaveClass("lg:right-0"),
-      Scene.expect(Scene.testId("panel")).toHaveClass("lg:top-0"),
+      Scene.expect(Scene.testId("dialog")).toHaveClass("md:top-24"),
+      Scene.expect(Scene.testId("dialog")).toHaveClass("md:max-w-lg"),
+      Scene.expect(Scene.testId("thread")).toHaveClass("md:max-w-[45rem]"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+});
+
+/** A caller that keeps whether its modal sheet is open, as the shell keeps its overlays'. */
+interface Overlay {
+  readonly isOpen: boolean;
+  readonly sent: ReadonlyArray<string>;
+}
+
+const overlayApp = {
+  update: (model: Overlay, message: Message) => ({
+    model: {
+      isOpen: message.what === "close" ? false : model.isOpen,
+      sent: [...model.sent, message.what],
+    },
+  }),
+  view: (model: Overlay, h: HtmlBuilder<Message>): Html =>
+    h.div(
+      [],
+      [
+        model.isOpen
+          ? modalSheet(
+              h,
+              {
+                ...sheetDefaults<Message>("rename", "Rename thread"),
+                kind: "dialog",
+                role: "dialog",
+                focusSelector: Option.some("#rename-field"),
+                onClose: sent("close"),
+                onSettled: sent("settled"),
+                attributes: [h.DataAttribute("testid", "modal-panel")],
+              },
+              [h.input([h.Id("rename-field")])],
+              []
+            )
+          : h.empty,
+        h.output([h.DataAttribute("testid", "sent")], [model.sent.join(",")]),
+      ]
+    ),
+};
+
+describe("the next sheet as a modal over the page", () => {
+  it("takes the page as it mounts, focusing the control it names, and is a modal dialog named by its title", () => {
+    Scene.scene(
+      overlayApp,
+      Scene.given<Overlay>({ isOpen: true, sent: [] }),
+      Scene.Mount.expectHas(
+        Dialog.AcquireResources({
+          id: "rename",
+          focusSelector: "#rename-field",
+        })
+      ),
+      Scene.expect(Scene.selector("dialog#rename")).toHaveAttr(
+        "aria-modal",
+        "true"
+      ),
+      Scene.expect(Scene.selector("dialog#rename")).toHaveAttr(
+        "aria-labelledby",
+        "rename-dialog-title"
+      ),
+      Scene.expect(Scene.role("heading", { name: "Rename thread" })).toExist(),
+      Scene.Mount.resolve(
+        Dialog.AcquireResources,
+        Dialog.Message.SucceededAcquireResources()
+      ),
+      expectSent("settled"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("closes from Close as its caller's close, and gives the page back as it leaves", () => {
+    Scene.scene(
+      overlayApp,
+      Scene.given<Overlay>({ isOpen: true, sent: [] }),
+      Scene.Mount.resolve(
+        Dialog.AcquireResources,
+        Dialog.Message.SucceededAcquireResources()
+      ),
+      Scene.inside(
+        Scene.testId("modal-panel"),
+        Scene.click(Scene.role("button", { name: "Close" }))
+      ),
+      Scene.expect(Scene.testId("modal-panel")).not.toExist(),
+      Scene.Mount.expectEnded(Dialog.AcquireResources),
+      expectSent("settled,close"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("maps Escape and the scrim to the caller's close, and every other dialog Message to nothing to keep", () => {
+    const toCaller = dialogMessageTo(sent("close"), sent("settled"));
+
+    assert.deepStrictEqual(
+      [
+        Dialog.Message.RequestedClose(),
+        Dialog.Message.SucceededAcquireResources(),
+        Dialog.Message.FailedAcquireResources(),
+        Dialog.Message.Unmounted(),
+        Dialog.Message.CompletedCloseDialog(),
+      ].map((message) => toCaller(message).what),
+      ["close", "settled", "settled", "settled", "settled"]
+    );
+  });
+});
+
+describe("the next sheet as a column", () => {
+  it("is a named region beside the page, not modal, closed by its button", () => {
+    Scene.scene(
+      appOf((h) => [
+        sideColumn(
+          h,
+          {
+            ...sheetDefaults<Message>("work", "Work"),
+            layout: "list",
+            onClose: Option.some(sent("close")),
+            attributes: [h.DataAttribute("testid", "column")],
+          },
+          [h.p([], ["Children"])],
+          []
+        ),
+      ]),
+      given,
+      Scene.expect(Scene.role("complementary", { name: "Work" })).toExist(),
+      Scene.expect(Scene.testId("column")).not.toHaveAttr("aria-modal"),
+      Scene.expect(Scene.testId("column")).toHaveClass("w-[22rem]"),
+      Scene.click(Scene.role("button", { name: "Close" })),
+      expectSent("close"),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

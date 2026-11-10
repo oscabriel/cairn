@@ -16,10 +16,11 @@
 //   nodes (`workflow.stop`), and Stop on each live node of a running one (`workflow.stopNode`; the
 //   script reads it as `null`); Stopping until the stop answers.
 //
-// The Stone look: colour only on the status marks; every word is ink. The panel is drawn beside the
-// chat column, never over it, from `lg`; under `lg` it is a sheet over a scrim, at most 85% of the
-// viewport tall, its body scrolling on its own. Nothing in it moves the transcript: on a wide
-// screen it is its own column, on a phone it floats.
+// The Stone look: colour only on the status marks; every word is ink. The panel is the `next`
+// sheet (`next/ui/Sheet.ts`): drawn beside the chat column, never over it, from `lg`; under `lg` a
+// modal sheet over a scrim (a dialog: focus moves in and back, Escape closes it, the page behind is
+// inert), at most 85% of the viewport tall, its body scrolling on its own. Nothing in it moves the
+// transcript: on a wide screen it is its own column, on a phone it floats.
 
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type {
@@ -61,7 +62,7 @@ import type { WorkflowRecord } from "@cairn/protocol/Workflows";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
-import { CornerLeftUp, X } from "lucide";
+import { CornerLeftUp } from "lucide";
 
 import { threadRouter } from "../../Route.ts";
 import { classNames } from "../../ui/ClassNames.ts";
@@ -75,7 +76,8 @@ import {
 } from "../ui/Classes.ts";
 import { disclosure } from "../ui/Disclosure.ts";
 import { glyph, stopGlyph } from "../ui/Glyph.ts";
-import { iconButtonWithTooltip } from "../ui/IconButton.ts";
+import { modalSheet, sheetDefaults, sideColumn } from "../ui/Sheet.ts";
+import type { SheetConfig } from "../ui/Sheet.ts";
 import { toneOfThreadTone } from "../ui/Tone.ts";
 import type { Message } from "./Message.ts";
 import { Message as ShellMessage } from "./Message.ts";
@@ -692,116 +694,67 @@ const failureLine = (h: H, failure: string): Html =>
     ]
   );
 
-// Each placement's classes carry their own breakpoint (`max-lg:` and `lg:`), so neither depends on
-// which stylesheet the shared primitives' `fixed` or `border-t` land in.
-const PANEL = classNames(
-  "flex min-w-0 flex-col overflow-hidden border-stroke-1 text-ink-1",
-  "max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-(--layer-sheet) max-lg:max-h-[85dvh] max-lg:rounded-t-(--radius-large) max-lg:border-t max-lg:bg-surface-overlay max-lg:pb-[env(safe-area-inset-bottom)] max-lg:shadow-(--elevation-3)",
-  "lg:w-[22rem] lg:shrink-0 lg:border-l lg:bg-surface-ground"
-);
-
 /**
- * The work panel while it is open: a scrim and a bottom sheet under `lg`, a column beside the chat
- * from `lg`. Nothing while closed, or off a thread with something to show.
+ * The work panel while it is open, on the `next` sheet: under `lg` a modal sheet (a dialog over a
+ * scrim, bottom sheet on the phone), from `lg` a column beside the chat that leaves the page in
+ * use. Nothing while closed, or off a thread with something to show.
  */
 export const workPanelView = Submodel.defineView<
   WorkState,
   Message,
   WorkViewInputs
->((work, { inputs }, h) => {
+>((work, { inputs, isWide }, h) => {
   if (!work.isOpen || Option.isNone(inputs)) {
     return h.empty;
   }
 
   const shown = inputs.value;
 
-  return h.div(
-    [h.DataAttribute("slot", "work"), h.Class("contents")],
-    [
-      h.div([
-        h.DataAttribute("testid", "work-scrim"),
-        h.AriaHidden(true),
-        h.OnClick(ShellMessage.ClickedCloseWork()),
-        h.Class(
-          "max-lg:fixed max-lg:inset-0 max-lg:z-(--layer-scrim) max-lg:bg-scrim lg:hidden"
-        ),
-      ]),
-      h.aside(
-        [
-          h.Id(WORK_PANEL_ID),
-          h.DataAttribute("testid", "work-panel"),
-          h.AriaLabelledBy(`${WORK_PANEL_ID}-title`),
-          h.Class(PANEL),
-        ],
-        [
-          h.div([
-            h.AriaHidden(true),
-            h.Class(
-              "mx-auto mt-(--space-2) h-1 w-9 shrink-0 rounded-(--radius-round) bg-stroke-2 lg:hidden"
-            ),
-          ]),
-          h.header(
-            [
-              h.Class(
-                "flex min-h-13 shrink-0 items-center gap-(--space-2) border-b border-stroke-1 py-(--space-2) ps-(--space-4) pe-(--space-2) lg:min-h-14"
-              ),
-            ],
-            [
-              h.h2(
-                [
-                  h.Id(`${WORK_PANEL_ID}-title`),
-                  h.Class(
-                    classNames(
-                      "min-w-0 flex-1 truncate",
-                      TYPE.title,
-                      WEIGHT_STRONG
-                    )
-                  ),
-                ],
-                ["Work"]
-              ),
-              iconButtonWithTooltip(
-                h,
-                {
-                  ...buttonDefaults<Message>(),
-                  variant: "ghost",
-                  label: "Close the work panel",
-                  onClick: Option.some(ShellMessage.ClickedCloseWork()),
-                  attributes: [h.DataAttribute("testid", "work-close")],
-                },
-                glyph(h, X, "x", "regular"),
-                "end"
-              ),
-            ]
-          ),
-          h.div(
-            [
-              h.DataAttribute("slot", "work-body"),
-              h.Class(
-                "flex min-h-0 flex-1 flex-col gap-(--space-3) overflow-y-auto overscroll-contain p-(--space-2)"
-              ),
-            ],
-            [
-              Option.match(work.failure, {
-                onNone: () => h.empty,
-                onSome: (failure) => failureLine(h, failure),
-              }),
-              ancestorsList(h, shown.lineage),
-              Option.match(shown.steps, {
-                onNone: () => h.empty,
-                onSome: (steps) => stepsSection(h, steps),
-              }),
-              lineageSection(h, shown.lineage, work),
-              shown.workflows.length === 0
-                ? h.empty
-                : workflowsSection(h, shown.workflows, {
-                    threadId: shown.threadId,
-                    work,
-                  }),
-            ]
-          ),
-        ]
-      ),
-    ]
-  );
+  const config: SheetConfig<Message> = {
+    ...sheetDefaults<Message>(WORK_PANEL_ID, "Work"),
+    layout: "list",
+    closeLabel: "Close the work panel",
+    attributes: [h.DataAttribute("testid", "work-panel")],
+    scrimAttributes: [h.DataAttribute("testid", "work-scrim")],
+    closeAttributes: [h.DataAttribute("testid", "work-close")],
+  };
+
+  const body = [
+    Option.match(work.failure, {
+      onNone: () => h.empty,
+      onSome: (failure) => failureLine(h, failure),
+    }),
+    ancestorsList(h, shown.lineage),
+    Option.match(shown.steps, {
+      onNone: () => h.empty,
+      onSome: (steps) => stepsSection(h, steps),
+    }),
+    lineageSection(h, shown.lineage, work),
+    shown.workflows.length === 0
+      ? h.empty
+      : workflowsSection(h, shown.workflows, {
+          threadId: shown.threadId,
+          work,
+        }),
+  ];
+
+  return isWide
+    ? sideColumn(
+        h,
+        { ...config, onClose: Option.some(ShellMessage.ClickedCloseWork()) },
+        body,
+        []
+      )
+    : modalSheet(
+        h,
+        {
+          ...config,
+          role: "dialog",
+          focusSelector: Option.none(),
+          onClose: ShellMessage.ClickedCloseWork(),
+          onSettled: ShellMessage.SettledOverlay(),
+        },
+        body,
+        []
+      );
 });

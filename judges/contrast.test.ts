@@ -566,6 +566,51 @@ const withoutComments = (text: string): string =>
 /** A look switch: a `data-look` attribute or selector, or a view writing one. */
 const LOOK_SWITCH = /data-look(?![\w-])|DataAttribute\(\s*["']look["']/u;
 
+const webSource = path.join(root, "apps/web/src");
+
+/** A relative import or re-export in a module: `from "./x.ts"`, `import "./x.css"`, `import("./x.ts")`. */
+const RELATIVE_IMPORT =
+  /(?:\bfrom\s+|\bimport\s*\(?\s*)["'](?<specifier>\.{1,2}\/[^"']+)["']/gu;
+
+/**
+ * Every source file a `next` view reaches through relative imports, `next/` itself included: the
+ * classic regions a `next` view still draws (the composer's editor and popovers, the transcript's
+ * rows) are held to the lint too, so none escapes it (U-13). Within `apps/web/src`, tests and
+ * tokens.css left out.
+ */
+const nextReach = (): ReadonlyArray<string> => {
+  const seen = new Set<string>();
+  const pending = [...nextFiles(nextDirectory)];
+
+  for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+    if (!seen.has(file)) {
+      seen.add(file);
+
+      if (file.endsWith(".ts")) {
+        const text = withoutComments(readFileSync(file, "utf-8"));
+
+        for (const match of text.matchAll(RELATIVE_IMPORT)) {
+          const target = path.resolve(
+            path.dirname(file),
+            match.groups?.specifier ?? ""
+          );
+
+          if (
+            target.startsWith(`${webSource}${path.sep}`) &&
+            SCANNED.test(target) &&
+            !target.endsWith(".test.ts") &&
+            target !== tokensPath
+          ) {
+            pending.push(target);
+          }
+        }
+      }
+    }
+  }
+
+  return [...seen].toSorted();
+};
+
 const tokensText = readFileSync(tokensPath, "utf-8");
 
 const tokens = readTokens(tokensText);
@@ -682,6 +727,70 @@ describe("contrast of the next tokens", () => {
     }
 
     assert.deepStrictEqual(found, []);
+  });
+
+  it("judges the pairs of the classic regions redrawn on the tokens (U-13)", () => {
+    // Each region's text over the grounds it is drawn on: these must be among the judged pairs,
+    // so a region's colours change only with a token the judge already reads.
+    const REGION_PAIRS: ReadonlyArray<{
+      readonly region: string;
+      readonly text: string;
+      readonly ground: ReadonlyArray<string>;
+    }> = [
+      // The composer's placeholder (`composer/Editor.ts`) on its raised box, and on the box's
+      // ground while a thread's context is dragged over it.
+      { region: "placeholder", text: "--ink-3", ground: ["--surface-raised"] },
+      {
+        region: "placeholder",
+        text: "--ink-3",
+        ground: ["--surface-raised", "--select-2"],
+      },
+      // The model picker (`composer/Popovers.ts`): its panel, highlighted and selected rows, the
+      // provider rail and the thinking band.
+      ...["--ink-1", "--ink-2", "--ink-3"].map((text) => ({
+        region: "picker",
+        text,
+        ground: ["--surface-overlay"],
+      })),
+      ...["--select-1", "--select-2", "--select-3", "--select-4"].flatMap(
+        (step) =>
+          ["--ink-1", "--ink-2", "--ink-3"].map((text) => ({
+            region: "picker",
+            text,
+            ground: ["--surface-overlay", step],
+          }))
+      ),
+    ];
+
+    const report: Array<string> = [];
+
+    for (const theme of THEMES) {
+      const judged = judge(tokens, theme);
+
+      for (const pair of REGION_PAIRS) {
+        const found = judged.find(
+          (each) =>
+            each.text === pair.text &&
+            each.ground.join(" + ") === pair.ground.join(" + ")
+        );
+
+        assert.isDefined(
+          found,
+          `${theme}: ${pair.region}'s ${pair.text} on ${pair.ground.join(" + ")} is not judged`
+        );
+
+        if (found !== undefined) {
+          assert.isAtLeast(found.ratio, TEXT_RATIO, `${theme}: ${pair.region}`);
+          report.push(
+            `${theme}: ${pair.region} ${pair.text} on ${pair.ground.join(" + ")} ${found.ratio.toFixed(2)}`
+          );
+        }
+      }
+    }
+
+    if (process.env.CONTRAST_REPORT === "1") {
+      console.log(report.join("\n"));
+    }
   });
 
   it("fails a planted 40 percent ink, a missing token and an unreadable value", () => {
@@ -812,6 +921,47 @@ const coloursIn = (text: string): ReadonlyArray<string> => {
   );
 };
 
+/**
+ * The colours the lint lets stand in a file a `next` view reaches, each for its reason, exactly: a
+ * new colour in one of these files fails as anywhere else, and so does one of these gone, so the
+ * list cannot outlive what it excuses.
+ */
+const ALLOWED = {
+  // A canvas fill that flattens a transparent JPEG onto white before upload; nothing on screen.
+  "apps/web/src/attachments/FitImage.ts": ["#ffffff"],
+  // The attachment thumbnails' remove and overlay controls sit on the user's own picture, whatever
+  // the theme. No token pair holds on an arbitrary image: --scrim is 32% black in light (too thin
+  // under a light glyph) and every ink flips with the theme. Missing: an on-image ground and ink.
+  "apps/web/src/attachments/View.ts": [
+    "bg-black",
+    "text-white",
+    "ring-white",
+    "bg-black",
+    "ring-white",
+    "bg-black",
+    "text-white",
+    "bg-black",
+  ],
+  // Claude's own mark, in its brand orange, as t3code draws it.
+  "apps/web/src/composer/ProviderMark.ts": ["#d97757"],
+  // The favicon's badge, drawn on a canvas for the browser's tab, outside the frame.
+  "apps/web/src/shell/Notifications.ts": ["#e5484d"],
+  // The markdown alerts' palette classes, whose hues next/timeline/timeline.css overrides with the
+  // tone tokens inside the frame.
+  "apps/web/src/timeline/markdown/View.ts": [
+    "border-blue-500",
+    "text-blue-500",
+    "border-emerald-500",
+    "text-emerald-500",
+    "border-violet-500",
+    "text-violet-500",
+    "border-amber-500",
+    "text-amber-500",
+    "border-red-500",
+    "text-red-500",
+  ],
+} satisfies Readonly<Record<string, ReadonlyArray<string>>>;
+
 describe("colours in next", () => {
   it("finds palette utilities and literals in code, not in comments or token names", () => {
     assert.deepStrictEqual(
@@ -870,8 +1020,20 @@ describe("colours in next", () => {
     assert.sameMembers([...TAILWIND_COLOURS.bare], ["black", "white"]);
   });
 
-  it("finds none in next outside tokens.css", () => {
-    const files = nextFiles(nextDirectory);
+  it("finds none in next outside tokens.css, nor in any file a next view imports", () => {
+    const files = nextReach();
+
+    // The reach goes past next/: the classic regions a next view still draws are in it (U-13).
+    for (const classic of [
+      "apps/web/src/composer/Editor.ts",
+      "apps/web/src/composer/Popovers.ts",
+      "apps/web/src/composer/Classes.ts",
+    ]) {
+      assert.include(
+        files.map((file) => path.relative(root, file)),
+        classic
+      );
+    }
 
     const found = Object.fromEntries(
       files.flatMap((file) => {
@@ -884,6 +1046,6 @@ describe("colours in next", () => {
     );
 
     assert.isAbove(files.length, 0);
-    assert.deepStrictEqual(found, {});
+    assert.deepStrictEqual(found, ALLOWED);
   });
 });

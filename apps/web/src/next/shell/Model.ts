@@ -61,19 +61,16 @@ export const RefreshConfirm = Schema.Struct({
 
 export type RefreshConfirm = typeof RefreshConfirm.Type;
 
-/** The scratch thread's overlay: shown or hidden, the thread it holds, and what is typed in it. */
+/**
+ * The scratch thread's overlay: shown or hidden, and the thread it holds. What is typed in it is the
+ * composer's, which serves the overlay while it is shown (U-16).
+ */
 export const ScratchState = Schema.Struct({
   isOpen: Schema.Boolean,
   /** The scratch thread, once the first message launched it; kept while the overlay is hidden. */
   threadId: Schema.Option(ThreadId),
-  draft: Schema.String,
-  /** A turn or the clear is being prepared. */
+  /** The clear is being prepared. */
   isBusy: Schema.Boolean,
-  /**
-   * The draft as it was when the turn being prepared was sent; once the turn is minted, only that
-   * much leaves the field, so words typed meanwhile stay.
-   */
-  sentDraft: Schema.Option(Schema.String),
 });
 
 export type ScratchState = typeof ScratchState.Type;
@@ -309,12 +306,6 @@ export const MANAGE_TEXT_ID = "manage-text";
 /** The id of the refresh confirm's field, which takes focus when it opens. */
 export const REFRESH_TEXT_ID = "refresh-text";
 
-/**
- * The add-project picker's id, which takes focus when it opens. Here, not beside the picker's view,
- * so the update that focuses it does not pull the view into the entry (`next/page/Chunks.ts`).
- */
-export const ADD_PROJECT_ID = "add-project";
-
 /** The `next` shell's Model. */
 export const Model = Schema.Struct({
   context: ShellContext,
@@ -324,6 +315,11 @@ export const Model = Schema.Struct({
   nowMs: Schema.Finite,
   /** An Apple platform, where `mod` is Command and key hints say so. */
   isMac: Schema.Boolean,
+  /**
+   * The window is `lg` or wider: the work and goal panels are columns beside the chat, not modal
+   * sheets over it (`Subscription.ts` follows the width).
+   */
+  isWide: Schema.Boolean,
   /** The last visit this page sent, for its throttle (`shell/Visited.ts`). */
   visits: VisitState,
   pendingVisits: Schema.Array(PendingVisit),
@@ -340,8 +336,6 @@ export const Model = Schema.Struct({
   work: WorkState,
   managedList: ManagedListState,
   goal: GoalPanelState,
-  /** Why the last scratch turn could not be prepared; drawn in the scratch overlay's foot only. */
-  failure: Schema.Option(Schema.String),
   addProject: Schema.Option(AddProjectState),
   /** Folder listings asked so far, across every opening of the picker; each carries its number. */
   folderRequests: Schema.Int,
@@ -370,6 +364,7 @@ export const initial: Model = {
   started: false,
   nowMs: 0,
   isMac: false,
+  isWide: false,
   visits: Option.none(),
   pendingVisits: [],
   badgeCount: 0,
@@ -380,14 +375,11 @@ export const initial: Model = {
   scratch: {
     isOpen: false,
     threadId: Option.none(),
-    draft: "",
     isBusy: false,
-    sentDraft: Option.none(),
   },
   work: initialWork,
   managedList: initialManagedList,
   goal: initialGoalPanel,
-  failure: Option.none(),
   addProject: Option.none(),
   folderRequests: 0,
   awaitedFolder: Option.none(),

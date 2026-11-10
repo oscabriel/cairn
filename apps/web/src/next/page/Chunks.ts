@@ -29,11 +29,6 @@ import type * as SettingsPage from "../settings/Page.ts";
 import type * as AddProject from "../shell/AddProject.ts";
 import type * as GoalPanel from "../shell/GoalPanel.ts";
 import type * as ManageDialog from "../shell/ManageDialog.ts";
-import {
-  ADD_PROJECT_ID,
-  MANAGE_TEXT_ID,
-  REFRESH_TEXT_ID,
-} from "../shell/Model.ts";
 import type * as Refresh from "../shell/Refresh.ts";
 import type * as WorkPanel from "../shell/WorkPanel.ts";
 
@@ -209,18 +204,22 @@ export const chunkModule = <K extends ChunkName>(
   chunk: K
 ): Option.Option<ChunkModules[K]> => SLOTS[chunk].module();
 
-/** The field each view takes focus in when it opens, which a view drawn late takes on arrival. */
+/**
+ * The field each view takes focus in when it opens, which a view drawn late takes on arrival. The
+ * shell's overlays are dialogs (`next/ui/Sheet.ts`), which move focus in as they mount, whenever
+ * their chunk arrives, and back to what held it when they close; a focus from here would land
+ * first and become the place focus goes back to.
+ */
 const FOCUS_ON_ARRIVAL: Readonly<Record<ChunkName, Option.Option<string>>> = {
   settings: Option.none(),
   usage: Option.none(),
   // The search field `FocusPopoverSearch` focuses (`composer/Command.ts`).
   popovers: Option.some('[data-testid="composer-popover-search"]'),
-  addProject: Option.some(`#${ADD_PROJECT_ID}`),
+  addProject: Option.none(),
   workPanel: Option.none(),
   goalPanel: Option.none(),
-  refresh: Option.some(`#${REFRESH_TEXT_ID}`),
-  // The name field, or Cancel on a remove: the dialog draws one of the two.
-  manageDialog: Option.some(`#${MANAGE_TEXT_ID}, #${MANAGE_TEXT_ID}-cancel`),
+  refresh: Option.none(),
+  manageDialog: Option.none(),
 };
 
 /** How the chunks are named to the user when one fails. */

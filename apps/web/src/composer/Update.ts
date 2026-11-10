@@ -52,7 +52,9 @@ import {
   draftProjectThread,
   draftThreadId,
   isDraftTarget,
+  isScratchTarget,
   modifyActiveDraft,
+  SCRATCH_DRAFT_KEY,
   rebaseDrafts,
   shownNotice,
   targetProject,
@@ -241,6 +243,45 @@ export const restoreTurn = (
           thinking: Option.some(input.thinkingLevel),
           runtimeMode: input.runtimeMode,
           projectId: Option.some(input.projectId),
+        },
+        attachments
+      ),
+    Dispatch: () => ({ model }),
+  });
+
+/**
+ * Puts a scratch turn the brain refused, or a scratch launch that failed, back in the scratch
+ * overlay's draft (`SCRATCH_DRAFT_KEY`): its text below what is typed there now, and its
+ * attachments; a launch's model and thinking too, while the draft is empty.
+ */
+export const restoreScratchTurn = (
+  model: Model,
+  item: OutboxItem,
+  attachments: ReadonlyArray<AttachmentRef>
+): Update.Return<Model, Message, Services> =>
+  OutboxItem.match(item, {
+    Send: ({ input }) =>
+      restoreDraft(
+        model,
+        SCRATCH_DRAFT_KEY,
+        {
+          ...emptyDraft,
+          text: input.input.text,
+          attachments: input.input.attachments,
+        },
+        attachments
+      ),
+    Launch: ({ input }) =>
+      restoreDraft(
+        model,
+        SCRATCH_DRAFT_KEY,
+        {
+          ...emptyDraft,
+          text: input.initialMessage.text,
+          attachments: input.initialMessage.attachments,
+          model: Option.some(input.model),
+          thinking: Option.some(input.thinkingLevel),
+          runtimeMode: input.runtimeMode,
         },
         attachments
       ),
@@ -549,7 +590,8 @@ const dispatchTurn = (
         notice(model, "The models are still loading. Send again in a moment."),
       onSome: ([chosen, thinkingLevel]) => {
         const project = draftProject(model);
-        const stay = intent === "background";
+        // The scratch thread's first message launches it where it is, in the overlay.
+        const stay = intent === "background" || isScratchTarget(model);
         const launched = clearSentDraft(model);
 
         return {

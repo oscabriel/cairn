@@ -5,9 +5,47 @@
 
 import { assert, describe, it } from "@effect/vitest";
 import * as Dialog from "@foldkit/ui/dialog";
+import { Option } from "effect";
+import { Mount } from "foldkit";
 import * as Scene from "foldkit/scene";
 
+import { Message as AttachmentsMessage } from "../../../attachments/Message.ts";
+import { AttachmentPaste } from "../../../attachments/Paste.ts";
+import { ComposerInput } from "../../../composer/Editor.ts";
+import { MeasureFooter } from "../../../composer/Footer.ts";
+import { Message as ComposerMessage } from "../../../composer/Message.ts";
 import { initialOf, update, view } from "./Catalogue.ts";
+
+/** One composer's Mounts, acknowledged as the browser would run them. */
+const composerMounts = [
+  Scene.Mount.resolve(ComposerInput, ComposerMessage.BlurredEditor()),
+  Scene.Mount.resolve(
+    Mount.mapMessage(AttachmentPaste(), (message: AttachmentsMessage) =>
+      ComposerMessage.GotAttachmentsMessage({ message })
+    ),
+    ComposerMessage.GotAttachmentsMessage({
+      message: AttachmentsMessage.ClickedDismissNotice(),
+    })
+  ),
+  Scene.Mount.resolve(
+    MeasureFooter,
+    ComposerMessage.MeasuredFooter({
+      width: 640,
+      hostWidth: 640,
+      measurement: {
+        gap: 4,
+        naturalFixedWidth: 169,
+        minimumFixedWidth: 52,
+        blockWidths: [124, 139],
+        iconOnlyBlockWidths: Option.some([63, 63]),
+        overflowWidth: 38,
+      },
+    })
+  ),
+];
+
+/** The Mounts of the scratch overlay's two specimens, each with the real composer (U-16). */
+const acknowledgeMounts = [...composerMounts, ...composerMounts];
 
 const PRIMITIVES = [
   "button",
@@ -15,21 +53,16 @@ const PRIMITIVES = [
   "chip",
   "status-chip",
   "glyph",
-  "avatar",
   "row",
   "menu",
   "card",
   "sheet",
   "disclosure",
-  "tally",
-  "stepper",
   "tooltip",
   "field",
   "banner",
-  "divider",
   "kbd",
   "meter",
-  "empty",
 ];
 
 describe("the look catalogue", () => {
@@ -44,6 +77,7 @@ describe("the look catalogue", () => {
     Scene.scene(
       { update, view },
       Scene.given(initialOf("")),
+      ...acknowledgeMounts,
       Scene.expect(Scene.selector('[data-ui="next"]')).not.toHaveAttr(
         "data-look"
       ),
@@ -77,6 +111,7 @@ describe("the look catalogue", () => {
     Scene.scene(
       { update, view },
       Scene.given(initialOf("")),
+      ...acknowledgeMounts,
       ...PRIMITIVES.map((primitive) =>
         Scene.expect(Scene.testId(`look-${primitive}`)).toExist()
       ),
@@ -100,6 +135,7 @@ describe("the look catalogue", () => {
     Scene.scene(
       { update, view },
       Scene.given(initialOf("")),
+      ...acknowledgeMounts,
       Scene.expect(Scene.selector("#look-disclosure-phase-button")).toHaveAttr(
         "aria-expanded",
         "true"
@@ -129,6 +165,7 @@ describe("the look catalogue", () => {
     Scene.scene(
       { update, view },
       Scene.given(initialOf("")),
+      ...acknowledgeMounts,
       Scene.expect(Scene.role("button", { name: "Open" })).toHaveAttr(
         "aria-pressed",
         "true"

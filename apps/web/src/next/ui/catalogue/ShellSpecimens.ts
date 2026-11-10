@@ -1,7 +1,8 @@
 // The `next` shell's specimens in the look catalogue (plan look track L6): the rail, the project's
 // sidebar list with its project thread and managed threads, the list of a project with no project
 // thread, the chat header on the project thread and on a managed thread, the hold banners, the
-// scratch overlay empty and holding a thread, the refresh confirm and the usage page, each over the
+// scratch overlay empty and holding a thread (with the real composer, U-16), the refresh confirm
+// and the usage page, each over the
 // shell fixture (`shell/ShellFixtures.ts`), so `judges/look-rules.ts` holds them to the rules. Their
 // Messages go nowhere: the catalogue shows states, it does not run the shell.
 
@@ -11,8 +12,11 @@ import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { composerOn } from "../../../composer/ComposerFixtures.ts";
+import { ComposerTarget } from "../../../composer/Model.ts";
 import { AppRoute } from "../../../Route.ts";
 import { classNames } from "../../../ui/ClassNames.ts";
+import { scratchView as scratchComposerView } from "../../composer/View.ts";
 import {
   chatHeaderBand,
   headerActions,
@@ -26,10 +30,8 @@ import type { RailDirection } from "../../shell/Rail.ts";
 import { refreshConfirm } from "../../shell/Refresh.ts";
 import {
   scratchBody,
-  scratchFoot,
-  scratchHead,
-  scratchPanel,
-  scratchScrim,
+  scratchHeadExtras,
+  scratchSheet,
 } from "../../shell/Scratch.ts";
 import {
   DEV,
@@ -49,6 +51,7 @@ import {
   sidebarContentOf,
 } from "../../shell/View.ts";
 import { TYPE } from "../Classes.ts";
+import { sheet } from "../Sheet.ts";
 
 /** The favicon the catalogue shows for the project with one: Cairn's own icon, served by Vite. */
 const CATALOGUE_FAVICON = "/icons/icon.svg";
@@ -78,7 +81,7 @@ const specimenView = Submodel.defineView<
 const BOX =
   "relative flex overflow-hidden rounded-(--radius-medium) border border-stroke-1 bg-surface-ground";
 
-const transcript = (h: SH): Html =>
+const transcript = <M>(h: HtmlBuilder<M>): Html =>
   h.div(
     [
       h.Class(
@@ -182,52 +185,6 @@ const DRAWS: ReadonlyArray<{
     },
   },
   {
-    state: "scratch-empty",
-    caption: "The scratch thread before its first message",
-    model: {
-      ...onProjectThread,
-      scratch: { ...onProjectThread.scratch, isOpen: true },
-    },
-    draw: (model, h) =>
-      h.div(
-        [h.Class(classNames(BOX, "h-[30rem] w-full"))],
-        [
-          scratchScrim(h, "contained"),
-          scratchPanel(h, "contained", [
-            scratchHead(h, model.scratch, scratchKeysOf(model)),
-            scratchBody(h, Option.none()),
-            scratchFoot(h, model.scratch, model.failure),
-          ]),
-        ]
-      ),
-  },
-  {
-    state: "scratch-thread",
-    caption: "The scratch thread holding a thread, with a draft",
-    model: {
-      ...onProjectThread,
-      scratch: {
-        isOpen: true,
-        threadId: Option.some(SCRATCH_THREAD),
-        draft: "And on a rename?",
-        isBusy: false,
-        sentDraft: Option.none(),
-      },
-    },
-    draw: (model, h) =>
-      h.div(
-        [h.Class(classNames(BOX, "h-[30rem] w-full"))],
-        [
-          scratchScrim(h, "contained"),
-          scratchPanel(h, "contained", [
-            scratchHead(h, model.scratch, scratchKeysOf(model)),
-            scratchBody(h, Option.some(transcript(h))),
-            scratchFoot(h, model.scratch, model.failure),
-          ]),
-        ]
-      ),
-  },
-  {
     state: "refresh",
     caption: "Refresh asks first, with the new thread's first message",
     model: onProjectThread,
@@ -289,6 +246,60 @@ const HOLDS: ReadonlyArray<{
   },
 ];
 
+/** The scratch overlay as a specimen: the sheet in a box, its transcript, and the real composer. */
+const scratchSpecimen = <M>(
+  h: HtmlBuilder<M>,
+  frame: SpecimenFrame<M>,
+  state: string,
+  caption: string,
+  model: ShellModel,
+  hasThread: boolean
+): Html =>
+  frame.specimen(`shell/${state}`, caption, [
+    h.div(
+      [h.Class(classNames(BOX, "h-[30rem] w-full"))],
+      [
+        sheet(
+          h,
+          {
+            ...scratchSheet(h, [
+              h.submodel({
+                slotId: `look-shell-${state}-head`,
+                model: {
+                  model,
+                  draw: (shell: ShellModel, sh: SH) =>
+                    scratchHeadExtras(sh, shell.scratch, scratchKeysOf(shell)),
+                },
+                view: specimenView,
+                toParentMessage: () => frame.ignore,
+              }),
+            ]),
+            onClose: Option.some(frame.ignore),
+          },
+          [
+            scratchBody(
+              h,
+              hasThread ? Option.some(transcript(h)) : Option.none()
+            ),
+            h.submodel({
+              slotId: `look-shell-${state}-composer`,
+              model: composerOn(
+                ComposerTarget.Scratch({
+                  threadId: hasThread
+                    ? Option.some(SCRATCH_THREAD)
+                    : Option.none(),
+                })
+              ),
+              view: scratchComposerView,
+              toParentMessage: () => frame.ignore,
+            }),
+          ],
+          []
+        ),
+      ]
+    ),
+  ]);
+
 /** What the catalogue hands the specimens: its specimen frame and where their Messages go. */
 export interface SpecimenFrame<M> {
   readonly specimen: (
@@ -313,6 +324,32 @@ export const shellSpecimens = <M>(
         toParentMessage: () => frame.ignore,
       }),
     ])
+  ),
+  scratchSpecimen(
+    h,
+    frame,
+    "scratch-empty",
+    "The scratch thread before its first message, with the composer",
+    {
+      ...onProjectThread,
+      scratch: { ...onProjectThread.scratch, isOpen: true },
+    },
+    false
+  ),
+  scratchSpecimen(
+    h,
+    frame,
+    "scratch-thread",
+    "The scratch thread holding a thread, with the composer",
+    {
+      ...onProjectThread,
+      scratch: {
+        isOpen: true,
+        threadId: Option.some(SCRATCH_THREAD),
+        isBusy: false,
+      },
+    },
+    true
   ),
   ...HOLDS.map(({ caption, model, state }) =>
     frame.specimen(`shell/${state}`, caption, [

@@ -167,6 +167,8 @@ export const stateMark = (h: H, state: CriterionState): Html =>
 /** What the header's chip and the panel are drawn from: the routed thread's goal. */
 export interface GoalViewInputs {
   readonly inputs: Option.Option<GoalInputs>;
+  /** The window is `lg` or wider: the panel is a column beside the chat, not a modal sheet. */
+  readonly isWide: boolean;
 }
 
 /**

@@ -116,14 +116,31 @@ describe("the chunks a cold load never draws", () => {
     assert.deepStrictEqual(namesOf(reopened.commands), ["LoadChunk"]);
   });
 
-  it("puts the keyboard in a picker's field when its chunk arrives after it opened", () => {
+  it("puts the keyboard in a popover's search when its chunk arrives after it opened, and leaves an overlay's focus to its dialog", () => {
     const arrived = Chunks.update(
-      Chunks.want(Chunks.initial, ["addProject"]).model,
-      Chunks.Message.LoadedChunk({ chunk: "addProject" })
+      Chunks.want(Chunks.initial, ["popovers"]).model,
+      Chunks.Message.LoadedChunk({ chunk: "popovers" })
     );
 
-    assert.strictEqual(arrived.model.addProject, "loaded");
+    assert.strictEqual(arrived.model.popovers, "loaded");
     assert.deepStrictEqual(namesOf(arrived.commands), ["FocusOnArrival"]);
+
+    // An overlay is a dialog that takes focus as it mounts, whenever its chunk arrives, and gives
+    // it back on close; a focus from here would become the place focus goes back to (U-12).
+    for (const chunk of [
+      "addProject",
+      "refresh",
+      "manageDialog",
+      "workPanel",
+      "goalPanel",
+    ] as const) {
+      const overlay = Chunks.update(
+        Chunks.want(Chunks.initial, [chunk]).model,
+        Chunks.Message.LoadedChunk({ chunk })
+      );
+
+      assert.deepStrictEqual(namesOf(overlay.commands), [], chunk);
+    }
   });
 
   it("asks for the settings page's chunk when the route opens it, and says so when it fails", () => {

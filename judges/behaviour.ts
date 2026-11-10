@@ -81,12 +81,18 @@
 //   shell-foot-<w>        Usage opens the usage page and Settings the settings page, and the foot
 //                         holds no meter;
 //   shell-scratch-<w>     Ctrl+J while typing in the composer (1,440) or the header's button (390)
-//                         opens the scratch overlay and moves the keyboard into it; a message
-//                         typed without a click lands there, not in the composer, and shows with
-//                         its answer; hiding and showing keeps it;
-//                         Clear deletes it and shows the empty overlay;
-//   shell-refresh-1440    Refresh asks first (Cancel keeps the thread), then starts a new project
-//                         thread with the typed message, opens it and lists it on top;
+//                         opens the scratch overlay as a dialog (U-12): modal and named, the page
+//                         behind it inert, the keyboard in its composer's editor and Tab kept
+//                         inside it; it holds the real composer (U-16), the page's one editor while
+//                         it shows, with its model pill and send. A message typed there shows with
+//                         its answer, and the page's composer never takes it; Escape (1,440) or
+//                         Hide (390) closes it and gives the page back, focus returning (390) to
+//                         the header's button; shown again it keeps its thread; Clear deletes it
+//                         and shows the empty overlay;
+//   shell-refresh-1440    Refresh asks first in an alert dialog whose field holds the keyboard
+//                         (U-12); Escape closes it and focus goes back to Refresh, Cancel keeps the
+//                         thread; then it starts a new project thread with the typed message,
+//                         opens it and lists it on top;
 //   shell-previous-<w>    after the refresh, cairn's list folds its earlier project thread under
 //                         "Previous (1)" (ADR 0048); the row opens the seeded thread read only: the
 //                         header says "earlier project thread", its transcript shows, its work panel
@@ -647,18 +653,59 @@ const shellChecks = async (browser: Browser, hero: string) => {
           const box = await overlay.boundingBox();
           const empty = await overlay.getByTestId("scratch-empty").count();
 
+          // A real dialog (U-12) holding the real composer (U-16): modal and named, the page
+          // behind it inert, focus in it, Tab kept inside it, and one editor on the page, the
+          // overlay's, with the composer's model pill and send.
+          const dialogOf = async () =>
+            await page.evaluate(() => {
+              const panel = document.querySelector(
+                '[data-testid="scratch-overlay"]'
+              );
+
+              const dialog = panel?.closest("dialog") ?? null;
+
+              return {
+                modal: dialog?.getAttribute("aria-modal") === "true",
+                named: (dialog?.getAttribute("aria-labelledby") ?? "") !== "",
+                inert:
+                  document
+                    .querySelector('[data-slot="sidebar-inset"]')
+                    ?.closest("[inert]") !== null,
+                focused:
+                  dialog !== null && dialog.contains(document.activeElement),
+                onEditor:
+                  document.activeElement instanceof HTMLElement &&
+                  document.activeElement.dataset.testid === "composer-editor",
+                editors: document.querySelectorAll(
+                  '[data-testid="composer-editor"]'
+                ).length,
+                composer:
+                  panel?.querySelector("[data-chat-provider-model-picker]") !==
+                    null &&
+                  panel?.querySelector('[data-testid="composer-send"]') !==
+                    null,
+              };
+            });
+
+          const opened = await dialogOf();
+
+          for (let tab = 0; tab < 12; tab += 1) {
+            await page.keyboard.press("Tab");
+          }
+
+          const afterTabs = await dialogOf();
+          const trapped = afterTabs.focused;
+
+          // Back to the editor, where the overlay put the keyboard when it opened.
+          await overlay.getByTestId("composer-editor").focus();
           await shot(page, "scratch-empty", width);
 
           const words = `a scratch question ${Date.now()}`;
 
-          // Typed with no click: the words land where the focus went.
           await page.keyboard.type(words);
 
-          const scratchField = overlay.getByTestId("scratch-editor");
+          const scratchField = overlay.getByTestId("composer-editor");
           const inOverlay = (await scratchField.inputValue()) === words;
-
-          const composerText = await editor(page).inputValue();
-          const inComposer = composerText.includes(words);
 
           await page.keyboard.press("Enter");
 
@@ -683,16 +730,35 @@ const shellChecks = async (browser: Browser, hero: string) => {
           await page.waitForTimeout(300);
           await shot(page, "scratch-thread", width);
 
-          // Hidden and shown again, it keeps its thread.
-          if (width === 390) {
-            await overlay.getByTestId("scratch-close").click();
-            await overlay.waitFor({ state: "detached", timeout: 5000 });
-            await page.getByTestId("open-scratch").click();
-          } else {
-            await page.keyboard.press("Control+j");
-            await overlay.waitFor({ state: "detached", timeout: 5000 });
-            await page.keyboard.press("Control+j");
-          }
+          // Hidden (Hide on the phone, Escape on a desktop) and shown again, it keeps its thread;
+          // on the phone focus goes back to the button that opened it, and the page's own
+          // composer never took the words.
+          await (width === 390
+            ? overlay.getByTestId("scratch-close").click()
+            : page.keyboard.press("Escape"));
+          await overlay.waitFor({ state: "detached", timeout: 5000 });
+
+          const returned =
+            width === 390
+              ? await page
+                  .getByTestId("open-scratch")
+                  .evaluate((button) => document.activeElement === button)
+              : true;
+
+          const composerText = await editor(page).inputValue();
+          const inComposer = composerText.includes(words);
+
+          const released =
+            (await page
+              .locator('[data-slot="sidebar-inset"]')
+              .evaluate((main) => main.closest("[inert]") === null)) &&
+            (await page.evaluate(
+              () => getComputedStyle(document.body).overflow !== "hidden"
+            ));
+
+          await (width === 390
+            ? page.getByTestId("open-scratch").click()
+            : page.keyboard.press("Control+j"));
 
           const kept = await overlay
             .locator('[data-message-role="user"]', { hasText: words })
@@ -713,11 +779,11 @@ const shellChecks = async (browser: Browser, hero: string) => {
               () => false
             );
 
-          return `opened ${box !== null}, wide ${(box?.width ?? 0) >= (width === 390 ? 360 : 600)}, empty ${empty}, typed in overlay ${inOverlay}, in composer ${inComposer}, sent ${sent}, answered ${answered}, kept ${kept}, cleared ${cleared}`;
+          return `opened ${box !== null}, wide ${(box?.width ?? 0) >= (width === 390 ? 360 : 600)}, empty ${empty}, dialog ${opened.modal && opened.named && opened.inert && opened.focused && opened.onEditor}, trapped ${trapped}, one composer ${opened.editors === 1 && opened.composer}, typed in overlay ${inOverlay}, in composer ${inComposer}, sent ${sent}, answered ${answered}, closed and returned ${returned && released}, kept ${kept}, cleared ${cleared}`;
         },
         (detail) =>
           detail ===
-          "opened true, wide true, empty 1, typed in overlay true, in composer false, sent true, answered true, kept true, cleared true"
+          "opened true, wide true, empty 1, dialog true, trapped true, one composer true, typed in overlay true, in composer false, sent true, answered true, closed and returned true, kept true, cleared true"
       );
     },
   ];
@@ -736,6 +802,27 @@ const shellChecks = async (browser: Browser, hero: string) => {
     projectThreadUrl,
     async (page) => {
       const confirm = page.getByTestId("refresh-confirm");
+
+      await page.getByTestId("refresh-project-thread").click();
+      await confirm.waitFor({ state: "visible", timeout: 5000 });
+
+      // An alert dialog (U-12): its field holds the keyboard, Escape cancels it, and focus goes
+      // back to Refresh.
+      const asked = await page
+        .getByTestId("refresh-text")
+        .evaluate(
+          (field) =>
+            document.activeElement === field &&
+            field.closest("dialog")?.getAttribute("role") === "alertdialog" &&
+            field.closest("dialog")?.getAttribute("aria-modal") === "true"
+        );
+
+      await page.keyboard.press("Escape");
+      await confirm.waitFor({ state: "detached", timeout: 5000 });
+
+      const returned = await page
+        .getByTestId("refresh-project-thread")
+        .evaluate((button) => document.activeElement === button);
 
       await page.getByTestId("refresh-project-thread").click();
       await confirm.waitFor({ state: "visible", timeout: 5000 });
@@ -787,11 +874,11 @@ const shellChecks = async (browser: Browser, hero: string) => {
       await page.waitForTimeout(300);
       await shot(page, "refreshed", 1440);
 
-      return `cancel kept ${kept}, new thread shown ${shown}, on top ${top === "page"}, managed ${managed}`;
+      return `dialog ${asked}, escape returned ${returned}, cancel kept ${kept}, new thread shown ${shown}, on top ${top === "page"}, managed ${managed}`;
     },
     (detail) =>
       detail ===
-      "cancel kept true, new thread shown true, on top true, managed 0"
+      "dialog true, escape returned true, cancel kept true, new thread shown true, on top true, managed 0"
   );
 
   // After the refresh: cairn's earlier project thread, the seeded one, is under "Previous" and

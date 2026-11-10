@@ -28,7 +28,7 @@ import {
 } from "@cairn/client-logic/ProjectThread";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectShell } from "@cairn/protocol/Shell";
-import { Array, Effect, Option, Record, Schema } from "effect";
+import { Array, Effect, Option, Predicate, Record, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 
 import {
@@ -62,6 +62,12 @@ export const SETTINGS_STORAGE_KEY = "cairn:composer-settings:v1";
 /** How long typing must pause before drafts are written. */
 export const DRAFT_SAVE_DEBOUNCE_MS = 300;
 
+/**
+ * The scratch overlay's draft key: one key, whichever scratch thread it holds, so a draft typed
+ * before the first message, or kept across a clear, stays the overlay's (U-16).
+ */
+export const SCRATCH_DRAFT_KEY = "scratch";
+
 /** The key of the draft the composer edits now, or none when it has no target yet. */
 export const draftKey = (model: Model): Option.Option<string> =>
   ComposerTarget.match(model.context.target, {
@@ -69,7 +75,12 @@ export const draftKey = (model: Model): Option.Option<string> =>
     Home: () => Option.map(model.homeDraftId, (id) => `draft:${id}`),
     Draft: ({ draftId }) => Option.some(`draft:${draftId}`),
     Thread: ({ threadId }) => Option.some(`thread:${threadId}`),
+    Scratch: () => Option.some(SCRATCH_DRAFT_KEY),
   });
+
+/** True while the composer serves the scratch overlay. */
+export const isScratchTarget = (model: Model): boolean =>
+  Predicate.isTagged(model.context.target, "Scratch");
 
 /** The notice to show now: one about the open draft, or one about no one draft. */
 export const shownNotice = (model: Model): Option.Option<string> =>
@@ -90,15 +101,17 @@ export const draftThreadId = (model: Model): Option.Option<string> =>
     Home: () => model.homeDraftId,
     Draft: ({ draftId }) => Option.some(draftId),
     Thread: () => Option.none(),
+    Scratch: () => Option.none(),
   });
 
-/** True when the composer writes a thread that does not exist yet. */
+/** True when the composer writes a thread that does not exist yet, the scratch thread's included. */
 export const isDraftTarget = (model: Model): boolean =>
   ComposerTarget.match(model.context.target, {
     None: () => false,
     Home: () => true,
     Draft: () => true,
     Thread: () => false,
+    Scratch: ({ threadId }) => Option.isNone(threadId),
   });
 
 /** The draft the composer edits now; an untouched draft is empty. */
@@ -147,6 +160,11 @@ export const pickableProjects = (model: Model): ReadonlyArray<ProjectShell> =>
  * no project (the hero then offers to start without one).
  */
 export const draftProject = (model: Model): Option.Option<ProjectShell> => {
+  // The scratch thread's first message launches in the scratch project, made for it.
+  if (isScratchTarget(model)) {
+    return Option.none();
+  }
+
   const draft = activeDraft(model);
 
   return Option.orElse(

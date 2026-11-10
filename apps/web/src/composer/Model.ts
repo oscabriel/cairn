@@ -1,5 +1,6 @@
 // The composer's state. One composer serves every route that takes input: a draft (the new-thread
-// hero, at `/` and `/new/<draftId>`) and an open thread (docked under its transcript). What it needs
+// hero, at `/` and `/new/<draftId>`), an open thread (docked under its transcript) and, while the
+// scratch overlay is shown, the scratch thread (in the overlay, over the page). What it needs
 // from the rest of the app arrives as `ComposerContext`, which the root hands it after every update
 // (`Update.ts`, `inform`); everything else here is the composer's own.
 
@@ -36,6 +37,12 @@ export const ComposerTarget = defineTaggedUnion({
   /** A thread not launched yet, at `/new/<draftId>`. */
   Draft: { draftId: Schema.String },
   Thread: { threadId: ThreadId },
+  /**
+   * The scratch overlay, while it is shown (U-16): the scratch thread once it exists, else its
+   * first message, which launches it in the scratch project without leaving the page. Its draft has
+   * a key of its own (`SCRATCH_DRAFT_KEY`), whichever thread it holds.
+   */
+  Scratch: { threadId: Schema.Option(ThreadId) },
 });
 
 export type ComposerTarget = typeof ComposerTarget.Type;

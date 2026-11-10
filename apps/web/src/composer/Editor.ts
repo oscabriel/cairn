@@ -354,7 +354,7 @@ export const FocusEditor = Command.define("FocusEditor", {
 });
 
 const EDITOR_CLASS =
-  "-m-1 block max-h-52 min-h-19.5 w-[calc(100%+--spacing(2))] resize-none overflow-y-auto p-1 whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none [field-sizing:content]";
+  "-m-1 block max-h-52 min-h-19.5 w-[calc(100%+--spacing(2))] resize-none overflow-y-auto p-1 whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-ink-1 focus:outline-none [field-sizing:content]";
 
 /** What the editor shows and the flags its Mount reads. */
 export interface EditorInputs {
@@ -409,7 +409,7 @@ export const editorView = (
             [
               h.Attribute("aria-hidden", "true"),
               h.Class(
-                "pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75"
+                "pointer-events-none absolute inset-0 leading-relaxed text-ink-3"
               ),
             ],
             [EDITOR_PLACEHOLDER]

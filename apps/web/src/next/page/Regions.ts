@@ -1,5 +1,6 @@
 // The page regions the `next` frame draws (plan look track L7): the composer (the hero on a
-// draft's page, the box docked under a thread), the thread page with its transcript, the chat
+// draft's page, the box docked under a thread, or at the scratch overlay's foot while that is
+// shown), the thread page with its transcript, the chat
 // header's diff toggle, and the settings page. Each is a Submodel over its slice of the root Model,
 // lifted by a root Message. The settings page and the composer's popovers are drawn from their own
 // chunks (`Chunks.ts`) once those are in.
@@ -22,7 +23,10 @@ import type * as ThreadModel from "../../page/thread/Model.ts";
 import { AppRoute } from "../../Route.ts";
 import { projectOf, threadRowOf } from "../../ThreadRow.ts";
 import { subagentRowsInput } from "../../timeline/Subagents.ts";
-import { view as composerView } from "../composer/View.ts";
+import {
+  view as composerView,
+  scratchView as scratchComposerView,
+} from "../composer/View.ts";
 import { chunkModule } from "./Chunks.ts";
 import type { ChunkState } from "./Chunks.ts";
 import * as Thread from "./Thread.ts";
@@ -32,6 +36,8 @@ type H = HtmlBuilder<Message>;
 const heroComposerLazy = createLazy();
 
 const dockedComposerLazy = createLazy();
+
+const scratchComposerLazy = createLazy();
 
 const threadPageLazy = createLazy();
 
@@ -51,6 +57,27 @@ const composer = (
 /** The composer docked under an open thread's transcript. */
 export const dockedComposer = (model: Model, h: H): Html =>
   dockedComposerLazy(composer, [h, model.composer, model.chunks.popovers]);
+
+/** The composer at the scratch overlay's foot; `_popovers` as in `composer`. */
+const scratchComposerOf = (
+  h: H,
+  composerModel: Model["composer"],
+  _popovers: ChunkState
+): Html =>
+  h.submodel({
+    slotId: "scratch-composer",
+    model: composerModel,
+    view: scratchComposerView,
+    toParentMessage: (message) => Message.GotComposerMessage({ message }),
+  });
+
+/** The one composer at the scratch overlay's foot, while it serves the scratch thread (U-16). */
+export const scratchComposer = (model: Model, h: H): Html =>
+  scratchComposerLazy(scratchComposerOf, [
+    h,
+    model.composer,
+    model.chunks.popovers,
+  ]);
 
 /**
  * The thread page. Its inputs arrive as plain strings ("" for none) so the lazy view compares them

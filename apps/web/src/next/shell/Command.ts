@@ -1,12 +1,11 @@
 // The `next` shell's Commands: reading the clock and the platform, the favicon badge, minting a
 // visit's command id, a new draft (with or without its project), a refresh's launch, a scratch
-// thread's turns and its clear, focusing the field an overlay opens with, and saving which scratch
-// thread this device holds, stopping a child, a workflow or one of its nodes from the work panel,
-// and the user's mark on a goal's criterion from the goal panel. Each answers with one Message. A
-// refresh is `thread.launch` with `replaces` (5H): the new project thread, the old one's archive
-// and the moved mark land in one shell commit. The scratch thread's first message launches it in
-// the scratch project (made here first, as the composer's projectless launch does); later ones are
-// sends. The add-project picker lists folders on the Beelink (`projects.browse`) and adds one with
+// thread's clear, and saving which scratch thread this device holds, stopping a child, a workflow
+// or one of its nodes from the work panel, and the user's mark on a goal's criterion from the goal
+// panel. Each answers with one Message. A refresh is `thread.launch` with `replaces` (5H): the new
+// project thread, the old one's archive and the moved mark land in one shell commit. The scratch
+// thread's turns are the composer's, which serves the overlay (U-16). The add-project picker lists
+// folders on the Beelink (`projects.browse`) and adds one with
 // `shell.dispatch` (`ProjectCreate`), so a refused folder answers in the picker itself. The
 // "Previous" fold reads a project's earlier project threads a page at a time
 // (`shell.previousThreads`, ADR 0048), a page opened directly on a thread the shell does not hold
@@ -26,11 +25,9 @@ import {
   ThreadRename,
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
-import { SendInput } from "@cairn/protocol/Thread";
-import { Clock, Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Effect, Option, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
-import { focus } from "foldkit/dom";
 
 import {
   mintCommandId,
@@ -38,11 +35,7 @@ import {
   mintThreadId,
 } from "../../composer/Ids.ts";
 import { CairnConnection, withBoundary } from "../../connection/Connection.ts";
-import {
-  callFailureText,
-  failureMessage,
-  failureMessageOrTag,
-} from "../../connection/Failure.ts";
+import { callFailureText, failureMessage } from "../../connection/Failure.ts";
 import { OutboxItem } from "../../connection/Outbox.ts";
 import { applyFaviconBadge } from "../../shell/Notifications.ts";
 import { Message } from "./Message.ts";
@@ -196,14 +189,6 @@ export const SelectAddedProject = Command.define("SelectAddedProject", {
     Effect.succeed(Message.FoundAddedProject({ projectId })),
 });
 
-/** Moves focus to the field `selector` names once the render that draws it has landed. */
-export const FocusField = Command.define("FocusField", {
-  args: { selector: Schema.String },
-  messages: [Message.CompletedFocus],
-  execute: ({ selector }) =>
-    focus(selector).pipe(Effect.ignore, Effect.as(Message.CompletedFocus())),
-});
-
 /** Mints the refresh's launch: a new project thread replacing `replaces`, on its model. */
 export const PrepareRefresh = Command.define("PrepareRefresh", {
   args: {
@@ -239,73 +224,6 @@ export const PrepareRefresh = Command.define("PrepareRefresh", {
         threadId,
       });
     }),
-});
-
-/**
- * Mints a scratch turn: with no thread yet, the launch that makes it in the scratch project (made
- * first); with one, a send to it.
- */
-export const PrepareScratchTurn = Command.define("PrepareScratchTurn", {
-  args: {
-    threadId: Schema.Option(ThreadId),
-    model: ModelRef,
-    thinkingLevel: ThinkingLevel,
-    text: Schema.String,
-  },
-  messages: [Message.PreparedScratchTurn, Message.FailedPrepare],
-  execute: (plan) =>
-    Effect.gen(function* () {
-      const requestId = yield* mintRequestId;
-
-      if (Option.isSome(plan.threadId)) {
-        return Message.PreparedScratchTurn({
-          item: OutboxItem.Send({
-            input: SendInput.make({
-              threadId: plan.threadId.value,
-              input: turnOf(requestId, plan.text),
-              whenBusy: "followUp",
-            }),
-          }),
-          threadId: plan.threadId.value,
-        });
-      }
-
-      const project = yield* withBoundary(
-        Effect.flatMap(CairnConnection.get, (client) =>
-          client["projects.ensureScratch"]()
-        )
-      );
-
-      const threadId = yield* mintThreadId;
-      const commandId = yield* mintCommandId;
-
-      const input = ThreadLaunchInput.make({
-        commandId,
-        threadId,
-        projectId: project.id,
-        title: Option.none(),
-        model: plan.model,
-        thinkingLevel: plan.thinkingLevel,
-        runtimeMode: "full-access",
-        workspace: RootWorkspace.make({ branch: Option.none() }),
-        initialMessage: turnOf(requestId, plan.text),
-      });
-
-      return Message.PreparedScratchTurn({
-        item: OutboxItem.Launch({ input }),
-        threadId,
-      });
-    }).pipe(
-      Effect.match({
-        onSuccess: (prepared) => prepared,
-        onFailure: (failure) =>
-          Message.FailedPrepare({
-            message: Predicate.isTagged(failure, "ResourceNotAvailable")
-              ? "Cairn is reconnecting. Send again once it is back."
-              : `The scratch thread did not start: ${failureMessageOrTag(failure)}`,
-          }),
-      })
-    ),
 });
 
 /** Mints the clear of a scratch thread: its run and its subagents stop, and its folder goes. */
